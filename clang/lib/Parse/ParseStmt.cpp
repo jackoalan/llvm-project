@@ -227,8 +227,8 @@ Retry:
 
     if (Tok.is(tok::r_brace)) {
       for (auto& Attr : Attrs) {
-        if (Attr.getKind() == ParsedAttr::AT_HoshGeneratorLambda) {
-          Diag(Tok, diag::err_hosh_include_no_lambda);
+        if (Attr.getKind() == ParsedAttr::AT_HshGeneratorLambda) {
+          Diag(Tok, diag::err_hsh_include_no_lambda);
           return StmtError();
         }
       }

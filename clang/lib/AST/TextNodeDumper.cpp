@@ -108,19 +108,19 @@ void TextNodeDumper::Visit(const TemplateArgument &TA, SourceRange R,
   ConstTemplateArgumentVisitor<TextNodeDumper>::Visit(TA);
 }
 
-static StringRef HoshStageToString(HoshStage Stage) {
+static StringRef HshStageToString(HshStage Stage) {
   switch (Stage) {
-    case HoshHostStage:
+    case HshHostStage:
       return llvm::StringLiteral("host");
-    case HoshVertexStage:
+    case HshVertexStage:
       return llvm::StringLiteral("vertex");
-    case HoshControlStage:
+    case HshControlStage:
       return llvm::StringLiteral("control");
-    case HoshEvaluationStage:
+    case HshEvaluationStage:
       return llvm::StringLiteral("evaluation");
-    case HoshGeometryStage:
+    case HshGeometryStage:
       return llvm::StringLiteral("geometry");
-    case HoshFragmentStage:
+    case HshFragmentStage:
       return llvm::StringLiteral("fragment");
     default:
       return llvm::StringLiteral("none");
@@ -142,9 +142,9 @@ void TextNodeDumper::Visit(const Stmt *Node) {
 
   {
     ColorScope Color(OS, ShowColors, ValueKindColor);
-    for (int i = HoshHostStage; i < HoshMaxStage; ++i) {
-      if (Node->isInHoshStage(HoshStage(i)))
-        OS << " " << HoshStageToString(HoshStage(i));
+    for (int i = HshHostStage; i < HshMaxStage; ++i) {
+      if (Node->isInHshStage(HshStage(i)))
+        OS << " " << HshStageToString(HshStage(i));
     }
   }
 

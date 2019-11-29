@@ -4962,7 +4962,7 @@ static void handleArmMveAliasAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) ArmMveAliasAttr(S.Context, AL, Ident));
 }
 
-static void handleHoshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+static void handleHshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   if (!AL.isArgExpr(0)) {
     S.Diag(AL.getLoc(), diag::err_attribute_argument_n_type)
       << AL << 1 << AANT_ArgumentIdentifier;
@@ -4979,18 +4979,18 @@ static void handleHoshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL)
 
   switch (AL.getKind()) {
     default:
-      llvm_unreachable("invalid hosh parameter attribute");
-    case ParsedAttr::AT_HoshVertexBuffer:
-      D->addAttr(::new (S.Context) HoshVertexBufferAttr(S.Context, AL, IndexExpr));
+      llvm_unreachable("invalid hsh parameter attribute");
+    case ParsedAttr::AT_HshVertexBuffer:
+      D->addAttr(::new (S.Context) HshVertexBufferAttr(S.Context, AL, IndexExpr));
       return;
-    case ParsedAttr::AT_HoshColorTarget:
-      D->addAttr(::new (S.Context) HoshColorTargetAttr(S.Context, AL, IndexExpr));
+    case ParsedAttr::AT_HshColorTarget:
+      D->addAttr(::new (S.Context) HshColorTargetAttr(S.Context, AL, IndexExpr));
       return;
-    case ParsedAttr::AT_HoshVertexTexture:
-      D->addAttr(::new (S.Context) HoshVertexTextureAttr(S.Context, AL, IndexExpr));
+    case ParsedAttr::AT_HshVertexTexture:
+      D->addAttr(::new (S.Context) HshVertexTextureAttr(S.Context, AL, IndexExpr));
       return;
-    case ParsedAttr::AT_HoshFragmentTexture:
-      D->addAttr(::new (S.Context) HoshFragmentTextureAttr(S.Context, AL, IndexExpr));
+    case ParsedAttr::AT_HshFragmentTexture:
+      D->addAttr(::new (S.Context) HshFragmentTextureAttr(S.Context, AL, IndexExpr));
       return;
   };
 }
@@ -7487,15 +7487,15 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case ParsedAttr::AT_UseHandle:
     handleHandleAttr<UseHandleAttr>(S, D, AL);
 
-  case ParsedAttr::AT_HoshPosition:
-    handleSimpleAttribute<HoshPositionAttr>(S, D, AL);
+  case ParsedAttr::AT_HshPosition:
+    handleSimpleAttribute<HshPositionAttr>(S, D, AL);
     break;
 
-  case ParsedAttr::AT_HoshVertexBuffer:
-  case ParsedAttr::AT_HoshColorTarget:
-  case ParsedAttr::AT_HoshVertexTexture:
-  case ParsedAttr::AT_HoshFragmentTexture:
-    handleHoshIndexParameterAttr(S, D, AL);
+  case ParsedAttr::AT_HshVertexBuffer:
+  case ParsedAttr::AT_HshColorTarget:
+  case ParsedAttr::AT_HshVertexTexture:
+  case ParsedAttr::AT_HshFragmentTexture:
+    handleHshIndexParameterAttr(S, D, AL);
     break;
   }
 }

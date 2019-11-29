@@ -2,6 +2,6 @@
 #  define BUILTIN_CXX_METHOD(Name, Record, ...)
 #endif
 
-BUILTIN_CXX_METHOD(sample, texture2d, struct hosh::float2, struct hosh::sampler)
+BUILTIN_CXX_METHOD(sample, texture2d, struct hsh::float2, struct hsh::sampler)
 
 #undef BUILTIN_CXX_METHOD

@@ -1483,8 +1483,8 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
     return;
   }
 
-  if (T->getAttrKind() == attr::HoshHostCondition) {
-    OS << " [[hosh::host_condition]]";
+  if (T->getAttrKind() == attr::HshHostCondition) {
+    OS << " [[hsh::host_condition]]";
     return;
   }
 
@@ -1524,7 +1524,7 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case attr::SPtr:
   case attr::UPtr:
   case attr::AddressSpace:
-  case attr::HoshHostCondition:
+  case attr::HshHostCondition:
     llvm_unreachable("This attribute should have been handled already");
 
   case attr::NSReturnsRetained:

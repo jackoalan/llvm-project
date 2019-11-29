@@ -18,7 +18,7 @@ move(_Tp &&__t) noexcept { return static_cast<typename std::remove_reference<_Tp
 using size_t = unsigned int;
 }
 
-namespace hosh {
+namespace hsh {
 namespace detail {
 struct base_vertex_buffer {};
 }
@@ -50,8 +50,8 @@ struct float2 {
   float2(const float4& other) : x(other.x), y(other.y) {}
   float2(const float3& other) : x(other.x), y(other.y) {}
 };
-constexpr float4::float4(const hosh::float3 &other, float w) : x(other.x), y(other.y), z(other.z), w(w) {}
-constexpr float4::float4(const hosh::float2 &other, float z, float w) : x(other.x), y(other.y), z(z), w(w) {}
+constexpr float4::float4(const hsh::float3 &other, float w) : x(other.x), y(other.y), z(other.z), w(w) {}
+constexpr float4::float4(const hsh::float2 &other, float z, float w) : x(other.x), y(other.y), z(z), w(w) {}
 struct float4x4 {
   float4 cols[4];
   float4x4() = default;
@@ -94,10 +94,10 @@ float dot(const float3&, const float3&);
 
 namespace MyNS {
 
-struct MyFormat : hosh::vertex_format {
-  hosh::float3 position;
-  hosh::float3 normal;
-  constexpr MyFormat(hosh::float3 position, hosh::float3 normal)
+struct MyFormat : hsh::vertex_format {
+  hsh::float3 position;
+  hsh::float3 normal;
+  constexpr MyFormat(hsh::float3 position, hsh::float3 normal)
   : position(std::move(position)), normal(std::move(normal)) {}
 };
 
@@ -107,8 +107,8 @@ enum class PostMode {
   MultiplyDynamicColor
 };
 
-void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
-                   const hosh::float4& dynColor, PostMode postMode [[hosh::host_condition]]) {
+void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
+                   const hsh::float4& dynColor, PostMode postMode [[hsh::host_condition]]) {
   constexpr MyFormat MyBuffer[] = {
     {{-1.f, -1.f, 0.f}, {0.f, 0.f, 1.f}},
     {{ 1.f, -1.f, 0.f}, {0.f, 0.f, 1.f}},
@@ -120,16 +120,16 @@ void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
   // Captured values the shader is interested in are assigned to the first
   // constructor parameters bound at the end of the include.
   auto MyBinding =
-#include "DrawSomething.hosh"
-  [&](const MyFormat& vertData [[hosh::vertex_buffer(0)]], // Stands in for current vertex (vertex shader) or
+#include "DrawSomething.hsh"
+  [&](const MyFormat& vertData [[hsh::vertex_buffer(0)]], // Stands in for current vertex (vertex shader) or
                                                            // interpolated value (fragment shader)
-      hosh::texture2d<float> tex0 [[hosh::fragment_texture(0)]], // texture sampler
-      hosh::float4& vertPos [[hosh::position]],            // Output of vertex shader
-      hosh::float4& fragColor [[hosh::color_target(0)]]) { // Output of fragment shader
+      hsh::texture2d<float> tex0 [[hsh::fragment_texture(0)]], // texture sampler
+      hsh::float4& vertPos [[hsh::position]],            // Output of vertex shader
+      hsh::float4& fragColor [[hsh::color_target(0)]]) { // Output of fragment shader
 
     /** Vertex Shader Pass
-     * For final [[hosh::position]] assignment:
-     * Post-order traverse to [[hosh::vertex_buffer(0)]] and captured host variables;
+     * For final [[hsh::position]] assignment:
+     * Post-order traverse to [[hsh::vertex_buffer(0)]] and captured host variables;
      * promoting AST nodes from host to vertex as necessary. When an operator is promoted
      * and the other side's expression must be fetched from host, find or create a uniform
      * variable in the HostToVertex RecordDecl for the expression and store its handle in
@@ -137,8 +137,8 @@ void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
      */
 
     /** Fragment Shader Pass
-     * For each [[hosh::color_target]] assignment:
-     * Post-order traverse to [[hosh::vertex_buffer(0)]] and captured host variables;
+     * For each [[hsh::color_target]] assignment:
+     * Post-order traverse to [[hsh::vertex_buffer(0)]] and captured host variables;
      * promoting AST nodes from host to vertex to fragment as necessary. When an operator
      * is promoted and the other side's expression must be fetched from host or vertex, find
      * or create a uniform/interpolated variable in the HostToFragment/VertexToFragment
@@ -156,12 +156,12 @@ void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
      * 2. Create new host VarDecl of the HostToVertex type and initialize with gathered expressions.
      * 3. Create new vertex ParmVarDecl of the HostToVertex type.
      * 4. Create new vertex CompoundStmt and insert all root stmts that are marked as vertex.
-     * 5. Insert [[hosh::position]] assignment into vertex CompoundStmt.
+     * 5. Insert [[hsh::position]] assignment into vertex CompoundStmt.
      * 6. Create new vertex VarDecl of the VertexToFragment type.
      * 7. Create assignment operators populating the VertexToFragment with gathered expressions.
      * 8. Create new fragment ParmVarDecl of the HostToFragment/VertexToFragment types.
      * 9. Create new fragment CompoundStmt and insert all root stmts that are marked as fragment.
-     * 10. Insert all [[hosh::color_target]] assignments into vertex CompoundStmt.
+     * 10. Insert all [[hsh::color_target]] assignments into vertex CompoundStmt.
      */
 
     /** Printing Pass
@@ -176,34 +176,34 @@ void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
 
     // When vertData is a dependency, expressions are automatically transferred to the shader code.
     // xf will be a field of vertex uniform data.
-    vertPos/*v*/ =/*v*/ xf/*h*/ */*v trigger host left-fetch*/ hosh::float4{vertData.position/*v*/, 1.f}/*v*/;
+    vertPos/*v*/ =/*v*/ xf/*h*/ */*v trigger host left-fetch*/ hsh::float4{vertData.position/*v*/, 1.f}/*v*/;
 
 
 
     // normalXf value is not needed within the shader until its multiplication with vertData.normal.
     // The host will compute the value up until the left binary operand; which is another field of vertex uniform data.
-    hosh::float3x3 normalXf/*h*/ = xf/*h*/;
+    hsh::float3x3 normalXf/*h*/ = xf/*h*/;
 
     // This multiplication will occur within the vertex shader.
-    hosh::float3 finalNormal/*v*/ = normalXf/*h*/ */*v trigger host left-fetch*/ vertData.normal/*v*/;
+    hsh::float3 finalNormal/*v*/ = normalXf/*h*/ */*v trigger host left-fetch*/ vertData.normal/*v*/;
 
     // lightDir becomes an rvalue after the negation operator. This rvalue will be a field of fragment uniform data.
-    fragColor/*f*/ =/*f*/ hosh::float4{hosh::float3{
-      hosh::float3{tex0.sample({0.f, 0.f}, hosh::sampler(hosh::wrap::repeat, hosh::filter::nearest))} *
-      hosh::dot(finalNormal/*v*/, -/*h*/lightDir/*h*/)/*v promoted to f via distribution test,
+    fragColor/*f*/ =/*f*/ hsh::float4{hsh::float3{
+      hsh::float3{tex0.sample({0.f, 0.f}, hsh::sampler(hsh::wrap::repeat, hsh::filter::nearest))} *
+      hsh::dot(finalNormal/*v*/, -/*h*/lightDir/*h*/)/*v promoted to f via distribution test,
                                                         trigger vertex left fetch,
                                                         trigger host right fetch*/}/*f*/, 1.f}/*f*/;
 
 #if 1
     struct HostToVertex {
-      hosh::float4x4 _hv0; // xf
-      hosh::float3x3 _hv1; // normalXf
+      hsh::float4x4 _hv0; // xf
+      hsh::float3x3 _hv1; // normalXf
     };
     struct HostToFragment {
-      hosh::float3 _hf0; // -lightDir
+      hsh::float3 _hf0; // -lightDir
     };
     struct VertexToFragment {
-      hosh::float3 _vf0; // finalNormal
+      hsh::float3 _vf0; // finalNormal
     };
 #endif
     // postMode is marked as a host condition. This means all basic blocks that depend on postMode as a branch
@@ -222,8 +222,8 @@ void DrawSomething(const hosh::float4x4& xf, const hosh::float3& lightDir,
 #endif
   };
 
-  // The hosh_binding object has handles of host-processed data buffers ready to draw with.
-  MyBinding.bind(hosh::vertex_buffer{0, MyBuffer});
+  // The hsh_binding object has handles of host-processed data buffers ready to draw with.
+  MyBinding.bind(hsh::vertex_buffer{0, MyBuffer});
   MyBinding.draw(0, 4);
 }
 

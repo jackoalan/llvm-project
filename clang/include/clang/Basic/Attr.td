@@ -1326,47 +1326,47 @@ def GNUInline : InheritableAttr {
   let Documentation = [GnuInlineDocs];
 }
 
-def HoshVertexBuffer : InheritableParamAttr {
-  let Spellings = [CXX11<"hosh", "vertex_buffer">];
+def HshVertexBuffer : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "vertex_buffer">];
   let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HoshPosition : InheritableParamAttr {
-  let Spellings = [CXX11<"hosh", "position">];
+def HshPosition : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "position">];
   let Documentation = [Undocumented];
 }
 
-def HoshColorTarget : InheritableParamAttr {
-  let Spellings = [CXX11<"hosh", "color_target">];
+def HshColorTarget : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "color_target">];
   let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HoshVertexTexture : InheritableParamAttr {
-  let Spellings = [CXX11<"hosh", "vertex_texture">];
+def HshVertexTexture : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "vertex_texture">];
   let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HoshFragmentTexture : InheritableParamAttr {
-  let Spellings = [CXX11<"hosh", "fragment_texture">];
+def HshFragmentTexture : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "fragment_texture">];
   let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HoshHostCondition : DeclOrTypeAttr {
-  let Spellings = [CXX11<"hosh", "host_condition">];
+def HshHostCondition : DeclOrTypeAttr {
+  let Spellings = [CXX11<"hsh", "host_condition">];
   let Documentation = [Undocumented];
 }
 
-def HoshFragment : StmtAttr {
-  let Spellings = [CXX11<"hosh", "fragment">];
+def HshFragment : StmtAttr {
+  let Spellings = [CXX11<"hsh", "fragment">];
   let Documentation = [Undocumented];
 }
 
-def HoshGeneratorLambda : StmtAttr {
-  let Spellings = [CXX11<"hosh", "generator_lambda">];
+def HshGeneratorLambda : StmtAttr {
+  let Spellings = [CXX11<"hsh", "generator_lambda">];
   let Documentation = [Undocumented];
 }
 

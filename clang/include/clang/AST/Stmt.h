@@ -57,15 +57,15 @@ class StringLiteral;
 class Token;
 class VarDecl;
 
-enum HoshStage : int {
-  HoshNoStage = -1,
-  HoshHostStage = 0,
-  HoshVertexStage,
-  HoshControlStage,
-  HoshEvaluationStage,
-  HoshGeometryStage,
-  HoshFragmentStage,
-  HoshMaxStage
+enum HshStage : int {
+  HshNoStage = -1,
+  HshHostStage = 0,
+  HshVertexStage,
+  HshControlStage,
+  HshEvaluationStage,
+  HshGeometryStage,
+  HshFragmentStage,
+  HshMaxStage
 };
 
 //===----------------------------------------------------------------------===//
@@ -118,7 +118,7 @@ protected:
 
     /// Bits are set LSB to MSB to indicate Stmt is used in one or more shader
     /// stages.
-    unsigned HoshStages : 6;
+    unsigned HshStages : 6;
   };
   enum { NumStmtBits = 15 };
 
@@ -1123,7 +1123,7 @@ public:
                   "Insufficient alignment!");
     StmtBits.sClass = SC;
     StmtBits.IsOMPStructuredBlock = false;
-    StmtBits.HoshStages = 0;
+    StmtBits.HshStages = 0;
     if (StatisticsEnabled) Stmt::addStmtClass(SC);
   }
 
@@ -1238,33 +1238,33 @@ public:
   /// have been used in the Profile function.
   void ProcessODRHash(llvm::FoldingSetNodeID &ID, ODRHash& Hash) const;
 
-  void addHoshStage(HoshStage Stage) {
-    StmtBits.HoshStages |= 1u << Stage;
+  void addHshStage(HshStage Stage) {
+    StmtBits.HshStages |= 1u << Stage;
   }
 
-  void setHoshStage(HoshStage Stage) {
-    StmtBits.HoshStages = 1u << Stage;
+  void setHshStage(HshStage Stage) {
+    StmtBits.HshStages = 1u << Stage;
   }
 
-  bool isInHoshStage(HoshStage Stage) const {
-    return StmtBits.HoshStages & (1u << Stage);
+  bool isInHshStage(HshStage Stage) const {
+    return StmtBits.HshStages & (1u << Stage);
   }
 
-  HoshStage getMaxHoshStage() const {
-    HoshStage Ret = HoshNoStage;
-    for (int i = HoshHostStage; i < HoshMaxStage; ++i) {
-      if (isInHoshStage(HoshStage(i)))
-        Ret = HoshStage(i);
+  HshStage getMaxHshStage() const {
+    HshStage Ret = HshNoStage;
+    for (int i = HshHostStage; i < HshMaxStage; ++i) {
+      if (isInHshStage(HshStage(i)))
+        Ret = HshStage(i);
     }
     return Ret;
   }
 
-  void mergeHoshStages(const Stmt *Other) {
-    StmtBits.HoshStages |= Other->StmtBits.HoshStages;
+  void mergeHshStages(const Stmt *Other) {
+    StmtBits.HshStages |= Other->StmtBits.HshStages;
   }
 
-  unsigned getHoshStageBits() const {
-    return StmtBits.HoshStages;
+  unsigned getHshStageBits() const {
+    return StmtBits.HshStages;
   }
 };
 

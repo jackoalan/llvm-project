@@ -1,5 +1,3 @@
-#include "hosh/HoshGenerator.h"
-
 #include "llvm/IR/Value.h"
 #include "llvm/Support/SaveAndRestore.h"
 
@@ -14,6 +12,7 @@
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Hsh/HshGenerator.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/CompilationDatabase.h"
@@ -32,7 +31,7 @@ AST_MATCHER_P(AttributedStmt, hasStmtAttr, attr::Kind, AttrKind) {
 }
 }
 
-namespace hosh::gen {
+namespace clang::hshgen {
 
 using namespace llvm;
 using namespace clang;
@@ -44,32 +43,32 @@ constexpr llvm::StringLiteral StubInclude(
   "  class {\n"
   "  public:\n"
   "    void draw(std::size_t, std::size_t) {}\n"
-  "    void bind(hosh::detail::base_vertex_buffer) {}\n"
-  "  } hosh_binding;\n"
-  "  return hosh_binding;\n"
+  "    void bind(hsh::detail::base_vertex_buffer) {}\n"
+  "  } hsh_binding;\n"
+  "  return hsh_binding;\n"
   "}();\n"
-  "[[hosh::generator_lambda]]\n");
+  "[[hsh::generator_lambda]]\n");
 
-static StringRef HoshStageToString(HoshStage Stage) {
+static StringRef HshStageToString(HshStage Stage) {
   switch (Stage) {
-  case HoshHostStage:
+  case HshHostStage:
     return llvm::StringLiteral("host");
-  case HoshVertexStage:
+  case HshVertexStage:
     return llvm::StringLiteral("vertex");
-  case HoshControlStage:
+  case HshControlStage:
     return llvm::StringLiteral("control");
-  case HoshEvaluationStage:
+  case HshEvaluationStage:
     return llvm::StringLiteral("evaluation");
-  case HoshGeometryStage:
+  case HshGeometryStage:
     return llvm::StringLiteral("geometry");
-  case HoshFragmentStage:
+  case HshFragmentStage:
     return llvm::StringLiteral("fragment");
   default:
     return llvm::StringLiteral("none");
   }
 }
 
-enum HoshBuiltinType {
+enum HshBuiltinType {
   HBT_None,
 #define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) \
   HBT_##Name,
@@ -77,7 +76,7 @@ enum HoshBuiltinType {
   HBT_Max
 };
 
-enum HoshBuiltinFunction {
+enum HshBuiltinFunction {
   HBF_None,
 #define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) \
   HBF_##Name,
@@ -85,7 +84,7 @@ enum HoshBuiltinFunction {
   HBF_Max
 };
 
-enum HoshBuiltinCXXMethod {
+enum HshBuiltinCXXMethod {
   HBM_None,
 #define BUILTIN_CXX_METHOD(Name, Record, ...) \
   HBM_##Name##_##Record,
@@ -93,7 +92,7 @@ enum HoshBuiltinCXXMethod {
   HBM_Max
 };
 
-class HoshBuiltins {
+class HshBuiltins {
 public:
   struct Spellings {
     StringRef GLSL, HLSL, Metal;
@@ -130,7 +129,7 @@ private:
   protected:
     StringRef Name;
     Decl *Found;
-    bool InHoshNS = false;
+    bool InHshNS = false;
   public:
     bool VisitDecl(Decl *D) {
       if (auto *DC = dyn_cast<DeclContext>(D))
@@ -141,11 +140,11 @@ private:
     }
 
     bool VisitNamespaceDecl(NamespaceDecl *Namespace) {
-      if (InHoshNS)
+      if (InHshNS)
         return true;
       bool Ret = true;
-      if (Namespace->getDeclName().isIdentifier() && Namespace->getName() == llvm::StringLiteral("hosh")) {
-        SaveAndRestore<bool> SavedInHoshNS(InHoshNS, true);
+      if (Namespace->getDeclName().isIdentifier() && Namespace->getName() == llvm::StringLiteral("hsh")) {
+        SaveAndRestore<bool> SavedInHshNS(InHshNS, true);
         Ret = VisitDecl(Namespace);
       }
       return Ret;
@@ -162,7 +161,7 @@ private:
   class TypeFinder : public DeclFinder<TypeFinder> {
   public:
     bool VisitTagDecl(TagDecl *Type) {
-      if (InHoshNS && Type->getDeclName().isIdentifier() && Type->getName() == Name) {
+      if (InHshNS && Type->getDeclName().isIdentifier() && Type->getName() == Name) {
         Found = Type;
         return false;
       }
@@ -173,7 +172,7 @@ private:
   class FuncFinder : public DeclFinder<FuncFinder> {
   public:
     bool VisitFunctionDecl(FunctionDecl *Func) {
-      if (InHoshNS && Func->getDeclName().isIdentifier() && Func->getName() == Name) {
+      if (InHshNS && Func->getDeclName().isIdentifier() && Func->getName() == Name) {
         Found = Func;
         return false;
       }
@@ -190,7 +189,7 @@ private:
     }
 
     bool VisitCXXMethodDecl(CXXMethodDecl *Method) {
-      if (InHoshNS && Method->getDeclName().isIdentifier() && Method->getName() == Name &&
+      if (InHshNS && Method->getDeclName().isIdentifier() && Method->getName() == Name &&
           Method->getParent()->getName() == Record && Method->getNumParams() == Params.size()) {
         auto It = Params.begin();
         for (ParmVarDecl *P : Method->parameters()) {
@@ -215,37 +214,37 @@ private:
     }
   };
 
-  void addType(SourceManager &SM, HoshBuiltinType TypeKind, StringRef Name, Decl *D) {
+  void addType(SourceManager &SM, HshBuiltinType TypeKind, StringRef Name, Decl *D) {
     if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
       Types[TypeKind] = T->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin type %0; is hosh.hpp included?");
+        "unable to locate declaration of builtin type %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
   }
 
-  void addFunction(SourceManager &SM, HoshBuiltinFunction FuncKind, StringRef Name, Decl *D) {
+  void addFunction(SourceManager &SM, HshBuiltinFunction FuncKind, StringRef Name, Decl *D) {
     if (auto *F = dyn_cast_or_null<FunctionDecl>(D)) {
       Functions[FuncKind] = F->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin function %0; is hosh.hpp included?");
+        "unable to locate declaration of builtin function %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
   }
 
-  void addCXXMethod(SourceManager &SM, HoshBuiltinCXXMethod MethodKind, StringRef Name, Decl *D) {
+  void addCXXMethod(SourceManager &SM, HshBuiltinCXXMethod MethodKind, StringRef Name, Decl *D) {
     if (auto *M = dyn_cast_or_null<CXXMethodDecl>(D)) {
       Methods[MethodKind] = dyn_cast<CXXMethodDecl>(M->getFirstDecl());
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin method %0; is hosh.hpp included?");
+        "unable to locate declaration of builtin method %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
@@ -266,80 +265,80 @@ public:
 #include "BuiltinCXXMethods.def"
   }
 
-  HoshBuiltinType identifyBuiltinType(QualType QT) const {
+  HshBuiltinType identifyBuiltinType(QualType QT) const {
     const clang::Type *UT = QT.getNonReferenceType().getTypePtrOrNull();
     if (!UT) return HBT_None;
     TagDecl *T = UT->getAsTagDecl();
     if (!T) return HBT_None;
     T = T->getFirstDecl();
     if (!T) return HBT_None;
-    HoshBuiltinType Ret = HBT_None;
+    HshBuiltinType Ret = HBT_None;
     for (const auto *Tp : Types) {
       if (T == Tp)
         return Ret;
-      Ret = HoshBuiltinType(int(Ret) + 1);
+      Ret = HshBuiltinType(int(Ret) + 1);
     }
     return HBT_None;
   }
 
-  HoshBuiltinFunction identifyBuiltinFunction(const clang::FunctionDecl *F) const {
+  HshBuiltinFunction identifyBuiltinFunction(const clang::FunctionDecl *F) const {
     F = F->getFirstDecl();
     if (!F) return HBF_None;
-    HoshBuiltinFunction Ret = HBF_None;
+    HshBuiltinFunction Ret = HBF_None;
     for (const auto *Func : Functions) {
       if (F == Func)
         return Ret;
-      Ret = HoshBuiltinFunction(int(Ret) + 1);
+      Ret = HshBuiltinFunction(int(Ret) + 1);
     }
     return HBF_None;
   }
 
-  HoshBuiltinCXXMethod identifyBuiltinMethod(const clang::CXXMethodDecl *M) const {
+  HshBuiltinCXXMethod identifyBuiltinMethod(const clang::CXXMethodDecl *M) const {
     M = dyn_cast_or_null<CXXMethodDecl>(M->getFirstDecl());
     if (!M) return HBM_None;
     if (FunctionDecl *FD = M->getInstantiatedFromMemberFunction())
       M = dyn_cast<CXXMethodDecl>(FD->getFirstDecl());
-    HoshBuiltinCXXMethod Ret = HBM_None;
+    HshBuiltinCXXMethod Ret = HBM_None;
     for (const auto *Method : Methods) {
       if (M == Method)
         return Ret;
-      Ret = HoshBuiltinCXXMethod(int(Ret) + 1);
+      Ret = HshBuiltinCXXMethod(int(Ret) + 1);
     }
     return HBM_None;
   }
 
-  static constexpr const Spellings &getSpellings(HoshBuiltinType Tp) {
+  static constexpr const Spellings &getSpellings(HshBuiltinType Tp) {
     return BuiltinTypeSpellings[Tp];
   }
 
-  static constexpr const Spellings &getSpellings(HoshBuiltinFunction Func) {
+  static constexpr const Spellings &getSpellings(HshBuiltinFunction Func) {
     return BuiltinFunctionSpellings[Func];
   }
 
-  static constexpr bool isInterpolationDistributed(HoshBuiltinFunction Func) {
+  static constexpr bool isInterpolationDistributed(HshBuiltinFunction Func) {
     return BuiltinFunctionInterpDists[Func];
   }
 
-  const clang::TagDecl *getTypeDecl(HoshBuiltinType Tp) const {
+  const clang::TagDecl *getTypeDecl(HshBuiltinType Tp) const {
     return Types[Tp];
   }
 
-  QualType getType(HoshBuiltinType Tp) const {
+  QualType getType(HshBuiltinType Tp) const {
     return getTypeDecl(Tp)->getTypeForDecl()->getCanonicalTypeUnqualified();
   }
 };
 
-enum HoshInterfaceDirection {
-  HoshInput,
-  HoshOutput,
-  HoshInOut
+enum HshInterfaceDirection {
+  HshInput,
+  HshOutput,
+  HshInOut
 };
 
-static HoshStage DetermineParmVarStage(ParmVarDecl *D) {
+static HshStage DetermineParmVarStage(ParmVarDecl *D) {
 #define INTERFACE_VARIABLE(Attr, Stage, Direction, Array) \
   if (D->hasAttr<Attr>()) return Stage;
 #include "ShaderInterface.def"
-  return HoshHostStage;
+  return HshHostStage;
 }
 
 template <typename T, unsigned N>
@@ -354,24 +353,24 @@ static DiagnosticBuilder ReportCustom(T *S, const SourceManager &SM,
 }
 
 static void ReportUnsupportedStmt(Stmt *S, const SourceManager &SM) {
-  auto Diag = ReportCustom(S, SM, "statements of type %0 are not supported in hosh generator lambdas");
+  auto Diag = ReportCustom(S, SM, "statements of type %0 are not supported in hsh generator lambdas");
   Diag.AddString(S->getStmtClassName());
 }
 
 static void ReportUnsupportedFunctionCall(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "function calls are limited to hosh intrinsics");
+  ReportCustom(S, SM, "function calls are limited to hsh intrinsics");
 }
 
 static void ReportUnsupportedTypeReference(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "references to values are limited to hosh types");
+  ReportCustom(S, SM, "references to values are limited to hsh types");
 }
 
 static void ReportUnsupportedTypeConstruct(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "constructors are limited to hosh types");
+  ReportCustom(S, SM, "constructors are limited to hsh types");
 }
 
 static void ReportUnsupportedTypeCast(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "type casts are limited to hosh types");
+  ReportCustom(S, SM, "type casts are limited to hsh types");
 }
 
 static void ReportBadTextureReference(Stmt *S, const SourceManager &SM) {
@@ -379,7 +378,7 @@ static void ReportBadTextureReference(Stmt *S, const SourceManager &SM) {
 }
 
 static void ReportUnattributedTexture(ParmVarDecl *PVD, const SourceManager &SM) {
-  ReportCustom(PVD, SM, "sampled textures must be attributed with [[hosh::*_texture(n)]]");
+  ReportCustom(PVD, SM, "sampled textures must be attributed with [[hsh::*_texture(n)]]");
 }
 
 class LastAssignmentFinder : public StmtVisitor<LastAssignmentFinder, bool> {
@@ -540,8 +539,8 @@ public:
 };
 
 class StmtPromotions {
-  std::multimap<std::pair<HoshStage, HoshStage>, std::pair<Stmt*,Stmt*>> Promotions;
-  void AddUniquePromotion(std::pair<HoshStage, HoshStage> Key, std::pair<Stmt*,Stmt*> Value) {
+  std::multimap<std::pair<HshStage, HshStage>, std::pair<Stmt*,Stmt*>> Promotions;
+  void AddUniquePromotion(std::pair<HshStage, HshStage> Key, std::pair<Stmt*,Stmt*> Value) {
     auto Range = Promotions.equal_range(Key);
     for (auto I = Range.first; I != Range.second; ++I)
       if (I->second == Value)
@@ -549,17 +548,17 @@ class StmtPromotions {
     Promotions.insert(std::make_pair(Key, Value));
   }
 public:
-  void AddPossiblePromotion(Stmt *From, Stmt *To, const HoshStage Target) {
-    const HoshStage FromStage = From->getMaxHoshStage();
-    const HoshStage ToStage = To->getMaxHoshStage();
+  void AddPossiblePromotion(Stmt *From, Stmt *To, const HshStage Target) {
+    const HshStage FromStage = From->getMaxHshStage();
+    const HshStage ToStage = To->getMaxHshStage();
     if (FromStage < ToStage)
       AddUniquePromotion(std::make_pair(FromStage, ToStage), std::make_pair(From, To));
   }
   void printPromotions(const ASTContext &Context) const {
     for (auto I = Promotions.begin(), E = Promotions.end(); I != E;) {
       llvm::outs() << "Promoting "
-                   << HoshStageToString(I->first.first) << " to "
-                   << HoshStageToString(I->first.second) << "\n";
+                   << HshStageToString(I->first.first) << " to "
+                   << HshStageToString(I->first.second) << "\n";
       auto II = I;
       for (; II != E && II->first == I->first; ++II) {
         llvm::outs() << "  Promoted ";
@@ -578,11 +577,11 @@ const ASTContext* TmpContext = nullptr;
 
 class TracingStmtPromoter : public StmtVisitor<TracingStmtPromoter> {
   const SourceManager &SM;
-  const HoshBuiltins &Builtins;
+  const HshBuiltins &Builtins;
   StmtPromotions &Promotions;
   Stmt *Body = nullptr;
   Stmt *LastCompoundChild = nullptr;
-  HoshStage Target = HoshNoStage;
+  HshStage Target = HshNoStage;
   VarDecl *SelectedVarDecl = nullptr;
   bool InMemberExpr = false;
 
@@ -592,8 +591,8 @@ class TracingStmtPromoter : public StmtVisitor<TracingStmtPromoter> {
     llvm::outs() << '\n';
     llvm::outs().flush();
     Visit(S);
-    Parent->mergeHoshStages(S);
-    Parent->setHoshStage(Parent->getMaxHoshStage());
+    Parent->mergeHshStages(S);
+    Parent->setHshStage(Parent->getMaxHshStage());
   }
 
   void AddPossiblePromotion(Stmt *S, Stmt *Parent) {
@@ -601,11 +600,11 @@ class TracingStmtPromoter : public StmtVisitor<TracingStmtPromoter> {
   }
 
   bool GetInterpolated(Stmt *S) const {
-    const HoshStage Stage = S->getMaxHoshStage();
-    return Stage != HoshHostStage && Stage < Target;
+    const HshStage Stage = S->getMaxHshStage();
+    return Stage != HshHostStage && Stage < Target;
   }
 public:
-  explicit TracingStmtPromoter(const SourceManager &SM, const HoshBuiltins &Builtins, StmtPromotions &Promotions)
+  explicit TracingStmtPromoter(const SourceManager &SM, const HshBuiltins &Builtins, StmtPromotions &Promotions)
   : SM(SM), Builtins(Builtins), Promotions(Promotions) {}
 
   /* Begin ignores */
@@ -687,10 +686,10 @@ public:
       case BO_Div:
       case BO_DivAssign:
         if (RHSInterpolated)
-          BinOp->setHoshStage(Target);
+          BinOp->setHshStage(Target);
         break;
       default:
-        BinOp->setHoshStage(Target);
+        BinOp->setHshStage(Target);
         break;
       }
     }
@@ -706,7 +705,7 @@ public:
   void VisitCallExpr(CallExpr *CallExpr) {
     if (auto *DeclRef = dyn_cast<DeclRefExpr>(CallExpr->getCallee()->IgnoreParenImpCasts())) {
       if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
-        HoshBuiltinFunction Func = Builtins.identifyBuiltinFunction(FD);
+        HshBuiltinFunction Func = Builtins.identifyBuiltinFunction(FD);
         if (Func != HBF_None) {
           for (Expr *Arg : CallExpr->arguments())
             DoVisit(Arg, CallExpr);
@@ -714,8 +713,8 @@ public:
           if (CallExpr->getNumArgs() == 2) {
             const bool LHSInterpolated = GetInterpolated(CallExpr->getArg(0));
             const bool RHSInterpolated = GetInterpolated(CallExpr->getArg(1));
-            if ((LHSInterpolated || RHSInterpolated) && !HoshBuiltins::isInterpolationDistributed(Func))
-              CallExpr->setHoshStage(Target);
+            if ((LHSInterpolated || RHSInterpolated) && !HshBuiltins::isInterpolationDistributed(Func))
+              CallExpr->setHshStage(Target);
           }
 
           for (Expr *Arg : CallExpr->arguments())
@@ -729,17 +728,17 @@ public:
 
   void VisitCXXMemberCallExpr(CXXMemberCallExpr *CallExpr) {
     CXXMethodDecl *MD = CallExpr->getMethodDecl();
-    HoshBuiltinCXXMethod Method = Builtins.identifyBuiltinMethod(MD);
+    HshBuiltinCXXMethod Method = Builtins.identifyBuiltinMethod(MD);
     switch (Method) {
       case HBM_sample_texture2d: {
         ParmVarDecl *PVD = nullptr;
         if (auto *TexRef = dyn_cast<DeclRefExpr>(CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts()))
           PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
         if (PVD) {
-          if (PVD->hasAttr<HoshVertexTextureAttr>())
-            CallExpr->setHoshStage(HoshVertexStage);
-          else if (PVD->hasAttr<HoshFragmentTextureAttr>())
-            CallExpr->setHoshStage(HoshFragmentStage);
+          if (PVD->hasAttr<HshVertexTextureAttr>())
+            CallExpr->setHshStage(HshVertexStage);
+          else if (PVD->hasAttr<HshFragmentTextureAttr>())
+            CallExpr->setHshStage(HshFragmentStage);
           else
             ReportUnattributedTexture(PVD, SM);
         } else {
@@ -793,10 +792,10 @@ public:
         case OO_Slash:
         case OO_SlashEqual:
           if (RHSInterpolated)
-            CallExpr->setHoshStage(Target);
+            CallExpr->setHshStage(Target);
           break;
         default:
-          CallExpr->setHoshStage(Target);
+          CallExpr->setHshStage(Target);
           break;
         }
       }
@@ -813,7 +812,7 @@ public:
         return;
       }
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl())) {
-        DeclRef->setHoshStage(DetermineParmVarStage(PVD));
+        DeclRef->setHshStage(DetermineParmVarStage(PVD));
         return;
       }
       llvm::outs() << "Attempting to find " << VD->getName() << " before ";
@@ -854,11 +853,11 @@ public:
 
   void VisitIntegerLiteral(IntegerLiteral *) {}
 
-  void Trace(Stmt *Assign, Stmt *B, Stmt *LCC, HoshStage T) {
+  void Trace(Stmt *Assign, Stmt *B, Stmt *LCC, HshStage T) {
     Body = B;
     LastCompoundChild = LCC;
     Target = T;
-    Assign->setHoshStage(T);
+    Assign->setHshStage(T);
     Visit(Assign);
   }
 };
@@ -887,7 +886,7 @@ static std::string SanitizedNameOfLocation(SourceLocation Loc, const SourceManag
 }
 
 class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
-  HoshBuiltins Builtins;
+  HshBuiltins Builtins;
 public:
   void run(const MatchFinder::MatchResult &Result) override {
     if (auto* Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
@@ -903,33 +902,33 @@ public:
       TmpContext = &Context;
       StmtPromotions Promotions;
 
-      for (int i = HoshVertexStage; i < HoshMaxStage; ++i) {
+      for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
-          if (DetermineParmVarStage(Param) != HoshStage(i))
+          if (DetermineParmVarStage(Param) != HshStage(i))
             continue;
           auto [Assign, LastCompoundChild] = LastAssignmentFinder(SM).Find(Param, Body);
           if (Assign)
-            TracingStmtPromoter(SM, Builtins, Promotions).Trace(Assign, Body, LastCompoundChild, HoshStage(i));
+            TracingStmtPromoter(SM, Builtins, Promotions).Trace(Assign, Body, LastCompoundChild, HshStage(i));
         }
       }
 
       Promotions.printPromotions(Context);
 
-      std::array<CompoundStmt*, HoshMaxStage> StageBodies{};
-      for (int i = HoshHostStage; i < HoshMaxStage; ++i) {
+      std::array<CompoundStmt*, HshMaxStage> StageBodies{};
+      for (int i = HshHostStage; i < HshMaxStage; ++i) {
         SmallVector<Stmt*, 8> Stmts;
         for (auto *Stmt : dyn_cast<CompoundStmt>(Body)->body()) {
           if (auto *E = dyn_cast<Expr>(Stmt))
             if (auto *E2 = E->IgnoreParenImpCasts())
               Stmt = E2;
-          if (Stmt->isInHoshStage(HoshStage(i)))
+          if (Stmt->isInHshStage(HshStage(i)))
             Stmts.push_back(Stmt);
         }
-        if (i != HoshHostStage && Stmts.empty())
+        if (i != HshHostStage && Stmts.empty())
           continue;
 
 #if 0
-        if (i == HoshHostStage) {
+        if (i == HshHostStage) {
           DeclContext *LambdaDeclContext = Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
           CXXRecordDecl *RecordDecl = CXXRecordDecl::CreateLambda(Context, LambdaDeclContext, {}, {}, false, false, LCD_ByRef);
           CXXMethodDecl *LambdaCall = CXXMethodDecl::Create(Context, RecordDecl, {}, {Context.DeclarationNames.getCXXOperatorName(OO_Call), {}}, {}, {}, SC_None, false, CSK_unspecified, {});
@@ -986,14 +985,14 @@ public:
 
           llvm::outs() << "Resulting Lambda\n";
           LambdaExpr->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
-          llvm::outs() << "();\n[[hosh::generator_lambda]]\n";
+          llvm::outs() << "();\n[[hsh::generator_lambda]]\n";
           llvm::outs().flush();
           break;
         }
 #endif
 
         StageBodies[i] = CompoundStmt::Create(Context, Stmts, {}, {});
-        llvm::outs() << "Statements for " << HoshStageToString(HoshStage(i)) << '\n';
+        llvm::outs() << "Statements for " << HshStageToString(HshStage(i)) << '\n';
         StageBodies[i]->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
         llvm::outs() << '\n';
       }
@@ -1026,7 +1025,7 @@ public:
     Finder.addMatcher(
       attributedStmt(
         allOf(
-          hasStmtAttr(attr::HoshGeneratorLambda),
+          hasStmtAttr(attr::HshGeneratorLambda),
           hasDescendant(lambdaExpr(stmt().bind("id"))))), this);
     Finder.matchAST(Context);
   }
@@ -1043,7 +1042,7 @@ public:
     return {};
   }
 
-  void registerHoshInclude(SourceLocation HashLoc, StringRef RelativePath) {
+  void registerHshInclude(SourceLocation HashLoc, StringRef RelativePath) {
     SeenIncludes[HashLoc] = RelativePath;
   }
 
@@ -1056,7 +1055,7 @@ public:
     : Consumer(Consumer), FM(FM), SM(SM) {}
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hosh"))) {
+      if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
         SmallString<1024> VirtualFilePath(llvm::StringLiteral("./"));
         VirtualFilePath += FileName;
         FM.getVirtualFile(VirtualFilePath, StubInclude.size(), std::time(nullptr));
@@ -1075,10 +1074,10 @@ public:
                             StringRef RelativePath,
                             const clang::Module *Imported,
                             SrcMgr::CharacteristicKind FileType) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hosh"))) {
+      if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
         assert(File && "File must exist at this point");
         SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(StubInclude));
-        Consumer.registerHoshInclude(HashLoc, RelativePath);
+        Consumer.registerHshInclude(HashLoc, RelativePath);
       }
     }
   };
@@ -1108,7 +1107,7 @@ int DoGenerateTest() {
 #endif
     "-fsyntax-only",
     "-std=c++17",
-    "-D__hosh__=1",
+    "-D__hsh__=1",
     "-Wno-expansion-to-defined",
     "-Wno-nullability-completeness",
     "-Wno-unused-value",

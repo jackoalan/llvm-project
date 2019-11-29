@@ -1,5 +1,5 @@
 #pragma once
 
-namespace hosh::gen {
+namespace clang::hshgen {
 int DoGenerateTest();
 }

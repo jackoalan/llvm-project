@@ -41,5 +41,5 @@ add_llvm_external_project(clang-tools-extra extra)
 # libclang may require clang-tidy in clang-tools-extra.
 add_clang_subdirectory(libclang)
 
-# hosh fork of clang integrated here
-add_clang_subdirectory(hosh)
+# hsh fork of clang integrated here
+add_clang_subdirectory(hsh)
