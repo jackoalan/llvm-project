@@ -1,0 +1,12 @@
+#ifndef BUILTIN_TYPE
+#  define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)
+#endif
+
+BUILTIN_TYPE(float2, vec2, float2, float2, true, false)
+BUILTIN_TYPE(float3, vec3, float3, float3, true, false)
+BUILTIN_TYPE(float4, vec4, float4, float4, true, false)
+//BUILTIN_TYPE(float2x2, mat2, float2x2, float2x2, false, true)
+BUILTIN_TYPE(float3x3, mat3, float3x3, float3x3, false, true)
+BUILTIN_TYPE(float4x4, mat4, float4x4, float4x4, false, true)
+
+#undef BUILTIN_TYPE

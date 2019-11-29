@@ -1,0 +1,7 @@
+#ifndef BUILTIN_CXX_METHOD
+#  define BUILTIN_CXX_METHOD(Name, Record, ...)
+#endif
+
+BUILTIN_CXX_METHOD(sample, texture2d, struct hosh::float2, struct hosh::sampler)
+
+#undef BUILTIN_CXX_METHOD

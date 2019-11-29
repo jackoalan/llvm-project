@@ -1,0 +1,7 @@
+#ifndef BUILTIN_FUNCTION
+#  define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)
+#endif
+
+BUILTIN_FUNCTION(dot, dot, dot, dot, false)
+
+#undef BUILTIN_FUNCTION

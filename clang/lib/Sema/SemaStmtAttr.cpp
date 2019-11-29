@@ -170,6 +170,33 @@ static Attr *handleLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   return LoopHintAttr::CreateImplicit(S.Context, Option, State, ValueExpr, A);
 }
 
+static Attr *handleHoshGeneratorLambdaAttr(Sema &S, Stmt *St, const ParsedAttr &A,
+                                           SourceRange Range) {
+  if (auto* Lambda = dyn_cast<LambdaExpr>(St)) {
+    bool HasPositionParam = false;
+    for (auto* Param : Lambda->getCallOperator()->parameters()) {
+      if (Param->hasAttr<HoshPositionAttr>()) {
+        HasPositionParam = true;
+        break;
+      }
+    }
+    if (!HasPositionParam) {
+      S.Diag(St->getBeginLoc(), diag::err_hosh_include_bad_lambda);
+      return nullptr;
+    }
+  } else {
+    S.Diag(St->getBeginLoc(), diag::err_hosh_include_no_lambda);
+    return nullptr;
+  }
+
+  return HoshGeneratorLambdaAttr::Create(S.Context, A);
+}
+
+static Attr *handleHoshFragmentAttr(Sema &S, Stmt *St, const ParsedAttr &A,
+                                    SourceRange Range) {
+  return HoshFragmentAttr::Create(S.Context, A);
+}
+
 static void
 CheckForIncompatibleAttributes(Sema &S,
                                const SmallVectorImpl<const Attr *> &Attrs) {
@@ -335,6 +362,10 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
     return handleOpenCLUnrollHint(S, St, A, Range);
   case ParsedAttr::AT_Suppress:
     return handleSuppressAttr(S, St, A, Range);
+  case ParsedAttr::AT_HoshGeneratorLambda:
+    return handleHoshGeneratorLambdaAttr(S, St, A, Range);
+  case ParsedAttr::AT_HoshFragment:
+    return handleHoshFragmentAttr(S, St, A, Range);
   default:
     // if we're here, then we parsed a known attribute, but didn't recognize
     // it as a statement attribute => it is declaration attribute

@@ -122,6 +122,9 @@ def warn_cxx20_compat_consteval : Warning<
   "'consteval' specifier is incompatible with C++ standards before C++20">,
   InGroup<CXX2aCompat>, DefaultIgnore;
 
+def err_hosh_include_no_lambda : Error<
+  "expected a hosh generator lambda to follow #include \"*.hosh\"">;
+
 }
 
 let CategoryName = "Nullability Issue" in {

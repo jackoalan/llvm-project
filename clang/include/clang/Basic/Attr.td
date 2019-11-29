@@ -1326,6 +1326,50 @@ def GNUInline : InheritableAttr {
   let Documentation = [GnuInlineDocs];
 }
 
+def HoshVertexBuffer : InheritableParamAttr {
+  let Spellings = [CXX11<"hosh", "vertex_buffer">];
+  let Args = [ExprArgument<"Index">];
+  let Documentation = [Undocumented];
+}
+
+def HoshPosition : InheritableParamAttr {
+  let Spellings = [CXX11<"hosh", "position">];
+  let Documentation = [Undocumented];
+}
+
+def HoshColorTarget : InheritableParamAttr {
+  let Spellings = [CXX11<"hosh", "color_target">];
+  let Args = [ExprArgument<"Index">];
+  let Documentation = [Undocumented];
+}
+
+def HoshVertexTexture : InheritableParamAttr {
+  let Spellings = [CXX11<"hosh", "vertex_texture">];
+  let Args = [ExprArgument<"Index">];
+  let Documentation = [Undocumented];
+}
+
+def HoshFragmentTexture : InheritableParamAttr {
+  let Spellings = [CXX11<"hosh", "fragment_texture">];
+  let Args = [ExprArgument<"Index">];
+  let Documentation = [Undocumented];
+}
+
+def HoshHostCondition : DeclOrTypeAttr {
+  let Spellings = [CXX11<"hosh", "host_condition">];
+  let Documentation = [Undocumented];
+}
+
+def HoshFragment : StmtAttr {
+  let Spellings = [CXX11<"hosh", "fragment">];
+  let Documentation = [Undocumented];
+}
+
+def HoshGeneratorLambda : StmtAttr {
+  let Spellings = [CXX11<"hosh", "generator_lambda">];
+  let Documentation = [Undocumented];
+}
+
 def Hot : InheritableAttr {
   let Spellings = [GCC<"hot">];
   let Subjects = SubjectList<[Function]>;

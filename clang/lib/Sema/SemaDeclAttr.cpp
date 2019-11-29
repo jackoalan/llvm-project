@@ -4962,6 +4962,39 @@ static void handleArmMveAliasAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) ArmMveAliasAttr(S.Context, AL, Ident));
 }
 
+static void handleHoshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  if (!AL.isArgExpr(0)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_argument_n_type)
+      << AL << 1 << AANT_ArgumentIdentifier;
+    return;
+  }
+
+  Expr *IndexExpr = AL.getArgAsExpr(0);
+  if (!IndexExpr->isIntegerConstantExpr(S.Context)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_argument_type)
+      << AL << AANT_ArgumentIntegerConstant
+      << IndexExpr->getSourceRange();
+    return;
+  }
+
+  switch (AL.getKind()) {
+    default:
+      llvm_unreachable("invalid hosh parameter attribute");
+    case ParsedAttr::AT_HoshVertexBuffer:
+      D->addAttr(::new (S.Context) HoshVertexBufferAttr(S.Context, AL, IndexExpr));
+      return;
+    case ParsedAttr::AT_HoshColorTarget:
+      D->addAttr(::new (S.Context) HoshColorTargetAttr(S.Context, AL, IndexExpr));
+      return;
+    case ParsedAttr::AT_HoshVertexTexture:
+      D->addAttr(::new (S.Context) HoshVertexTextureAttr(S.Context, AL, IndexExpr));
+      return;
+    case ParsedAttr::AT_HoshFragmentTexture:
+      D->addAttr(::new (S.Context) HoshFragmentTextureAttr(S.Context, AL, IndexExpr));
+      return;
+  };
+}
+
 //===----------------------------------------------------------------------===//
 // Checker-specific attribute handlers.
 //===----------------------------------------------------------------------===//
@@ -7453,6 +7486,16 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
 
   case ParsedAttr::AT_UseHandle:
     handleHandleAttr<UseHandleAttr>(S, D, AL);
+
+  case ParsedAttr::AT_HoshPosition:
+    handleSimpleAttribute<HoshPositionAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_HoshVertexBuffer:
+  case ParsedAttr::AT_HoshColorTarget:
+  case ParsedAttr::AT_HoshVertexTexture:
+  case ParsedAttr::AT_HoshFragmentTexture:
+    handleHoshIndexParameterAttr(S, D, AL);
     break;
   }
 }

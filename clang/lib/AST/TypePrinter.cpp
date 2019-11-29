@@ -1483,6 +1483,11 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
     return;
   }
 
+  if (T->getAttrKind() == attr::HoshHostCondition) {
+    OS << " [[hosh::host_condition]]";
+    return;
+  }
+
   // The printing of the address_space attribute is handled by the qualifier
   // since it is still stored in the qualifier. Return early to prevent printing
   // this twice.
@@ -1519,6 +1524,7 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case attr::SPtr:
   case attr::UPtr:
   case attr::AddressSpace:
+  case attr::HoshHostCondition:
     llvm_unreachable("This attribute should have been handled already");
 
   case attr::NSReturnsRetained:
