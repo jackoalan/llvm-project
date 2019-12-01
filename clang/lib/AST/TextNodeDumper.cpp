@@ -108,25 +108,6 @@ void TextNodeDumper::Visit(const TemplateArgument &TA, SourceRange R,
   ConstTemplateArgumentVisitor<TextNodeDumper>::Visit(TA);
 }
 
-static StringRef HshStageToString(HshStage Stage) {
-  switch (Stage) {
-    case HshHostStage:
-      return llvm::StringLiteral("host");
-    case HshVertexStage:
-      return llvm::StringLiteral("vertex");
-    case HshControlStage:
-      return llvm::StringLiteral("control");
-    case HshEvaluationStage:
-      return llvm::StringLiteral("evaluation");
-    case HshGeometryStage:
-      return llvm::StringLiteral("geometry");
-    case HshFragmentStage:
-      return llvm::StringLiteral("fragment");
-    default:
-      return llvm::StringLiteral("none");
-  }
-}
-
 void TextNodeDumper::Visit(const Stmt *Node) {
   if (!Node) {
     ColorScope Color(OS, ShowColors, NullColor);
@@ -139,14 +120,6 @@ void TextNodeDumper::Visit(const Stmt *Node) {
   }
   dumpPointer(Node);
   dumpSourceRange(Node->getSourceRange());
-
-  {
-    ColorScope Color(OS, ShowColors, ValueKindColor);
-    for (int i = HshHostStage; i < HshMaxStage; ++i) {
-      if (Node->isInHshStage(HshStage(i)))
-        OS << " " << HshStageToString(HshStage(i));
-    }
-  }
 
   if (Node->isOMPStructuredBlock())
     OS << " openmp_structured_block";

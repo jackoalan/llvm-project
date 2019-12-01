@@ -57,17 +57,6 @@ class StringLiteral;
 class Token;
 class VarDecl;
 
-enum HshStage : int {
-  HshNoStage = -1,
-  HshHostStage = 0,
-  HshVertexStage,
-  HshControlStage,
-  HshEvaluationStage,
-  HshGeometryStage,
-  HshFragmentStage,
-  HshMaxStage
-};
-
 //===----------------------------------------------------------------------===//
 // AST classes for statements.
 //===----------------------------------------------------------------------===//
@@ -115,12 +104,8 @@ protected:
     /// are called "non-standalone" directives.
     /// I.e. those returned by OMPExecutableDirective::getStructuredBlock().
     unsigned IsOMPStructuredBlock : 1;
-
-    /// Bits are set LSB to MSB to indicate Stmt is used in one or more shader
-    /// stages.
-    unsigned HshStages : 6;
   };
-  enum { NumStmtBits = 15 };
+  enum { NumStmtBits = 9 };
 
   class NullStmtBitfields {
     friend class ASTStmtReader;
@@ -146,7 +131,7 @@ protected:
 
     unsigned : NumStmtBits;
 
-    unsigned NumStmts : 40 - NumStmtBits;
+    unsigned NumStmts : 32 - NumStmtBits;
 
     /// The location of the opening "{".
     SourceLocation LBraceLoc;
@@ -167,7 +152,7 @@ protected:
     unsigned : NumStmtBits;
 
     /// Number of attributes.
-    unsigned NumAttrs : 40 - NumStmtBits;
+    unsigned NumAttrs : 32 - NumStmtBits;
 
     /// The location of the attribute.
     SourceLocation AttrLoc;
@@ -481,7 +466,7 @@ protected:
     unsigned UsesADL : 1;
 
     /// Padding used to align OffsetToTrailingObjects to a byte multiple.
-    unsigned : 32 - 2 - NumExprBits;
+    unsigned : 24 - 2 - NumExprBits;
 
     /// The offset in bytes from the this pointer to the start of the
     /// trailing objects belonging to CallExpr. Intentionally byte sized
@@ -592,7 +577,7 @@ protected:
     // These don't need to be particularly wide, because they're
     // strictly limited by the forms of expressions we permit.
     unsigned NumSubExprs : 8;
-    unsigned ResultIndex : 40 - 8 - NumExprBits;
+    unsigned ResultIndex : 32 - 8 - NumExprBits;
   };
 
   class SourceLocExprBitfields {
@@ -613,7 +598,6 @@ protected:
     friend class CXXOperatorCallExpr;
 
     unsigned : NumCallExprBits;
-    unsigned : 8;
 
     /// The kind of this overloaded operator. One of the enumerator
     /// value of OverloadedOperatorKind.
@@ -628,7 +612,6 @@ protected:
     friend class CXXRewrittenBinaryOperator;
 
     unsigned : NumCallExprBits;
-    unsigned : 8;
 
     unsigned IsReversed : 1;
   };
@@ -781,7 +764,7 @@ protected:
     unsigned Value : 1;
 
     /// The number of arguments to this type trait.
-    unsigned NumArgs : 40 - 8 - 1 - NumExprBits;
+    unsigned NumArgs : 32 - 8 - 1 - NumExprBits;
   };
 
   class DependentScopeDeclRefExprBitfields {
@@ -821,7 +804,7 @@ protected:
     // When false, it must not have side effects.
     unsigned CleanupsHaveSideEffects : 1;
 
-    unsigned NumObjects : 40 - 1 - NumExprBits;
+    unsigned NumObjects : 32 - 1 - NumExprBits;
   };
 
   class CXXUnresolvedConstructExprBitfields {
@@ -1117,13 +1100,12 @@ public:
   Stmt &operator=(Stmt &&) = delete;
 
   Stmt(StmtClass SC) {
-    static_assert(sizeof(*this) <= 16,
+    static_assert(sizeof(*this) <= 8,
                   "changing bitfields changed sizeof(Stmt)");
     static_assert(sizeof(*this) % alignof(void *) == 0,
                   "Insufficient alignment!");
     StmtBits.sClass = SC;
     StmtBits.IsOMPStructuredBlock = false;
-    StmtBits.HshStages = 0;
     if (StatisticsEnabled) Stmt::addStmtClass(SC);
   }
 
@@ -1237,35 +1219,6 @@ public:
   /// \param Hash an ODRHash object which will be called where pointers would
   /// have been used in the Profile function.
   void ProcessODRHash(llvm::FoldingSetNodeID &ID, ODRHash& Hash) const;
-
-  void addHshStage(HshStage Stage) {
-    StmtBits.HshStages |= 1u << Stage;
-  }
-
-  void setHshStage(HshStage Stage) {
-    StmtBits.HshStages = 1u << Stage;
-  }
-
-  bool isInHshStage(HshStage Stage) const {
-    return StmtBits.HshStages & (1u << Stage);
-  }
-
-  HshStage getMaxHshStage() const {
-    HshStage Ret = HshNoStage;
-    for (int i = HshHostStage; i < HshMaxStage; ++i) {
-      if (isInHshStage(HshStage(i)))
-        Ret = HshStage(i);
-    }
-    return Ret;
-  }
-
-  void mergeHshStages(const Stmt *Other) {
-    StmtBits.HshStages |= Other->StmtBits.HshStages;
-  }
-
-  unsigned getHshStageBits() const {
-    return StmtBits.HshStages;
-  }
 };
 
 /// DeclStmt - Adaptor class for mixing declarations with statements and

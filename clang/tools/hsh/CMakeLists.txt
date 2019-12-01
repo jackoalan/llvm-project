@@ -6,3 +6,5 @@ clang_target_link_libraries(hsh
   PRIVATE
   clangHsh
   )
+
+add_subdirectory(test)

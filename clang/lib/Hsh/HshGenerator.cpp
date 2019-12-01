@@ -3,20 +3,13 @@
 
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/GlobalDecl.h"
-#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/ASTDumper.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
-#include "clang/Basic/Version.h"
-#include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
-#include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Hsh/HshGenerator.h"
 #include "clang/Lex/PreprocessorOptions.h"
-#include "clang/Tooling/CommonOptionsParser.h"
-#include "clang/Tooling/CompilationDatabase.h"
-#include "clang/Tooling/Tooling.h"
 
 #include <regex>
 
@@ -48,6 +41,17 @@ constexpr llvm::StringLiteral StubInclude(
   "  return hsh_binding;\n"
   "}();\n"
   "[[hsh::generator_lambda]]\n");
+
+enum HshStage : int {
+  HshNoStage = -1,
+  HshHostStage = 0,
+  HshVertexStage,
+  HshControlStage,
+  HshEvaluationStage,
+  HshGeometryStage,
+  HshFragmentStage,
+  HshMaxStage
+};
 
 static StringRef HshStageToString(HshStage Stage) {
   switch (Stage) {
@@ -128,7 +132,7 @@ private:
     using base = DeclVisitor<ImplClass, bool>;
   protected:
     StringRef Name;
-    Decl *Found;
+    Decl *Found = nullptr;
     bool InHshNS = false;
   public:
     bool VisitDecl(Decl *D) {
@@ -341,6 +345,13 @@ static HshStage DetermineParmVarStage(ParmVarDecl *D) {
   return HshHostStage;
 }
 
+static HshInterfaceDirection DetermineParmVarDirection(ParmVarDecl *D) {
+#define INTERFACE_VARIABLE(Attr, Stage, Direction, Array) \
+  if (D->hasAttr<Attr>()) return Direction;
+#include "ShaderInterface.def"
+  return HshInput;
+}
+
 template <typename T, unsigned N>
 static DiagnosticBuilder ReportCustom(T *S, const SourceManager &SM,
                                       const char (&FormatString)[N],
@@ -538,141 +549,489 @@ public:
   }
 };
 
-class StmtPromotions {
-  std::multimap<std::pair<HshStage, HshStage>, std::pair<Stmt*,Stmt*>> Promotions;
-  void AddUniquePromotion(std::pair<HshStage, HshStage> Key, std::pair<Stmt*,Stmt*> Value) {
-    auto Range = Promotions.equal_range(Key);
-    for (auto I = Range.first; I != Range.second; ++I)
-      if (I->second == Value)
-        return;
-    Promotions.insert(std::make_pair(Key, Value));
-  }
-public:
-  void AddPossiblePromotion(Stmt *From, Stmt *To, const HshStage Target) {
-    const HshStage FromStage = From->getMaxHshStage();
-    const HshStage ToStage = To->getMaxHshStage();
-    if (FromStage < ToStage)
-      AddUniquePromotion(std::make_pair(FromStage, ToStage), std::make_pair(From, To));
-  }
-  void printPromotions(const ASTContext &Context) const {
-    for (auto I = Promotions.begin(), E = Promotions.end(); I != E;) {
-      llvm::outs() << "Promoting "
-                   << HshStageToString(I->first.first) << " to "
-                   << HshStageToString(I->first.second) << "\n";
-      auto II = I;
-      for (; II != E && II->first == I->first; ++II) {
-        llvm::outs() << "  Promoted ";
-        II->second.first->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
-        llvm::outs() << "\n    within ";
-        II->second.second->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
-        llvm::outs() << "\n";
-      }
-      I = II;
-    }
-    llvm::outs().flush();
-  }
-};
-
-const ASTContext* TmpContext = nullptr;
-
-class TracingStmtPromoter : public StmtVisitor<TracingStmtPromoter> {
-  const SourceManager &SM;
-  const HshBuiltins &Builtins;
-  StmtPromotions &Promotions;
+struct AssignmentFinderInfo {
   Stmt *Body = nullptr;
   Stmt *LastCompoundChild = nullptr;
-  HshStage Target = HshNoStage;
   VarDecl *SelectedVarDecl = nullptr;
-  bool InMemberExpr = false;
+};
 
-  void DoVisit(Stmt *S, Stmt *Parent) {
-    llvm::outs() << "Visiting ";
-    S->printPretty(llvm::outs(), nullptr, TmpContext->getPrintingPolicy());
-    llvm::outs() << '\n';
-    llvm::outs().flush();
-    Visit(S);
-    Parent->mergeHshStages(S);
-    Parent->setHshStage(Parent->getMaxHshStage());
+class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStage> {
+  ASTContext &Context;
+  unsigned UseStages;
+
+  class InterfaceRecord {
+    CXXRecordDecl *Record = nullptr;
+    SmallVector<std::pair<Expr *, FieldDecl *>, 8> Fields;
+    VarDecl *Producer = nullptr;
+    VarDecl *Consumer = nullptr;
+    HshStage SStage = HshNoStage, DStage = HshNoStage;
+
+    MemberExpr *createFieldReference(ASTContext &Context, Expr *E, VarDecl *VD, bool IgnoreExisting = false) {
+      FieldDecl *Field = getFieldForExpr(Context, E, IgnoreExisting);
+      if (!Field)
+        return nullptr;
+      return MemberExpr::CreateImplicit(Context, DeclRefExpr::Create(Context, {}, {}, VD, false,
+                                                                     SourceLocation{}, E->getType(), VK_XValue),
+                                        false, Field, Field->getType(), VK_XValue, OK_Ordinary);
+    }
+
+  public:
+    void initializeRecord(ASTContext &Context, DeclContext *LambdaDeclContext, HshStage S, HshStage D) {
+      std::string RecordName;
+      llvm::raw_string_ostream RNS(RecordName);
+      RNS << HshStageToString(S) << "_to_" << HshStageToString(D);
+      Record = CXXRecordDecl::Create(Context, TTK_Struct, LambdaDeclContext, {}, {},
+                                     &Context.Idents.get(RNS.str()));
+      Record->startDefinition();
+
+      CanQualType CDType = Record->getTypeForDecl()->getCanonicalTypeUnqualified();
+
+      {
+        std::string VarName;
+        llvm::raw_string_ostream VNS(VarName);
+        VNS << "to_" << HshStageToString(D);
+        VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
+                                      &Context.Idents.get(VNS.str()), CDType, nullptr, SC_None);
+        Producer = VD;
+      }
+
+      {
+        std::string VarName;
+        llvm::raw_string_ostream VNS(VarName);
+        VNS << "from_" << HshStageToString(S);
+        VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
+                                      &Context.Idents.get(VNS.str()), CDType, nullptr, SC_None);
+        Consumer = VD;
+      }
+
+      SStage = S;
+      DStage = D;
+    }
+
+    static bool isSameComparisonOperand(Expr* E1, Expr* E2) {
+      if (E1 == E2)
+        return true;
+      E1->setValueKind(VK_RValue);
+      E2->setValueKind(VK_RValue);
+      return Expr::isSameComparisonOperand(E1, E2);
+    }
+
+    FieldDecl *getFieldForExpr(ASTContext &Context, Expr *E, bool IgnoreExisting = false) {
+      for (auto &P : Fields) {
+        if (P.first != E) {
+          std::string a, b;
+          llvm::raw_string_ostream A(a);
+          P.first->printPretty(A, nullptr, Context.getPrintingPolicy());
+          llvm::raw_string_ostream B(b);
+          E->printPretty(B, nullptr, Context.getPrintingPolicy());
+          if (A.str() == B.str())
+            printf("");
+        }
+        E->setValueKind(VK_RValue);
+        if (isSameComparisonOperand(P.first, E))
+          return IgnoreExisting ? nullptr : P.second;
+      }
+      std::string FieldName;
+      llvm::raw_string_ostream FNS(FieldName);
+      FNS << "_" << HshStageToString(SStage)[0] << HshStageToString(DStage)[0] << Fields.size();
+      FieldDecl *FD = FieldDecl::Create(Context, Record, {}, {}, &Context.Idents.get(FNS.str()),
+                                        E->getType().getUnqualifiedType(), {}, {}, false, ICIS_NoInit);
+      FD->setAccess(AS_public);
+      Record->addDecl(FD);
+      Fields.push_back(std::make_pair(E, FD));
+      return FD;
+    }
+
+    MemberExpr *createProducerFieldReference(ASTContext &Context, Expr *E) {
+      return createFieldReference(Context, E, Producer, true);
+    }
+
+    MemberExpr *createConsumerFieldReference(ASTContext &Context, Expr *E) {
+      return createFieldReference(Context, E, Consumer);
+    }
+
+    void finalizeRecord() { Record->completeDefinition(); }
+
+    CXXRecordDecl *getRecord() const { return Record; }
+  };
+
+  std::array<InterfaceRecord, HshMaxStage> HostToStageRecords; /* Indexed by consumer stage */
+  std::array<InterfaceRecord, HshMaxStage> InterStageRecords; /* Indexed by consumer stage */
+  struct StageStmtList {
+    SmallVector<Stmt *, 16> Stmts;
+    SmallVector<std::pair<unsigned, VarDecl*>, 16> StmtDeclRefCount;
+  };
+  std::array<StageStmtList, HshMaxStage> StageStmts;
+
+  AssignmentFinderInfo AssignFindInfo;
+
+  template <typename T>
+  SmallVector<Expr*, 4> DoVisitExprRange(T Range, HshStage From, HshStage To) {
+    SmallVector<Expr*, 4> Res;
+    for (Expr *E : Range)
+      Res.push_back(Visit(E, From, To));
+    return Res;
   }
 
-  void AddPossiblePromotion(Stmt *S, Stmt *Parent) {
-    Promotions.AddPossiblePromotion(S, Parent, Target);
-  }
-
-  bool GetInterpolated(Stmt *S) const {
-    const HshStage Stage = S->getMaxHshStage();
-    return Stage != HshHostStage && Stage < Target;
-  }
 public:
-  explicit TracingStmtPromoter(const SourceManager &SM, const HshBuiltins &Builtins, StmtPromotions &Promotions)
-  : SM(SM), Builtins(Builtins), Promotions(Promotions) {}
+  StagesBuilder(ASTContext &Context, DeclContext *LambdaDeclContext, unsigned UseStages)
+    : Context(Context), UseStages(UseStages) {
+    for (int D = HshVertexStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D))) {
+        HostToStageRecords[D].initializeRecord(Context, LambdaDeclContext, HshHostStage, HshStage(D));
+      }
+    }
+    for (int D = HshControlStage, S = HshVertexStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D))) {
+        InterStageRecords[D].initializeRecord(Context, LambdaDeclContext, HshStage(S), HshStage(D));
+        S = D;
+      }
+    }
+  }
+
+  Expr *VisitStmt(Stmt *S, HshStage From, HshStage To) {
+    llvm_unreachable("Unhandled statements should have been pruned already");
+    return nullptr;
+  }
 
   /* Begin ignores */
-  void VisitBlockExpr(BlockExpr *Block) {
-    DoVisit(Block->getBody(), Block);
+  Expr *VisitBlockExpr(BlockExpr *Block, HshStage From, HshStage To) {
+    return Visit(Block->getBody(), From, To);
   }
 
-  void VisitValueStmt(ValueStmt *ValueStmt) {
-    DoVisit(ValueStmt->getExprStmt(), ValueStmt);
+  Expr *VisitValueStmt(ValueStmt *ValueStmt, HshStage From, HshStage To) {
+    return Visit(ValueStmt->getExprStmt(), From, To);
   }
 
-  void VisitUnaryOperator(UnaryOperator *UnOp) {
-    DoVisit(UnOp->getSubExpr(), UnOp);
+  Expr *VisitUnaryOperator(UnaryOperator *UnOp, HshStage From, HshStage To) {
+    return Visit(UnOp->getSubExpr(), From, To);
   }
 
-  void VisitGenericSelectionExpr(GenericSelectionExpr *GSE) {
-    DoVisit(GSE->getResultExpr(), GSE);
+  Expr *VisitGenericSelectionExpr(GenericSelectionExpr *GSE, HshStage From, HshStage To) {
+    return Visit(GSE->getResultExpr(), From, To);
   }
 
-  void VisitChooseExpr(ChooseExpr *CE) {
-    DoVisit(CE->getChosenSubExpr(), CE);
+  Expr *VisitChooseExpr(ChooseExpr *CE, HshStage From, HshStage To) {
+    return Visit(CE->getChosenSubExpr(), From, To);
   }
 
-  void VisitConstantExpr(ConstantExpr *CE) {
-    DoVisit(CE->getSubExpr(), CE);
+  Expr *VisitConstantExpr(ConstantExpr *CE, HshStage From, HshStage To) {
+    return Visit(CE->getSubExpr(), From, To);
   }
 
-  void VisitImplicitCastExpr(ImplicitCastExpr *ICE) {
-    DoVisit(ICE->getSubExpr(), ICE);
+  Expr *VisitImplicitCastExpr(ImplicitCastExpr *ICE, HshStage From, HshStage To) {
+    return Visit(ICE->getSubExpr(), From, To);
   }
 
-  void VisitFullExpr(FullExpr *FE) {
-    DoVisit(FE->getSubExpr(), FE);
+  Expr *VisitFullExpr(FullExpr *FE, HshStage From, HshStage To) {
+    return Visit(FE->getSubExpr(), From, To);
   }
 
-  void VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE) {
-    DoVisit(MTE->getSubExpr(), MTE);
+  Expr *VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE, HshStage From, HshStage To) {
+    return Visit(MTE->getSubExpr(), From, To);
   }
 
-  void VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP) {
-    DoVisit(NTTP->getReplacement(), NTTP);
+  Expr *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP, HshStage From, HshStage To) {
+    return Visit(NTTP->getReplacement(), From, To);
   }
   /* End ignores */
 
-  void VisitStmt(Stmt *S) {
-    ReportUnsupportedStmt(S, SM);
+  /*
+   * Base case for createInterStageReferenceExpr.
+   * Stage division will be established on this expression.
+   */
+  Expr *VisitExpr(Expr *E, HshStage From, HshStage To) {
+    if (From == To || From == HshNoStage || To == HshNoStage)
+      return E;
+    if (From != HshHostStage) {
+      /* Create intermediate inter-stage assignments */
+      for (int D = From + 1, S = From; D <= To; ++D) {
+        if (UseStages & (1u << unsigned(D))) {
+          InterfaceRecord &SRecord = InterStageRecords[S];
+          InterfaceRecord &DRecord = InterStageRecords[D];
+          if (MemberExpr *Producer = DRecord.createProducerFieldReference(Context, E))
+            addStageStmt(
+              new(Context) BinaryOperator(Producer,
+                                          S == From ? E : SRecord.createConsumerFieldReference(Context, E),
+                                          BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {}), HshStage(S));
+          S = D;
+        }
+      }
+    } else {
+      if (MemberExpr *Producer = HostToStageRecords[To].createProducerFieldReference(Context, E))
+        addStageStmt(
+          new(Context) BinaryOperator(Producer, E, BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {}), From);
+    }
+    InterfaceRecord &Record = From == HshHostStage ? HostToStageRecords[To] : InterStageRecords[To];
+    return Record.createConsumerFieldReference(Context, E);
   }
 
-  void VisitDeclStmt(DeclStmt *DeclStmt) {
+  /*
+   * Construction expressions are a form of component-wise type conversions in hsh.
+   * They may be lifted to the target stage.
+   */
+  Expr *VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr, HshStage From, HshStage To) {
+    auto Arguments = DoVisitExprRange(ConstructExpr->arguments(), From, To);
+    CXXConstructExpr *NCE;
+    if (auto *TempObj = dyn_cast<CXXTemporaryObjectExpr>(ConstructExpr))
+      NCE = CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
+                                           TempObj->getTypeSourceInfo(), Arguments, {}, false, true, false, false);
+    else
+      NCE = CXXConstructExpr::Create(Context, ConstructExpr->getType(), {}, ConstructExpr->getConstructor(), false,
+                                     Arguments, false, true, false, false, CXXConstructExpr::CK_Complete, {});
+    return NCE;
+  }
+
+  /*
+   * DeclRef expressions may connect directly to a construction expression and should
+   * therefore be lifted to the target stage.
+   */
+  Expr *VisitDeclRefExpr(DeclRefExpr *DeclRef, HshStage From, HshStage To) {
+    if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
+      if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
+        return VisitExpr(DeclRef, From, To);
+      auto [Assign, NextCompoundChild] =
+      LastAssignmentFinder(Context.getSourceManager()).Find(VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
+      if (Assign) {
+        SaveAndRestore<Stmt*> SavedCompoundChild(AssignFindInfo.LastCompoundChild, NextCompoundChild);
+        SaveAndRestore<VarDecl*> SavedSelectedVarDecl(AssignFindInfo.SelectedVarDecl, VD);
+        return Visit(Assign, From, To);
+      }
+    }
+    llvm_unreachable("Should have been handled already");
+    return nullptr;
+  }
+
+  Expr *VisitDeclStmt(DeclStmt *DeclStmt, HshStage From, HshStage To) {
     for (Decl *D : DeclStmt->getDeclGroup()) {
       if (auto *VD = dyn_cast<VarDecl>(D)) {
-        if (VD == SelectedVarDecl) {
+        if (VD == AssignFindInfo.SelectedVarDecl) {
+          auto *NVD = VarDecl::Create(Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
+                                      VD->getType().getUnqualifiedType(), nullptr, SC_None);
+          auto *NDS = new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {});
           if (Expr *Init = VD->getInit())
-            DoVisit(Init, DeclStmt);
+            NVD->setInit(Visit(Init, From, To));
+          liftDeclStmt(NDS, From, To, VD);
+          return DeclRefExpr::Create(Context, {}, {}, NVD, true, SourceLocation{},
+                                     VD->getType().getNonReferenceType(), VK_RValue);
+        }
+      }
+    }
+    llvm_unreachable("Should have been handled already");
+    return nullptr;
+  }
+
+  /*
+   * Certain trivial expressions like type conversions may be lifted into
+   * the target stage rather than creating redundant inter-stage data.
+   */
+  Expr *createInterStageReferenceExpr(Expr *E, HshStage From, HshStage To, const AssignmentFinderInfo& AFI) {
+    AssignFindInfo = AFI;
+    return Visit(E, From, To);
+  }
+
+  void addStageStmt(Stmt *S, HshStage Stage, VarDecl *OrigDecl = nullptr) {
+    if (auto *DS = dyn_cast<DeclStmt>(S)) {
+      auto RefCountIt = StageStmts[Stage].StmtDeclRefCount.begin();
+      for (auto I = StageStmts[Stage].Stmts.begin(), E = StageStmts[Stage].Stmts.end(); I != E; ++I, ++RefCountIt) {
+        if (isa<DeclStmt>(*I)) {
+          if (RefCountIt->second == OrigDecl) {
+            ++RefCountIt->first;
+            return;
+          }
+        }
+      }
+    } else {
+      for (Stmt *ES : StageStmts[Stage].Stmts)
+        if (ES == S)
+          return;
+    }
+    StageStmts[Stage].Stmts.push_back(S);
+    StageStmts[Stage].StmtDeclRefCount.push_back({1, OrigDecl});
+  }
+
+  void liftDeclStmt(DeclStmt *DS, HshStage From, HshStage To, VarDecl *OrigDecl) {
+    addStageStmt(DS, To, OrigDecl);
+    auto RefCountIt = StageStmts[From].StmtDeclRefCount.begin();
+    for (auto I = StageStmts[From].Stmts.begin(), E = StageStmts[From].Stmts.end(); I != E; ++I, ++RefCountIt) {
+      if (isa<DeclStmt>(*I)) {
+        if (RefCountIt->second == OrigDecl) {
+          if (--RefCountIt->first == 0) {
+            StageStmts[From].Stmts.erase(I);
+            StageStmts[From].StmtDeclRefCount.erase(RefCountIt);
+          }
           break;
         }
       }
     }
   }
 
-  void VisitNullStmt(NullStmt *) {}
+  void finalizeResults() {
+    for (int D = HshVertexStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D)))
+        HostToStageRecords[D].finalizeRecord();
+    }
 
-  void VisitBinaryOperator(BinaryOperator *BinOp) {
-    DoVisit(BinOp->getLHS(), BinOp);
-    DoVisit(BinOp->getRHS(), BinOp);
+    for (int D = HshControlStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D)))
+        InterStageRecords[D].finalizeRecord();
+    }
+  }
 
-    const bool LHSInterpolated = GetInterpolated(BinOp->getLHS());
-    const bool RHSInterpolated = GetInterpolated(BinOp->getRHS());
+  void printResults() {
+    for (int D = HshVertexStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D))) {
+        HostToStageRecords[D].getRecord()->print(llvm::outs(), Context.getPrintingPolicy());
+        llvm::outs() << '\n';
+      }
+    }
+
+    for (int D = HshControlStage; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D))) {
+        InterStageRecords[D].getRecord()->print(llvm::outs(), Context.getPrintingPolicy());
+        llvm::outs() << '\n';
+      }
+    }
+
+    for (int S = HshHostStage; S < HshMaxStage; ++S) {
+      if (UseStages & (1u << unsigned(S))) {
+        llvm::outs() << HshStageToString(HshStage(S)) << " statements:\n";
+        auto *Stmts = CompoundStmt::Create(Context, StageStmts[S].Stmts, {}, {});
+        Stmts->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
+      }
+    }
+  }
+};
+
+using StmtResult = std::pair<Stmt*, HshStage>;
+class ValueTracer : public StmtVisitor<ValueTracer, StmtResult> {
+  ASTContext &Context;
+  const HshBuiltins &Builtins;
+  StagesBuilder &Builder;
+  AssignmentFinderInfo AssignFindInfo;
+  HshStage Target = HshNoStage;
+  bool InMemberExpr = false;
+
+  static constexpr StmtResult ErrorResult{nullptr, HshNoStage};
+
+  bool GetInterpolated(HshStage Stage) const {
+    return Stage != HshHostStage && Stage < Target;
+  }
+
+  struct VisitExprRangeResult {
+    HshStage Stage = HshNoStage;
+    SmallVector<Expr*, 4> Exprs;
+    SmallVector<HshStage, 4> ExprStages;
+    operator ArrayRef<Expr*>() { return Exprs; }
+  };
+
+  template <typename T>
+  Optional<VisitExprRangeResult> DoVisitExprRange(T Range, Stmt *Parent) {
+    VisitExprRangeResult Res;
+    for (Expr *E : Range) {
+      auto [ExprStmt, ExprStage] = Visit(E);
+      if (!ExprStmt)
+        return {};
+      Res.Exprs.push_back(cast<Expr>(ExprStmt));
+      Res.ExprStages.emplace_back(ExprStage);
+      Res.Stage = std::max(Res.Stage, ExprStage);
+    }
+    return {Res};
+  }
+
+  void DoPromoteExprRange(VisitExprRangeResult& Res) {
+    auto ExprStageI = Res.ExprStages.begin();
+    for (Expr *&E : Res.Exprs) {
+      E = Builder.createInterStageReferenceExpr(E, *ExprStageI, Res.Stage, AssignFindInfo);
+      ++ExprStageI;
+    }
+  }
+
+public:
+  explicit ValueTracer(ASTContext &Context, const HshBuiltins &Builtins, StagesBuilder &Promotions)
+  : Context(Context), Builtins(Builtins), Builder(Promotions) {}
+
+  /* Begin ignores */
+  StmtResult VisitBlockExpr(BlockExpr *Block) {
+    return Visit(Block->getBody());
+  }
+
+  StmtResult VisitValueStmt(ValueStmt *ValueStmt) {
+    return Visit(ValueStmt->getExprStmt());
+  }
+
+  StmtResult VisitUnaryOperator(UnaryOperator *UnOp) {
+    return Visit(UnOp->getSubExpr());
+  }
+
+  StmtResult VisitGenericSelectionExpr(GenericSelectionExpr *GSE) {
+    return Visit(GSE->getResultExpr());
+  }
+
+  StmtResult VisitChooseExpr(ChooseExpr *CE) {
+    return Visit(CE->getChosenSubExpr());
+  }
+
+  StmtResult VisitConstantExpr(ConstantExpr *CE) {
+    return Visit(CE->getSubExpr());
+  }
+
+  StmtResult VisitImplicitCastExpr(ImplicitCastExpr *ICE) {
+    return Visit(ICE->getSubExpr());
+  }
+
+  StmtResult VisitFullExpr(FullExpr *FE) {
+    return Visit(FE->getSubExpr());
+  }
+
+  StmtResult VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE) {
+    return Visit(MTE->getSubExpr());
+  }
+
+  StmtResult VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP) {
+    return Visit(NTTP->getReplacement());
+  }
+  /* End ignores */
+
+  StmtResult VisitStmt(Stmt *S) {
+    ReportUnsupportedStmt(S, Context.getSourceManager());
+    return ErrorResult;
+  }
+
+  StmtResult VisitDeclStmt(DeclStmt *DeclStmt) {
+    for (Decl *D : DeclStmt->getDeclGroup()) {
+      if (auto *VD = dyn_cast<VarDecl>(D)) {
+        if (VD == AssignFindInfo.SelectedVarDecl) {
+          auto *NVD = VarDecl::Create(Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
+                                      VD->getType().getUnqualifiedType(), nullptr, SC_None);
+          HshStage Stage = HshNoStage;
+          if (Expr *Init = VD->getInit()) {
+            auto [InitStmt, InitStage] = Visit(Init);
+            if (!InitStmt)
+              return ErrorResult;
+            NVD->setInit(cast<Expr>(InitStmt));
+            Stage = InitStage;
+          }
+          return {new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {}), Stage};
+        }
+      }
+    }
+    return ErrorResult;
+  }
+
+  StmtResult VisitNullStmt(NullStmt *NS) { return {NS, HshNoStage}; }
+
+  StmtResult VisitBinaryOperator(BinaryOperator *BinOp) {
+    auto [LStmt, LStage] = Visit(BinOp->getLHS());
+    if (!LStmt)
+      return ErrorResult;
+    auto [RStmt, RStage] = Visit(BinOp->getRHS());
+    if (!RStmt)
+      return ErrorResult;
+    HshStage Stage = std::max(LStage, RStage);
+
+    const bool LHSInterpolated = GetInterpolated(LStage);
+    const bool RHSInterpolated = GetInterpolated(RStage);
     if (LHSInterpolated || RHSInterpolated) {
       switch (BinOp->getOpcode()) {
       case BO_Add:
@@ -686,99 +1045,124 @@ public:
       case BO_Div:
       case BO_DivAssign:
         if (RHSInterpolated)
-          BinOp->setHshStage(Target);
+          Stage = Target;
         break;
       default:
-        BinOp->setHshStage(Target);
+        Stage = Target;
         break;
       }
     }
 
-    AddPossiblePromotion(BinOp->getLHS(), BinOp);
-    AddPossiblePromotion(BinOp->getRHS(), BinOp);
+    LStmt = Builder.createInterStageReferenceExpr(cast<Expr>(LStmt), LStage, Stage, AssignFindInfo);
+    RStmt = Builder.createInterStageReferenceExpr(cast<Expr>(RStmt), RStage, Stage, AssignFindInfo);
+    auto *NewBinOp = new (Context) BinaryOperator(cast<Expr>(LStmt), cast<Expr>(RStmt), BinOp->getOpcode(),
+                                                  BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
+
+    return {NewBinOp, Stage};
   }
 
-  void VisitExpr(Expr *E) {
-    ReportUnsupportedStmt(E, SM);
+  StmtResult VisitExpr(Expr *E) {
+    ReportUnsupportedStmt(E, Context.getSourceManager());
+    return ErrorResult;
   }
 
-  void VisitCallExpr(CallExpr *CallExpr) {
+  StmtResult VisitCallExpr(CallExpr *CallExpr) {
     if (auto *DeclRef = dyn_cast<DeclRefExpr>(CallExpr->getCallee()->IgnoreParenImpCasts())) {
       if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
         HshBuiltinFunction Func = Builtins.identifyBuiltinFunction(FD);
         if (Func != HBF_None) {
-          for (Expr *Arg : CallExpr->arguments())
-            DoVisit(Arg, CallExpr);
+          auto Arguments = DoVisitExprRange(CallExpr->arguments(), CallExpr);
+          if (!Arguments)
+            return ErrorResult;
 
           if (CallExpr->getNumArgs() == 2) {
-            const bool LHSInterpolated = GetInterpolated(CallExpr->getArg(0));
-            const bool RHSInterpolated = GetInterpolated(CallExpr->getArg(1));
+            const bool LHSInterpolated = GetInterpolated(Arguments->ExprStages[0]);
+            const bool RHSInterpolated = GetInterpolated(Arguments->ExprStages[1]);
             if ((LHSInterpolated || RHSInterpolated) && !HshBuiltins::isInterpolationDistributed(Func))
-              CallExpr->setHshStage(Target);
+              Arguments->Stage = Target;
           }
 
-          for (Expr *Arg : CallExpr->arguments())
-            AddPossiblePromotion(Arg, CallExpr);
-          return;
+          DoPromoteExprRange(*Arguments);
+          auto* NCE = CallExpr::Create(Context, CallExpr->getCallee(), *Arguments, CallExpr->getType(), VK_XValue, {});
+          return {NCE, Arguments->Stage};
         }
       }
     }
-    ReportUnsupportedFunctionCall(CallExpr, SM);
+    ReportUnsupportedFunctionCall(CallExpr, Context.getSourceManager());
+    return ErrorResult;
   }
 
-  void VisitCXXMemberCallExpr(CXXMemberCallExpr *CallExpr) {
+  StmtResult VisitCXXMemberCallExpr(CXXMemberCallExpr *CallExpr) {
     CXXMethodDecl *MD = CallExpr->getMethodDecl();
     HshBuiltinCXXMethod Method = Builtins.identifyBuiltinMethod(MD);
     switch (Method) {
       case HBM_sample_texture2d: {
+        HshStage Stage = HshNoStage;
         ParmVarDecl *PVD = nullptr;
         if (auto *TexRef = dyn_cast<DeclRefExpr>(CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts()))
           PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
         if (PVD) {
           if (PVD->hasAttr<HshVertexTextureAttr>())
-            CallExpr->setHshStage(HshVertexStage);
+            Stage = HshVertexStage;
           else if (PVD->hasAttr<HshFragmentTextureAttr>())
-            CallExpr->setHshStage(HshFragmentStage);
+            Stage = HshFragmentStage;
           else
-            ReportUnattributedTexture(PVD, SM);
+            ReportUnattributedTexture(PVD, Context.getSourceManager());
         } else {
-          ReportBadTextureReference(CallExpr, SM);
+          ReportBadTextureReference(CallExpr, Context.getSourceManager());
         }
-        Expr *UVArg = CallExpr->getArg(0);
-        DoVisit(UVArg, CallExpr);
-        AddPossiblePromotion(UVArg, CallExpr);
-        break;
+        auto [UVStmt, UVStage] = Visit(CallExpr->getArg(0));
+        if (!UVStmt)
+          return ErrorResult;
+        UVStmt = Builder.createInterStageReferenceExpr(cast<Expr>(UVStmt), UVStage, Stage, AssignFindInfo);
+        std::array<Expr*, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
+        auto *NMCE = CXXMemberCallExpr::Create(Context, CallExpr->getCallee(), NewArgs,
+                                               CallExpr->getType(), VK_XValue, {});
+        return {NMCE, Stage};
       }
       default:
-        ReportUnsupportedFunctionCall(CallExpr, SM);
+        ReportUnsupportedFunctionCall(CallExpr, Context.getSourceManager());
         break;
     }
+    return ErrorResult;
   }
 
-  void VisitCastExpr(CastExpr *CastExpr) {
+  StmtResult VisitCastExpr(CastExpr *CastExpr) {
     if (Builtins.identifyBuiltinType(CastExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeCast(CastExpr, SM);
-      return;
+      ReportUnsupportedTypeCast(CastExpr, Context.getSourceManager());
+      return ErrorResult;
     }
-    DoVisit(CastExpr->getSubExpr(), CastExpr);
+    return Visit(CastExpr->getSubExpr());
   }
 
-  void VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr) {
+  StmtResult VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr) {
     if (Builtins.identifyBuiltinType(ConstructExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeConstruct(ConstructExpr, SM);
-      return;
+      ReportUnsupportedTypeConstruct(ConstructExpr, Context.getSourceManager());
+      return ErrorResult;
     }
-    for (Expr *Arg : ConstructExpr->arguments())
-      DoVisit(Arg, ConstructExpr);
+
+    auto Arguments = DoVisitExprRange(ConstructExpr->arguments(), ConstructExpr);
+    if (!Arguments)
+      return ErrorResult;
+    DoPromoteExprRange(*Arguments);
+    CXXConstructExpr *NCE;
+    if (auto *TempObj = dyn_cast<CXXTemporaryObjectExpr>(ConstructExpr))
+      NCE = CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
+                                           TempObj->getTypeSourceInfo(), *Arguments, {}, false, true, false, false);
+    else
+      NCE = CXXConstructExpr::Create(Context, ConstructExpr->getType(), {}, ConstructExpr->getConstructor(), false,
+                                     *Arguments, false, true, false, false, CXXConstructExpr::CK_Complete, {});
+    return {NCE, Arguments->Stage};
   }
 
-  void VisitCXXOperatorCallExpr(CXXOperatorCallExpr *CallExpr) {
-    for (Expr *Arg : CallExpr->arguments())
-      DoVisit(Arg, CallExpr);
+  StmtResult VisitCXXOperatorCallExpr(CXXOperatorCallExpr *CallExpr) {
+    auto Arguments = DoVisitExprRange(CallExpr->arguments(), CallExpr);
+    if (!Arguments)
+      return ErrorResult;
 
     if (CallExpr->getNumArgs() == 2) {
-      const bool LHSInterpolated = GetInterpolated(CallExpr->getArg(0));
-      const bool RHSInterpolated = GetInterpolated(CallExpr->getArg(1));
+      const bool LHSInterpolated = GetInterpolated(Arguments->ExprStages[0]);
+      const bool RHSInterpolated = GetInterpolated(Arguments->ExprStages[1]);
       if (LHSInterpolated || RHSInterpolated) {
         switch (CallExpr->getOperator()) {
         case OO_Plus:
@@ -792,73 +1176,78 @@ public:
         case OO_Slash:
         case OO_SlashEqual:
           if (RHSInterpolated)
-            CallExpr->setHshStage(Target);
+            Arguments->Stage = Target;
           break;
         default:
-          CallExpr->setHshStage(Target);
+          Arguments->Stage = Target;
           break;
         }
       }
     }
 
-    for (Expr *Arg : CallExpr->arguments())
-      AddPossiblePromotion(Arg, CallExpr);
+    DoPromoteExprRange(*Arguments);
+    auto *NCE = CXXOperatorCallExpr::Create(Context, CallExpr->getOperator(), CallExpr->getCallee(), *Arguments,
+                                            CallExpr->getType(), VK_XValue, {}, {});
+    return {NCE, Arguments->Stage};
   }
 
-  void VisitDeclRefExpr(DeclRefExpr *DeclRef) {
+  StmtResult VisitDeclRefExpr(DeclRefExpr *DeclRef) {
     if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
       if (!InMemberExpr && Builtins.identifyBuiltinType(VD->getType()) == HBT_None) {
-        ReportUnsupportedTypeReference(DeclRef, SM);
-        return;
+        ReportUnsupportedTypeReference(DeclRef, Context.getSourceManager());
+        return ErrorResult;
       }
-      if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl())) {
-        DeclRef->setHshStage(DetermineParmVarStage(PVD));
-        return;
-      }
-      llvm::outs() << "Attempting to find " << VD->getName() << " before ";
-      LastCompoundChild->printPretty(llvm::outs(), nullptr, TmpContext->getPrintingPolicy());
-      llvm::outs() << '\n';
-      llvm::outs().flush();
-      auto [Assign, NextCompoundChild] = LastAssignmentFinder(SM).Find(VD, Body, LastCompoundChild);
+      if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
+        return {DeclRef, DetermineParmVarStage(PVD)};
+      auto [Assign, NextCompoundChild] =
+        LastAssignmentFinder(Context.getSourceManager()).Find(VD, AssignFindInfo.Body,
+                                                              AssignFindInfo.LastCompoundChild);
       if (Assign) {
-        llvm::outs() << "Found ";
-        Assign->printPretty(llvm::outs(), nullptr, TmpContext->getPrintingPolicy());
-        llvm::outs() << '\n';
-        llvm::outs().flush();
-        SaveAndRestore<Stmt*> SavedCompoundChild(LastCompoundChild, NextCompoundChild);
-        SaveAndRestore<VarDecl*> SavedSelectedVarDecl(SelectedVarDecl, VD);
-        DoVisit(Assign, DeclRef);
-      } else {
-        llvm::outs() << "Fail\n";
-        llvm::outs().flush();
+        SaveAndRestore<Stmt*> SavedCompoundChild(AssignFindInfo.LastCompoundChild, NextCompoundChild);
+        SaveAndRestore<VarDecl*> SavedSelectedVarDecl(AssignFindInfo.SelectedVarDecl, VD);
+        auto [AssignStmt, AssignStage] = Visit(Assign);
+        if (!AssignStmt)
+          return ErrorResult;
+        Builder.addStageStmt(AssignStmt, AssignStage, VD);
+        return {DeclRef, AssignStage};
       }
     }
+    return ErrorResult;
   }
 
-  void VisitInitListExpr(InitListExpr *InitList) {
-    for (Stmt *S : *InitList)
-      DoVisit(S, InitList);
+  StmtResult VisitInitListExpr(InitListExpr *InitList) {
+    auto Exprs = DoVisitExprRange(InitList->inits(), InitList);
+    if (!Exprs)
+      return ErrorResult;
+    DoPromoteExprRange(*Exprs);
+    return {new (Context) InitListExpr(Context, {}, *Exprs, {}), Exprs->Stage};
   }
 
-  void VisitMemberExpr(MemberExpr *MemberExpr) {
+  StmtResult VisitMemberExpr(MemberExpr *MemberExpr) {
     if (!InMemberExpr && Builtins.identifyBuiltinType(MemberExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeReference(MemberExpr, SM);
-      return;
+      ReportUnsupportedTypeReference(MemberExpr, Context.getSourceManager());
+      return ErrorResult;
     }
     SaveAndRestore<bool> SavedInMemberExpr(InMemberExpr, true);
-    DoVisit(MemberExpr->getBase(), MemberExpr);
+    auto [BaseStmt, BaseStage] = Visit(MemberExpr->getBase());
+    auto *NME = MemberExpr::CreateImplicit(Context, cast<Expr>(BaseStmt), false, MemberExpr->getMemberDecl(),
+                                           MemberExpr->getType(), VK_XValue, OK_Ordinary);
+    return {NME, BaseStage};
   }
 
-  void VisitFloatingLiteral(FloatingLiteral *) {}
+  StmtResult VisitFloatingLiteral(FloatingLiteral *FL) { return {FL, HshNoStage}; }
 
-  void VisitIntegerLiteral(IntegerLiteral *) {}
+  StmtResult VisitIntegerLiteral(IntegerLiteral *IL) { return {IL, HshNoStage}; }
 
   void Trace(Stmt *Assign, Stmt *B, Stmt *LCC, HshStage T) {
-    Body = B;
-    LastCompoundChild = LCC;
+    AssignFindInfo.Body = B;
+    AssignFindInfo.LastCompoundChild = LCC;
     Target = T;
-    Assign->setHshStage(T);
-    Visit(Assign);
+    auto [AssignStmt, AssignStage] = Visit(Assign);
+    if (!AssignStage)
+      return;
+    AssignStmt = Builder.createInterStageReferenceExpr(cast<Expr>(AssignStmt), AssignStage, T, AssignFindInfo);
+    Builder.addStageStmt(AssignStmt, T);
   }
 };
 
@@ -890,6 +1279,12 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
 public:
   void run(const MatchFinder::MatchResult &Result) override {
     if (auto* Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
+      DeclContext *LambdaDeclContext = Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
+
+      auto IncludePath = getIncludePathBeforeLambda(Lambda->getBeginLoc());
+      auto IOut = CI.createOutputFile(IncludePath, false, true, "", "", true);
+      *IOut << StubInclude;
+
       auto *CallOperator = Lambda->getCallOperator();
       Stmt *Body = CallOperator->getBody();
       for (const auto &Cap : Lambda->captures()) {
@@ -899,37 +1294,32 @@ public:
         llvm::outs() << '\n';
       }
 
-      TmpContext = &Context;
-      StmtPromotions Promotions;
+      unsigned UseStages = 1;
+      for (ParmVarDecl *Param : CallOperator->parameters()) {
+        if (DetermineParmVarDirection(Param) != HshInput)
+          UseStages |= (1u << unsigned(DetermineParmVarStage(Param)));
+      }
+
+      StagesBuilder Promotions(Context, LambdaDeclContext, UseStages);
 
       for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
-          if (DetermineParmVarStage(Param) != HshStage(i))
+          if (DetermineParmVarDirection(Param) == HshInput || DetermineParmVarStage(Param) != HshStage(i))
             continue;
-          auto [Assign, LastCompoundChild] = LastAssignmentFinder(SM).Find(Param, Body);
+          auto [Assign, LastCompoundChild] = LastAssignmentFinder(Context.getSourceManager()).Find(Param, Body);
           if (Assign)
-            TracingStmtPromoter(SM, Builtins, Promotions).Trace(Assign, Body, LastCompoundChild, HshStage(i));
+            ValueTracer(Context, Builtins, Promotions).Trace(Assign, Body, LastCompoundChild, HshStage(i));
         }
       }
 
-      Promotions.printPromotions(Context);
+      Promotions.finalizeResults();
+      Promotions.printResults();
 
       std::array<CompoundStmt*, HshMaxStage> StageBodies{};
       for (int i = HshHostStage; i < HshMaxStage; ++i) {
-        SmallVector<Stmt*, 8> Stmts;
-        for (auto *Stmt : dyn_cast<CompoundStmt>(Body)->body()) {
-          if (auto *E = dyn_cast<Expr>(Stmt))
-            if (auto *E2 = E->IgnoreParenImpCasts())
-              Stmt = E2;
-          if (Stmt->isInHshStage(HshStage(i)))
-            Stmts.push_back(Stmt);
-        }
-        if (i != HshHostStage && Stmts.empty())
-          continue;
 
 #if 0
         if (i == HshHostStage) {
-          DeclContext *LambdaDeclContext = Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
           CXXRecordDecl *RecordDecl = CXXRecordDecl::CreateLambda(Context, LambdaDeclContext, {}, {}, false, false, LCD_ByRef);
           CXXMethodDecl *LambdaCall = CXXMethodDecl::Create(Context, RecordDecl, {}, {Context.DeclarationNames.getCXXOperatorName(OO_Call), {}}, {}, {}, SC_None, false, CSK_unspecified, {});
           SmallVector<Stmt*, 8> LambdaStmts;
@@ -991,32 +1381,36 @@ public:
         }
 #endif
 
+#if 0
         StageBodies[i] = CompoundStmt::Create(Context, Stmts, {}, {});
         llvm::outs() << "Statements for " << HshStageToString(HshStage(i)) << '\n';
         StageBodies[i]->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
         llvm::outs() << '\n';
+#endif
       }
 
 
-      ASTDumper P(llvm::errs(), nullptr, &SM, /*ShowColors*/true);
+      ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Body);
     }
   }
 
+  CompilerInstance &CI;
   ASTContext &Context;
   Preprocessor &PP;
-  SourceManager &SM;
+  std::unique_ptr<raw_pwrite_stream> Out;
   std::map<SourceLocation, std::string> SeenIncludes;
 
-  GenerateConsumer(ASTContext &Context, Preprocessor &PP, SourceManager &SM) : Context(Context), PP(PP), SM(SM) {}
+  explicit GenerateConsumer(CompilerInstance &CI)
+  : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()), Out(CI.createDefaultOutputFile(false)) {}
 
   void HandleTranslationUnit(ASTContext& Context) override {
     if (Context.getDiagnostics().hasErrorOccurred())
       return;
 
-    Builtins.findBuiltinDecls(Context.getTranslationUnitDecl(), SM);
+    Builtins.findBuiltinDecls(Context.getTranslationUnitDecl(), Context.getSourceManager());
     if (Context.getDiagnostics().hasErrorOccurred()) {
-      ASTDumper P(llvm::errs(), nullptr, &SM, /*ShowColors*/true);
+      ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Context.getTranslationUnitDecl());
       return;
     }
@@ -1031,9 +1425,9 @@ public:
   }
 
   StringRef getIncludePathBeforeLambda(SourceLocation LambdaLoc) const {
-    PresumedLoc PLoc = SM.getPresumedLoc(LambdaLoc);
+    PresumedLoc PLoc = Context.getSourceManager().getPresumedLoc(LambdaLoc);
     for (const auto& I : SeenIncludes) {
-      PresumedLoc IPLoc = SM.getPresumedLoc(I.first);
+      PresumedLoc IPLoc = Context.getSourceManager().getPresumedLoc(I.first);
       if (IPLoc.getFileID() != PLoc.getFileID())
         continue;
       if (IPLoc.getLine() == PLoc.getLine() - 1)
@@ -1083,49 +1477,11 @@ public:
   };
 };
 
-class GenerateAction : public ASTFrontendAction {
-public:
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef InFile) override {
-    auto Consumer = std::make_unique<GenerateConsumer>(CI.getASTContext(), CI.getPreprocessor(), CI.getSourceManager());
-    CI.getPreprocessor().addPPCallbacks(std::make_unique<GenerateConsumer::PPCallbacks>(
-                                        *Consumer, CI.getFileManager(), CI.getSourceManager()));
-    return Consumer;
-  }
-};
-
-#ifndef INSTALL_PREFIX
-#define INSTALL_PREFIX / usr / local
-#endif
-#define XSTR(s) STR(s)
-#define STR(s) #s
-
-int DoGenerateTest() {
-  std::vector<std::string> args = {
-    "clang-tool",
-#ifdef __linux__
-    "--gcc-toolchain=/usr",
-#endif
-    "-fsyntax-only",
-    "-std=c++17",
-    "-D__hsh__=1",
-    "-Wno-expansion-to-defined",
-    "-Wno-nullability-completeness",
-    "-Wno-unused-value",
-    "-Werror=shadow-field",
-    "-I" XSTR(INSTALL_PREFIX) "/lib/clang/" CLANG_VERSION_STRING "/include",
-    "-I" XSTR(INSTALL_PREFIX) "/include",
-    "test-input.cpp",
-  };
-  llvm::IntrusiveRefCntPtr<FileManager> fman(new FileManager(FileSystemOptions()));
-#if CLANG_VERSION_MAJOR >= 10
-  tooling::ToolInvocation TI(std::move(args), std::make_unique<GenerateAction>(), fman.get());
-#else
-  tooling::ToolInvocation TI(std::move(args), new GenerateAction, fman.get());
-#endif
-  if (!TI.run())
-    return 1;
-
-  return 0;
+std::unique_ptr<ASTConsumer> GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
+  auto Consumer = std::make_unique<GenerateConsumer>(CI);
+  CI.getPreprocessor().addPPCallbacks(std::make_unique<GenerateConsumer::PPCallbacks>(
+    *Consumer, CI.getFileManager(), CI.getSourceManager()));
+  return Consumer;
 }
 
 }

@@ -120,7 +120,7 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
   // Captured values the shader is interested in are assigned to the first
   // constructor parameters bound at the end of the include.
   auto MyBinding =
-#include "DrawSomething.hsh"
+#include "DrawSomething2.hsh"
   [&](const MyFormat& vertData [[hsh::vertex_buffer(0)]], // Stands in for current vertex (vertex shader) or
                                                            // interpolated value (fragment shader)
       hsh::texture2d<float> tex0 [[hsh::fragment_texture(0)]], // texture sampler
@@ -194,7 +194,7 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                                                         trigger vertex left fetch,
                                                         trigger host right fetch*/}/*f*/, 1.f}/*f*/;
 
-#if 1
+#if 0
     struct HostToVertex {
       hsh::float4x4 _hv0; // xf
       hsh::float3x3 _hv1; // normalXf
