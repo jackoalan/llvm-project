@@ -116,6 +116,8 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
     {{ 1.f,  1.f, 0.f}, {0.f, 0.f, 1.f}}
   };
 
+  constexpr hsh::sampler TestSampler(hsh::wrap::repeat, hsh::filter::nearest);
+
   // Generated include defines anonymous struct and opens initialization bracket.
   // Captured values the shader is interested in are assigned to the first
   // constructor parameters bound at the end of the include.
@@ -189,7 +191,7 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
 
     // lightDir becomes an rvalue after the negation operator. This rvalue will be a field of fragment uniform data.
     fragColor/*f*/ =/*f*/ hsh::float4{hsh::float3{
-      hsh::float3{tex0.sample({0.f, 0.f}, hsh::sampler(hsh::wrap::repeat, hsh::filter::nearest))} *
+      hsh::float3{tex0.sample({0.f, 0.f}, TestSampler)} *
       hsh::dot(finalNormal/*v*/, -/*h*/lightDir/*h*/)/*v promoted to f via distribution test,
                                                         trigger vertex left fetch,
                                                         trigger host right fetch*/}/*f*/, 1.f}/*f*/;

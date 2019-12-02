@@ -18,6 +18,9 @@
 
 namespace clang {
 
+class CallExpr;
+class DeclRefExpr;
+class Expr;
 class LangOptions;
 class SourceManager;
 class Stmt;
@@ -39,6 +42,21 @@ public:
   virtual std::string remapPath(StringRef Path) const {
     return std::string(Path);
   }
+
+  /// Override name used in a TagDecl.
+  virtual StringRef overrideTagDeclIdentifier(TagDecl *D) const { return {}; }
+
+  /// Override name used in a call (including CXXMemberCallExprs).
+  virtual StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const { return {}; }
+
+  /// Incrementally build call arguments using either supplied lambda.
+  /// Returning false will apply default arguments instead.
+  virtual bool overrideCallArguments(CallExpr *C,
+    const std::function<void(StringRef)> &StringArg,
+    const std::function<void(Expr*)> &ExprArg) const { return false; }
+
+  /// Override name used in a DeclRefExpr.
+  virtual StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const { return {}; }
 };
 
 /// Describes how types, statements, expressions, and declarations should be
@@ -62,7 +80,8 @@ struct PrintingPolicy {
         MSWChar(LO.MicrosoftExt && !LO.WChar), IncludeNewlines(true),
         MSVCFormatting(false), ConstantsAsWritten(false),
         SuppressImplicitBase(false), FullyQualifiedName(false),
-        PrintCanonicalTypes(false) {}
+        PrintCanonicalTypes(false), DisableTypeQualifiers(false),
+        DisableListInitialization(false) {}
 
   /// Adjust this printing policy for cases where it's known that we're
   /// printing C++ code (for instance, if AST dumping reaches a C++-only
@@ -238,6 +257,10 @@ struct PrintingPolicy {
 
   /// Whether to print types as written or canonically.
   unsigned PrintCanonicalTypes : 1;
+
+  unsigned DisableTypeQualifiers : 1;
+
+  unsigned DisableListInitialization : 1;
 
   /// Callbacks to use to allow the behavior of printing to be customized.
   const PrintingCallbacks *Callbacks = nullptr;

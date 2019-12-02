@@ -270,7 +270,10 @@ public:
   }
 
   HshBuiltinType identifyBuiltinType(QualType QT) const {
-    const clang::Type *UT = QT.getNonReferenceType().getTypePtrOrNull();
+    return identifyBuiltinType(QT.getNonReferenceType().getTypePtrOrNull());
+  }
+
+  HshBuiltinType identifyBuiltinType(const clang::Type *UT) const {
     if (!UT) return HBT_None;
     TagDecl *T = UT->getAsTagDecl();
     if (!T) return HBT_None;
@@ -315,9 +318,15 @@ public:
     return BuiltinTypeSpellings[Tp];
   }
 
+  template <HshTarget T>
+  static constexpr StringRef getSpelling(HshBuiltinType Tp);
+
   static constexpr const Spellings &getSpellings(HshBuiltinFunction Func) {
     return BuiltinFunctionSpellings[Func];
   }
+
+  template <HshTarget T>
+  static constexpr StringRef getSpelling(HshBuiltinFunction Func);
 
   static constexpr bool isInterpolationDistributed(HshBuiltinFunction Func) {
     return BuiltinFunctionInterpDists[Func];
@@ -331,6 +340,14 @@ public:
     return getTypeDecl(Tp)->getTypeForDecl()->getCanonicalTypeUnqualified();
   }
 };
+
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinType Tp) { return getSpellings(Tp).GLSL; }
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinType Tp) { return getSpellings(Tp).HLSL; }
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_METAL>(HshBuiltinType Tp) { return getSpellings(Tp).Metal; }
+
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinFunction Func) { return getSpellings(Func).GLSL; }
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinFunction Func) { return getSpellings(Func).HLSL; }
+template <> constexpr StringRef HshBuiltins::getSpelling<HT_METAL>(HshBuiltinFunction Func) { return getSpellings(Func).Metal; }
 
 enum HshInterfaceDirection {
   HshInput,
@@ -390,6 +407,22 @@ static void ReportBadTextureReference(Stmt *S, const SourceManager &SM) {
 
 static void ReportUnattributedTexture(ParmVarDecl *PVD, const SourceManager &SM) {
   ReportCustom(PVD, SM, "sampled textures must be attributed with [[hsh::*_texture(n)]]");
+}
+
+static void ReportNonConstexprSampler(Expr *E, const SourceManager &SM) {
+  ReportCustom(E, SM, "sampler arguments must be constexpr");
+}
+
+static void ReportBadSamplerStructFormat(Expr *E, const SourceManager &SM) {
+  ReportCustom(E, SM, "sampler structure is not consistent");
+}
+
+static void ReportBadVertexPositionType(ParmVarDecl *PVD, const SourceManager &SM) {
+  ReportCustom(PVD, SM, "vertex position must be a hsh::float4");
+}
+
+static void ReportBadColorTargetType(ParmVarDecl *PVD, const SourceManager &SM) {
+  ReportCustom(PVD, SM, "fragment color target must be a hsh::float4");
 }
 
 class LastAssignmentFinder : public StmtVisitor<LastAssignmentFinder, bool> {
@@ -555,6 +588,38 @@ struct AssignmentFinderInfo {
   VarDecl *SelectedVarDecl = nullptr;
 };
 
+enum HshSamplerFilterMode {
+  HSF_Linear,
+  HSF_Nearest,
+};
+enum HshSamplerWrapMode {
+  HSW_Repeat,
+  HSW_Clamp,
+};
+struct SamplerConfig {
+  static constexpr unsigned NumFields = 2;
+  static constexpr bool ValidateSamplerStruct(const APValue &Val) {
+    if (!Val.isStruct() || Val.getStructNumFields() != NumFields)
+      return false;
+    for (unsigned i = 0; i < NumFields; ++i)
+      if (!Val.getStructField(i).isInt())
+        return false;
+    return true;
+  }
+  HshSamplerFilterMode Filter = HSF_Linear;
+  HshSamplerWrapMode Wrap = HSW_Repeat;
+  SamplerConfig() = default;
+  explicit SamplerConfig(const APValue &Val) {
+    Filter = HshSamplerFilterMode(Val.getStructField(0).getInt().getSExtValue());
+    Wrap = HshSamplerWrapMode(Val.getStructField(1).getInt().getSExtValue());
+  }
+};
+
+template <typename TexAttr>
+constexpr HshStage StageOfTextureAttr() { return HshNoStage; }
+template <> constexpr HshStage StageOfTextureAttr<HshVertexTextureAttr>() { return HshVertexStage; }
+template <> constexpr HshStage StageOfTextureAttr<HshFragmentTextureAttr>() { return HshFragmentStage; }
+
 class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStage> {
   ASTContext &Context;
   unsigned UseStages;
@@ -618,22 +683,12 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
 
     FieldDecl *getFieldForExpr(ASTContext &Context, Expr *E, bool IgnoreExisting = false) {
       for (auto &P : Fields) {
-        if (P.first != E) {
-          std::string a, b;
-          llvm::raw_string_ostream A(a);
-          P.first->printPretty(A, nullptr, Context.getPrintingPolicy());
-          llvm::raw_string_ostream B(b);
-          E->printPretty(B, nullptr, Context.getPrintingPolicy());
-          if (A.str() == B.str())
-            printf("");
-        }
-        E->setValueKind(VK_RValue);
         if (isSameComparisonOperand(P.first, E))
           return IgnoreExisting ? nullptr : P.second;
       }
       std::string FieldName;
       llvm::raw_string_ostream FNS(FieldName);
-      FNS << "_" << HshStageToString(SStage)[0] << HshStageToString(DStage)[0] << Fields.size();
+      FNS << '_' << HshStageToString(SStage)[0] << HshStageToString(DStage)[0] << Fields.size();
       FieldDecl *FD = FieldDecl::Create(Context, Record, {}, {}, &Context.Idents.get(FNS.str()),
                                         E->getType().getUnqualifiedType(), {}, {}, false, ICIS_NoInit);
       FD->setAccess(AS_public);
@@ -662,6 +717,12 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
     SmallVector<std::pair<unsigned, VarDecl*>, 16> StmtDeclRefCount;
   };
   std::array<StageStmtList, HshMaxStage> StageStmts;
+  struct SampleCall {
+    CXXMemberCallExpr *Expr;
+    unsigned Index;
+    SamplerConfig Config;
+  };
+  std::array<SmallVector<SampleCall, 4>, HshMaxStage> SampleCalls;
 
   AssignmentFinderInfo AssignFindInfo;
 
@@ -772,13 +833,15 @@ public:
    */
   Expr *VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr, HshStage From, HshStage To) {
     auto Arguments = DoVisitExprRange(ConstructExpr->arguments(), From, To);
-    CXXConstructExpr *NCE;
-    if (auto *TempObj = dyn_cast<CXXTemporaryObjectExpr>(ConstructExpr))
-      NCE = CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
-                                           TempObj->getTypeSourceInfo(), Arguments, {}, false, true, false, false);
-    else
-      NCE = CXXConstructExpr::Create(Context, ConstructExpr->getType(), {}, ConstructExpr->getConstructor(), false,
-                                     Arguments, false, true, false, false, CXXConstructExpr::CK_Complete, {});
+    CXXConstructExpr *NCE =
+      CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(),
+                                     ConstructExpr->getType(),
+                                     Context.getTrivialTypeSourceInfo(ConstructExpr->getType()),
+                                     Arguments, {},
+                                     ConstructExpr->hadMultipleCandidates(),
+                                     ConstructExpr->isListInitialization(),
+                                     ConstructExpr->isStdInitListInitialization(),
+                                     ConstructExpr->requiresZeroInitialization());
     return NCE;
   }
 
@@ -866,6 +929,54 @@ public:
     }
   }
 
+  template<typename TexAttr>
+  std::pair<HshStage, APSInt> getTextureIndex(TexAttr *A) {
+    Expr::EvalResult Res;
+    A->getIndex()->EvaluateAsInt(Res, Context);
+    return {StageOfTextureAttr<TexAttr>(), Res.Val.getInt()};
+  }
+
+  template<typename TexAttr>
+  std::pair<HshStage, APSInt> getTextureIndex(ParmVarDecl *PVD) {
+    if (auto *A = PVD->getAttr<TexAttr>())
+      return getTextureIndex(A);
+    return {HshNoStage, APSInt{}};
+  }
+
+  template<typename TexAttrA, typename TexAttrB, typename... Rest>
+  std::pair<HshStage, APSInt> getTextureIndex(ParmVarDecl *PVD) {
+    if (auto *A = PVD->getAttr<TexAttrA>())
+      return getTextureIndex(A);
+    return getTextureIndex<TexAttrB, Rest...>(PVD);
+  }
+
+  std::pair<HshStage, APSInt> getTextureIndex(ParmVarDecl *PVD) {
+    return getTextureIndex<HshVertexTextureAttr, HshFragmentTextureAttr>(PVD);
+  }
+
+  void registerSampleCall(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C) {
+    if (auto *DR = dyn_cast<DeclRefExpr>(C->getImplicitObjectArgument()->IgnoreParenImpCasts())) {
+      if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
+        auto [TexStage, TexIdx] = getTextureIndex(PVD);
+        auto& StageCalls = SampleCalls[TexStage];
+        for (const auto& Call : StageCalls)
+          if (Call.Expr == C)
+            return;
+        APValue Res;
+        Expr *SamplerArg = C->getArg(1);
+        if (!SamplerArg->isCXX11ConstantExpr(Context, &Res)) {
+          ReportNonConstexprSampler(SamplerArg, Context.getSourceManager());
+          return;
+        }
+        if (!SamplerConfig::ValidateSamplerStruct(Res)) {
+          ReportBadSamplerStructFormat(SamplerArg, Context.getSourceManager());
+          return;
+        }
+        StageCalls.push_back({C, unsigned(TexIdx.getZExtValue()), SamplerConfig{Res}});
+      }
+    }
+  }
+
   void finalizeResults() {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D)))
@@ -878,17 +989,17 @@ public:
     }
   }
 
-  void printResults() {
+  void printResults(const PrintingPolicy &Policy) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        HostToStageRecords[D].getRecord()->print(llvm::outs(), Context.getPrintingPolicy());
+        HostToStageRecords[D].getRecord()->print(llvm::outs(), Policy);
         llvm::outs() << '\n';
       }
     }
 
     for (int D = HshControlStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        InterStageRecords[D].getRecord()->print(llvm::outs(), Context.getPrintingPolicy());
+        InterStageRecords[D].getRecord()->print(llvm::outs(), Policy);
         llvm::outs() << '\n';
       }
     }
@@ -897,7 +1008,7 @@ public:
       if (UseStages & (1u << unsigned(S))) {
         llvm::outs() << HshStageToString(HshStage(S)) << " statements:\n";
         auto *Stmts = CompoundStmt::Create(Context, StageStmts[S].Stmts, {}, {});
-        Stmts->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
+        Stmts->printPretty(llvm::outs(), nullptr, Policy);
       }
     }
   }
@@ -1114,6 +1225,7 @@ public:
         auto [UVStmt, UVStage] = Visit(CallExpr->getArg(0));
         if (!UVStmt)
           return ErrorResult;
+        Builder.registerSampleCall(Method, CallExpr);
         UVStmt = Builder.createInterStageReferenceExpr(cast<Expr>(UVStmt), UVStage, Stage, AssignFindInfo);
         std::array<Expr*, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
         auto *NMCE = CXXMemberCallExpr::Create(Context, CallExpr->getCallee(), NewArgs,
@@ -1145,13 +1257,15 @@ public:
     if (!Arguments)
       return ErrorResult;
     DoPromoteExprRange(*Arguments);
-    CXXConstructExpr *NCE;
-    if (auto *TempObj = dyn_cast<CXXTemporaryObjectExpr>(ConstructExpr))
-      NCE = CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
-                                           TempObj->getTypeSourceInfo(), *Arguments, {}, false, true, false, false);
-    else
-      NCE = CXXConstructExpr::Create(Context, ConstructExpr->getType(), {}, ConstructExpr->getConstructor(), false,
-                                     *Arguments, false, true, false, false, CXXConstructExpr::CK_Complete, {});
+    CXXConstructExpr *NCE =
+      CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(),
+                                     ConstructExpr->getType(),
+                                     Context.getTrivialTypeSourceInfo(ConstructExpr->getType()),
+                                     *Arguments, {},
+                                     ConstructExpr->hadMultipleCandidates(),
+                                     ConstructExpr->isListInitialization(),
+                                     ConstructExpr->isStdInitListInitialization(),
+                                     ConstructExpr->requiresZeroInitialization());
     return {NCE, Arguments->Stage};
   }
 
@@ -1251,6 +1365,111 @@ public:
   }
 };
 
+struct ShaderPrintingPolicyBase : PrintingPolicy {
+  virtual ~ShaderPrintingPolicyBase() = default;
+  using PrintingPolicy::PrintingPolicy;
+};
+
+template <typename ImplClass>
+struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
+  HshBuiltins& Builtins;
+  explicit ShaderPrintingPolicy(HshBuiltins &Builtins)
+  : ShaderPrintingPolicyBase(LangOptions()), Builtins(Builtins) {
+    Callbacks = this;
+    IncludeTagDefinition = false;
+    SuppressTagKeyword = true;
+    SuppressScope = true;
+    AnonymousTagLocations = false;
+
+    DisableTypeQualifiers = true;
+    DisableListInitialization = true;
+  }
+
+  StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
+    auto HBT = Builtins.identifyBuiltinType(D->getTypeForDecl());
+    if (HBT == HBT_None) return {};
+    return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBT);
+  }
+
+  StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const override {
+    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
+      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
+      if (HBM == HBM_None) return {};
+      return ImplClass::identifierOfCXXMethod(HBM, MemberCall);
+    }
+    if (auto *DeclRef = dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
+      if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
+        auto HBF = Builtins.identifyBuiltinFunction(FD);
+        if (HBF == HBF_None) return {};
+        return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBF);
+      }
+    }
+    return {};
+  }
+
+  bool overrideCallArguments(CallExpr *C,
+    const std::function<void(StringRef)> &StringArg, const std::function<void(Expr*)> &ExprArg) const override {
+    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
+      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
+      if (HBM == HBM_None) return {};
+      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg, ExprArg);
+    }
+    return false;
+  }
+
+  StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const override {
+    if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
+      if (PVD->hasAttr<HshPositionAttr>())
+        return static_cast<const ImplClass&>(*this).identifierOfVertexPosition();
+    }
+    return {};
+  }
+};
+
+struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
+  static constexpr HshTarget SourceTarget = HT_GLSL;
+  static constexpr StringRef identifierOfVertexPosition() { return llvm::StringLiteral("gl_Position"); }
+
+  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C) {
+    switch (HBM) {
+      case HBM_sample_texture2d:
+        return llvm::StringLiteral("texture");
+      default:
+        return {};
+    }
+  }
+
+  static constexpr bool overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
+    const std::function<void(StringRef)> &StringArg, const std::function<void(Expr*)> &ExprArg) {
+    switch (HBM) {
+      case HBM_sample_texture2d: {
+        ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+        ExprArg(C->getArg(0));
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  using ShaderPrintingPolicy<GLSLPrintingPolicy>::ShaderPrintingPolicy;
+};
+
+static std::unique_ptr<ShaderPrintingPolicyBase> MakePrintingPolicy(HshTarget Target, HshBuiltins &Builtins) {
+  switch (Target) {
+    case HT_GLSL:
+    case HT_HLSL:
+    case HT_HLSL_BIN:
+    case HT_METAL:
+    case HT_METAL_BIN_MAC:
+    case HT_METAL_BIN_IOS:
+    case HT_METAL_BIN_TVOS:
+    case HT_SPIRV:
+    case HT_DXIL:
+      return std::make_unique<GLSLPrintingPolicy>(Builtins);
+  }
+}
+
 static const std::regex BadCharReg(R"([^_0-9a-zA-Z])");
 static std::string SanitizedName(const char* Name) {
   std::string TmpName = std::regex_replace(Name, BadCharReg, "_");
@@ -1276,7 +1495,18 @@ static std::string SanitizedNameOfLocation(SourceLocation Loc, const SourceManag
 
 class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   HshBuiltins Builtins;
+  CompilerInstance &CI;
+  ASTContext &Context;
+  Preprocessor &PP;
+  ArrayRef<HshTarget> Targets;
+  std::unique_ptr<raw_pwrite_stream> Out;
+  std::map<SourceLocation, std::string> SeenIncludes;
+
 public:
+  explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
+  : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()),
+    Targets(Targets), Out(CI.createDefaultOutputFile(false)) {}
+
   void run(const MatchFinder::MatchResult &Result) override {
     if (auto* Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
       DeclContext *LambdaDeclContext = Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
@@ -1296,24 +1526,41 @@ public:
 
       unsigned UseStages = 1;
       for (ParmVarDecl *Param : CallOperator->parameters()) {
-        if (DetermineParmVarDirection(Param) != HshInput)
+        if (DetermineParmVarDirection(Param) != HshInput) {
+          if (Param->hasAttr<HshPositionAttr>()) {
+            if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
+              ReportBadVertexPositionType(Param, Context.getSourceManager());
+              return;
+            }
+          } else if (Param->hasAttr<HshColorTargetAttr>()) {
+            if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
+              ReportBadColorTargetType(Param, Context.getSourceManager());
+              return;
+            }
+          }
           UseStages |= (1u << unsigned(DetermineParmVarStage(Param)));
+        }
       }
 
-      StagesBuilder Promotions(Context, LambdaDeclContext, UseStages);
+      StagesBuilder Builder(Context, LambdaDeclContext, UseStages);
 
       for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
           if (DetermineParmVarDirection(Param) == HshInput || DetermineParmVarStage(Param) != HshStage(i))
             continue;
           auto [Assign, LastCompoundChild] = LastAssignmentFinder(Context.getSourceManager()).Find(Param, Body);
+          if (Context.getDiagnostics().hasErrorOccurred())
+            return;
           if (Assign)
-            ValueTracer(Context, Builtins, Promotions).Trace(Assign, Body, LastCompoundChild, HshStage(i));
+            ValueTracer(Context, Builtins, Builder).Trace(Assign, Body, LastCompoundChild, HshStage(i));
         }
       }
 
-      Promotions.finalizeResults();
-      Promotions.printResults();
+      Builder.finalizeResults();
+      for (const auto &T : Targets) {
+        auto Policy = MakePrintingPolicy(T, Builtins);
+        Builder.printResults(*Policy);
+      }
 
       std::array<CompoundStmt*, HshMaxStage> StageBodies{};
       for (int i = HshHostStage; i < HshMaxStage; ++i) {
@@ -1395,15 +1642,6 @@ public:
     }
   }
 
-  CompilerInstance &CI;
-  ASTContext &Context;
-  Preprocessor &PP;
-  std::unique_ptr<raw_pwrite_stream> Out;
-  std::map<SourceLocation, std::string> SeenIncludes;
-
-  explicit GenerateConsumer(CompilerInstance &CI)
-  : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()), Out(CI.createDefaultOutputFile(false)) {}
-
   void HandleTranslationUnit(ASTContext& Context) override {
     if (Context.getDiagnostics().hasErrorOccurred())
       return;
@@ -1478,7 +1716,7 @@ public:
 };
 
 std::unique_ptr<ASTConsumer> GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
-  auto Consumer = std::make_unique<GenerateConsumer>(CI);
+  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
   CI.getPreprocessor().addPPCallbacks(std::make_unique<GenerateConsumer::PPCallbacks>(
     *Consumer, CI.getFileManager(), CI.getSourceManager()));
   return Consumer;

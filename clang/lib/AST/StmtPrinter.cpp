@@ -964,7 +964,13 @@ void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
     Qualifier->print(OS, Policy);
   if (Node->hasTemplateKeyword())
     OS << "template ";
-  OS << Node->getNameInfo();
+  StringRef OverrideIdentifier;
+  if (Policy.Callbacks)
+    OverrideIdentifier = Policy.Callbacks->overrideDeclRefIdentifier(Node);
+  if (!OverrideIdentifier.empty())
+    OS << OverrideIdentifier;
+  else
+    OS << Node->getNameInfo();
   if (Node->hasExplicitTemplateArgs())
     printTemplateArgumentList(OS, Node->template_arguments(), Policy);
 }
@@ -1353,6 +1359,22 @@ void StmtPrinter::PrintCallArgs(CallExpr *Call) {
 }
 
 void StmtPrinter::VisitCallExpr(CallExpr *Call) {
+  if (Policy.Callbacks) {
+    StringRef OverrideIdentifier = Policy.Callbacks->overrideBuiltinFunctionIdentifier(Call);
+    if (!OverrideIdentifier.empty())
+      OS << OverrideIdentifier;
+    else
+      PrintExpr(Call->getCallee());
+    OS << "(";
+    bool NeedComma = false;
+    auto PrintComma = [&]() { if (NeedComma) OS << ", "; else NeedComma = true; };
+    if (!Policy.Callbacks->overrideCallArguments(Call,
+        [&](StringRef Arg) { PrintComma(); OS << Arg; },
+        [&](Expr *E) { PrintComma(); PrintExpr(E); }))
+      PrintCallArgs(Call);
+    OS << ")";
+    return;
+  }
   PrintExpr(Call->getCallee());
   OS << "(";
   PrintCallArgs(Call);
@@ -1497,7 +1519,8 @@ void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
     return;
   }
 
-  OS << "{";
+  if (!Policy.DisableListInitialization)
+    OS << "{";
   for (unsigned i = 0, e = Node->getNumInits(); i != e; ++i) {
     if (i) OS << ", ";
     if (Node->getInit(i))
@@ -1505,7 +1528,8 @@ void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
     else
       OS << "{}";
   }
-  OS << "}";
+  if (!Policy.DisableListInitialization)
+    OS << "}";
 }
 
 void StmtPrinter::VisitArrayInitLoopExpr(ArrayInitLoopExpr *Node) {
@@ -1879,7 +1903,7 @@ void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
   Node->getType().print(OS, Policy);
   if (Node->isStdInitListInitialization())
     /* Nothing to do; braces are part of creating the std::initializer_list. */;
-  else if (Node->isListInitialization())
+  else if (Node->isListInitialization() && !Policy.DisableListInitialization)
     OS << "{";
   else
     OS << "(";
@@ -1894,7 +1918,7 @@ void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
   }
   if (Node->isStdInitListInitialization())
     /* See above. */;
-  else if (Node->isListInitialization())
+  else if (Node->isListInitialization() && !Policy.DisableListInitialization)
     OS << "}";
   else
     OS << ")";

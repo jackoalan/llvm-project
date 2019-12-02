@@ -1167,7 +1167,12 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
   if (!Policy.SuppressScope)
     AppendScope(D->getDeclContext(), OS);
 
-  if (const IdentifierInfo *II = D->getIdentifier())
+  StringRef OverrideIdentifier;
+  if (Policy.Callbacks)
+    OverrideIdentifier = Policy.Callbacks->overrideTagDeclIdentifier(D);
+  if (!OverrideIdentifier.empty())
+    OS << OverrideIdentifier;
+  else if (const IdentifierInfo *II = D->getIdentifier())
     OS << II->getName();
   else if (TypedefNameDecl *Typedef = D->getTypedefNameForAnonDecl()) {
     assert(Typedef->getIdentifier() && "Typedef without identifier?");
@@ -1323,7 +1328,7 @@ void TypePrinter::printElaboratedBefore(const ElaboratedType *T,
   }
 
   // The tag definition will take care of these.
-  if (!Policy.IncludeTagDefinition)
+  if (!Policy.IncludeTagDefinition && !Policy.DisableTypeQualifiers)
   {
     OS << TypeWithKeyword::getKeywordName(T->getKeyword());
     if (T->getKeyword() != ETK_None)
