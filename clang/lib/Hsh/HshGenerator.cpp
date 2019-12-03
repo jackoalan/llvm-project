@@ -1,28 +1,28 @@
+//===--- HshGenerator.cpp - Lambda scanner and codegen for hsh tool -------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/IR/Value.h"
 #include "llvm/Support/SaveAndRestore.h"
+#include "llvm/Support/raw_carray_ostream.h"
+#include "llvm/Support/raw_comment_ostream.h"
 
+#include "clang/AST/ASTDumper.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/GlobalDecl.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
-#include "clang/AST/ASTDumper.h"
-#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Hsh/HshGenerator.h"
 #include "clang/Lex/PreprocessorOptions.h"
 
 #include <regex>
-
-namespace clang::ast_matchers {
-const internal::VariadicDynCastAllOfMatcher<Stmt, AttributedStmt> attributedStmt;
-AST_MATCHER_P(AttributedStmt, hasStmtAttr, attr::Kind, AttrKind) {
-  for (const auto *Attr : Node.getAttrs()) {
-    if (Attr->getKind() == AttrKind)
-      return true;
-  }
-  return false;
-}
-}
 
 namespace clang::hshgen {
 
@@ -31,16 +31,16 @@ using namespace clang;
 using namespace clang::ast_matchers;
 using namespace std::literals;
 
-constexpr llvm::StringLiteral StubInclude(
-  "[&]() {\n"
-  "  class {\n"
-  "  public:\n"
-  "    void draw(std::size_t, std::size_t) {}\n"
-  "    void bind(hsh::detail::base_vertex_buffer) {}\n"
-  "  } hsh_binding;\n"
-  "  return hsh_binding;\n"
-  "}();\n"
-  "[[hsh::generator_lambda]]\n");
+constexpr llvm::StringLiteral
+    StubInclude("[&]() {\n"
+                "  class {\n"
+                "  public:\n"
+                "    void draw(std::size_t, std::size_t) {}\n"
+                "    void bind(hsh::detail::base_vertex_buffer) {}\n"
+                "  } hsh_binding;\n"
+                "  return hsh_binding;\n"
+                "}();\n"
+                "[[hsh::generator_lambda]]\n");
 
 enum HshStage : int {
   HshNoStage = -1,
@@ -74,24 +74,21 @@ static StringRef HshStageToString(HshStage Stage) {
 
 enum HshBuiltinType {
   HBT_None,
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) \
-  HBT_##Name,
+#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) HBT_##Name,
 #include "BuiltinTypes.def"
   HBT_Max
 };
 
 enum HshBuiltinFunction {
   HBF_None,
-#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) \
-  HBF_##Name,
+#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) HBF_##Name,
 #include "BuiltinFunctions.def"
   HBF_Max
 };
 
 enum HshBuiltinCXXMethod {
   HBM_None,
-#define BUILTIN_CXX_METHOD(Name, Record, ...) \
-  HBM_##Name##_##Record,
+#define BUILTIN_CXX_METHOD(Name, Record, ...) HBM_##Name##_##Record,
 #include "BuiltinCXXMethods.def"
   HBM_Max
 };
@@ -101,39 +98,43 @@ public:
   struct Spellings {
     StringRef GLSL, HLSL, Metal;
   };
+
 private:
-  std::array<const clang::TagDecl*, HBT_Max> Types{};
-  std::array<const clang::FunctionDecl*, HBF_Max> Functions{};
-  std::array<const clang::CXXMethodDecl*, HBM_Max> Methods{};
+  std::array<const clang::TagDecl *, HBT_Max> Types{};
+  std::array<const clang::FunctionDecl *, HBF_Max> Functions{};
+  std::array<const clang::CXXMethodDecl *, HBM_Max> Methods{};
 
   static constexpr Spellings BuiltinTypeSpellings[] = {
-    {{}, {}, {}},
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) \
-    {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL), llvm::StringLiteral(#Metal)},
+      {{}, {}, {}},
+#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
+  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
+   llvm::StringLiteral(#Metal)},
 #include "BuiltinTypes.def"
   };
 
   static constexpr Spellings BuiltinFunctionSpellings[] = {
-    {{}, {}, {}},
-#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) \
-    {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL), llvm::StringLiteral(#Metal)},
+      {{}, {}, {}},
+#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)                  \
+  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
+   llvm::StringLiteral(#Metal)},
 #include "BuiltinFunctions.def"
   };
 
   static constexpr bool BuiltinFunctionInterpDists[] = {
-    false,
-#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) \
-    InterpDist,
+      false,
+#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) InterpDist,
 #include "BuiltinFunctions.def"
   };
 
   template <typename ImplClass>
   class DeclFinder : public DeclVisitor<ImplClass, bool> {
     using base = DeclVisitor<ImplClass, bool>;
+
   protected:
     StringRef Name;
     Decl *Found = nullptr;
     bool InHshNS = false;
+
   public:
     bool VisitDecl(Decl *D) {
       if (auto *DC = dyn_cast<DeclContext>(D))
@@ -147,7 +148,8 @@ private:
       if (InHshNS)
         return true;
       bool Ret = true;
-      if (Namespace->getDeclName().isIdentifier() && Namespace->getName() == llvm::StringLiteral("hsh")) {
+      if (Namespace->getDeclName().isIdentifier() &&
+          Namespace->getName() == llvm::StringLiteral("hsh")) {
         SaveAndRestore<bool> SavedInHshNS(InHshNS, true);
         Ret = VisitDecl(Namespace);
       }
@@ -165,7 +167,8 @@ private:
   class TypeFinder : public DeclFinder<TypeFinder> {
   public:
     bool VisitTagDecl(TagDecl *Type) {
-      if (InHshNS && Type->getDeclName().isIdentifier() && Type->getName() == Name) {
+      if (InHshNS && Type->getDeclName().isIdentifier() &&
+          Type->getName() == Name) {
         Found = Type;
         return false;
       }
@@ -176,7 +179,8 @@ private:
   class FuncFinder : public DeclFinder<FuncFinder> {
   public:
     bool VisitFunctionDecl(FunctionDecl *Func) {
-      if (InHshNS && Func->getDeclName().isIdentifier() && Func->getName() == Name) {
+      if (InHshNS && Func->getDeclName().isIdentifier() &&
+          Func->getName() == Name) {
         Found = Func;
         return false;
       }
@@ -187,14 +191,17 @@ private:
   class MethodFinder : public DeclFinder<MethodFinder> {
     StringRef Record;
     SmallVector<StringRef, 8> Params;
+
   public:
     bool VisitClassTemplateDecl(ClassTemplateDecl *ClassTemplate) {
       return VisitDecl(ClassTemplate->getTemplatedDecl());
     }
 
     bool VisitCXXMethodDecl(CXXMethodDecl *Method) {
-      if (InHshNS && Method->getDeclName().isIdentifier() && Method->getName() == Name &&
-          Method->getParent()->getName() == Record && Method->getNumParams() == Params.size()) {
+      if (InHshNS && Method->getDeclName().isIdentifier() &&
+          Method->getName() == Name &&
+          Method->getParent()->getName() == Record &&
+          Method->getNumParams() == Params.size()) {
         auto It = Params.begin();
         for (ParmVarDecl *P : Method->parameters()) {
           if (P->getType().getAsString() != *It++)
@@ -210,7 +217,7 @@ private:
       Name = N;
       Record = R;
       P.split(Params, ',');
-      for (auto& ParamStr : Params)
+      for (auto &ParamStr : Params)
         ParamStr = ParamStr.trim();
       Found = nullptr;
       Visit(TU);
@@ -218,37 +225,43 @@ private:
     }
   };
 
-  void addType(SourceManager &SM, HshBuiltinType TypeKind, StringRef Name, Decl *D) {
+  void addType(SourceManager &SM, HshBuiltinType TypeKind, StringRef Name,
+               Decl *D) {
     if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
       Types[TypeKind] = T->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin type %0; is hsh.h included?");
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "type %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
   }
 
-  void addFunction(SourceManager &SM, HshBuiltinFunction FuncKind, StringRef Name, Decl *D) {
+  void addFunction(SourceManager &SM, HshBuiltinFunction FuncKind,
+                   StringRef Name, Decl *D) {
     if (auto *F = dyn_cast_or_null<FunctionDecl>(D)) {
       Functions[FuncKind] = F->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin function %0; is hsh.h included?");
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "function %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
   }
 
-  void addCXXMethod(SourceManager &SM, HshBuiltinCXXMethod MethodKind, StringRef Name, Decl *D) {
+  void addCXXMethod(SourceManager &SM, HshBuiltinCXXMethod MethodKind,
+                    StringRef Name, Decl *D) {
     if (auto *M = dyn_cast_or_null<CXXMethodDecl>(D)) {
       Methods[MethodKind] = dyn_cast<CXXMethodDecl>(M->getFirstDecl());
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "unable to locate declaration of builtin method %0; is hsh.h included?");
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "method %0; is hsh.h included?");
       auto Diag = Diags.Report(DiagID);
       Diag.AddString(Name);
     }
@@ -256,16 +269,20 @@ private:
 
 public:
   void findBuiltinDecls(TranslationUnitDecl *TU, SourceManager &SM) {
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) \
-    addType(SM, HBT_##Name, llvm::StringLiteral(#Name), TypeFinder().Find(llvm::StringLiteral(#Name), TU));
+#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
+  addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
+          TypeFinder().Find(llvm::StringLiteral(#Name), TU));
 #include "BuiltinTypes.def"
-#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist) \
-    addFunction(SM, HBF_##Name, llvm::StringLiteral(#Name), FuncFinder().Find(llvm::StringLiteral(#Name), TU));
+#define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)                  \
+  addFunction(SM, HBF_##Name, llvm::StringLiteral(#Name),                      \
+              FuncFinder().Find(llvm::StringLiteral(#Name), TU));
 #include "BuiltinFunctions.def"
-#define BUILTIN_CXX_METHOD(Name, Record, ...) \
-    addCXXMethod(SM, HBM_##Name##_##Record, llvm::StringLiteral(#Record "::" #Name "(" #__VA_ARGS__ ")"), \
-      MethodFinder().Find(llvm::StringLiteral(#Name), llvm::StringLiteral(#Record), \
-                          llvm::StringLiteral(#__VA_ARGS__), TU));
+#define BUILTIN_CXX_METHOD(Name, Record, ...)                                  \
+  addCXXMethod(SM, HBM_##Name##_##Record,                                      \
+               llvm::StringLiteral(#Record "::" #Name "(" #__VA_ARGS__ ")"),   \
+               MethodFinder().Find(llvm::StringLiteral(#Name),                 \
+                                   llvm::StringLiteral(#Record),               \
+                                   llvm::StringLiteral(#__VA_ARGS__), TU));
 #include "BuiltinCXXMethods.def"
   }
 
@@ -274,11 +291,14 @@ public:
   }
 
   HshBuiltinType identifyBuiltinType(const clang::Type *UT) const {
-    if (!UT) return HBT_None;
+    if (!UT)
+      return HBT_None;
     TagDecl *T = UT->getAsTagDecl();
-    if (!T) return HBT_None;
+    if (!T)
+      return HBT_None;
     T = T->getFirstDecl();
-    if (!T) return HBT_None;
+    if (!T)
+      return HBT_None;
     HshBuiltinType Ret = HBT_None;
     for (const auto *Tp : Types) {
       if (T == Tp)
@@ -288,9 +308,11 @@ public:
     return HBT_None;
   }
 
-  HshBuiltinFunction identifyBuiltinFunction(const clang::FunctionDecl *F) const {
+  HshBuiltinFunction
+  identifyBuiltinFunction(const clang::FunctionDecl *F) const {
     F = F->getFirstDecl();
-    if (!F) return HBF_None;
+    if (!F)
+      return HBF_None;
     HshBuiltinFunction Ret = HBF_None;
     for (const auto *Func : Functions) {
       if (F == Func)
@@ -300,9 +322,11 @@ public:
     return HBF_None;
   }
 
-  HshBuiltinCXXMethod identifyBuiltinMethod(const clang::CXXMethodDecl *M) const {
+  HshBuiltinCXXMethod
+  identifyBuiltinMethod(const clang::CXXMethodDecl *M) const {
     M = dyn_cast_or_null<CXXMethodDecl>(M->getFirstDecl());
-    if (!M) return HBM_None;
+    if (!M)
+      return HBM_None;
     if (FunctionDecl *FD = M->getInstantiatedFromMemberFunction())
       M = dyn_cast<CXXMethodDecl>(FD->getFirstDecl());
     HshBuiltinCXXMethod Ret = HBM_None;
@@ -341,92 +365,117 @@ public:
   }
 };
 
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinType Tp) { return getSpellings(Tp).GLSL; }
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinType Tp) { return getSpellings(Tp).HLSL; }
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_METAL>(HshBuiltinType Tp) { return getSpellings(Tp).Metal; }
+template <>
+constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinType Tp) {
+  return getSpellings(Tp).GLSL;
+}
+template <>
+constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinType Tp) {
+  return getSpellings(Tp).HLSL;
+}
+template <>
+constexpr StringRef HshBuiltins::getSpelling<HT_METAL>(HshBuiltinType Tp) {
+  return getSpellings(Tp).Metal;
+}
 
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinFunction Func) { return getSpellings(Func).GLSL; }
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinFunction Func) { return getSpellings(Func).HLSL; }
-template <> constexpr StringRef HshBuiltins::getSpelling<HT_METAL>(HshBuiltinFunction Func) { return getSpellings(Func).Metal; }
+template <>
+constexpr StringRef HshBuiltins::getSpelling<HT_GLSL>(HshBuiltinFunction Func) {
+  return getSpellings(Func).GLSL;
+}
+template <>
+constexpr StringRef HshBuiltins::getSpelling<HT_HLSL>(HshBuiltinFunction Func) {
+  return getSpellings(Func).HLSL;
+}
+template <>
+constexpr StringRef
+HshBuiltins::getSpelling<HT_METAL>(HshBuiltinFunction Func) {
+  return getSpellings(Func).Metal;
+}
 
-enum HshInterfaceDirection {
-  HshInput,
-  HshOutput,
-  HshInOut
-};
+enum HshInterfaceDirection { HshInput, HshOutput, HshInOut };
 
 static HshStage DetermineParmVarStage(ParmVarDecl *D) {
-#define INTERFACE_VARIABLE(Attr, Stage, Direction, Array) \
-  if (D->hasAttr<Attr>()) return Stage;
+#define INTERFACE_VARIABLE(Attr, Stage, Direction, Array)                      \
+  if (D->hasAttr<Attr>())                                                      \
+    return Stage;
 #include "ShaderInterface.def"
   return HshHostStage;
 }
 
 static HshInterfaceDirection DetermineParmVarDirection(ParmVarDecl *D) {
-#define INTERFACE_VARIABLE(Attr, Stage, Direction, Array) \
-  if (D->hasAttr<Attr>()) return Direction;
+#define INTERFACE_VARIABLE(Attr, Stage, Direction, Array)                      \
+  if (D->hasAttr<Attr>())                                                      \
+    return Direction;
 #include "ShaderInterface.def"
   return HshInput;
 }
 
 template <typename T, unsigned N>
-static DiagnosticBuilder ReportCustom(T *S, const SourceManager &SM,
-                                      const char (&FormatString)[N],
-                                      DiagnosticsEngine::Level level = DiagnosticsEngine::Error) {
-  DiagnosticsEngine &Diags = SM.getDiagnostics();
+static DiagnosticBuilder
+ReportCustom(T *S, const ASTContext &Context, const char (&FormatString)[N],
+             DiagnosticsEngine::Level level = DiagnosticsEngine::Error) {
+  DiagnosticsEngine &Diags = Context.getDiagnostics();
   unsigned DiagID = Diags.getCustomDiagID(level, FormatString);
   auto Diag = Diags.Report(S->getBeginLoc(), DiagID);
   Diag.AddSourceRange(CharSourceRange::getCharRange(S->getSourceRange()));
   return Diag;
 }
 
-static void ReportUnsupportedStmt(Stmt *S, const SourceManager &SM) {
-  auto Diag = ReportCustom(S, SM, "statements of type %0 are not supported in hsh generator lambdas");
+static void ReportUnsupportedStmt(Stmt *S, const ASTContext &Context) {
+  auto Diag = ReportCustom(
+      S, Context,
+      "statements of type %0 are not supported in hsh generator lambdas");
   Diag.AddString(S->getStmtClassName());
 }
 
-static void ReportUnsupportedFunctionCall(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "function calls are limited to hsh intrinsics");
+static void ReportUnsupportedFunctionCall(Stmt *S, const ASTContext &Context) {
+  ReportCustom(S, Context, "function calls are limited to hsh intrinsics");
 }
 
-static void ReportUnsupportedTypeReference(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "references to values are limited to hsh types");
+static void ReportUnsupportedTypeReference(Stmt *S, const ASTContext &Context) {
+  ReportCustom(S, Context, "references to values are limited to hsh types");
 }
 
-static void ReportUnsupportedTypeConstruct(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "constructors are limited to hsh types");
+static void ReportUnsupportedTypeConstruct(Stmt *S, const ASTContext &Context) {
+  ReportCustom(S, Context, "constructors are limited to hsh types");
 }
 
-static void ReportUnsupportedTypeCast(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "type casts are limited to hsh types");
+static void ReportUnsupportedTypeCast(Stmt *S, const ASTContext &Context) {
+  ReportCustom(S, Context, "type casts are limited to hsh types");
 }
 
-static void ReportBadTextureReference(Stmt *S, const SourceManager &SM) {
-  ReportCustom(S, SM, "texture samples must be performed on lambda parameters");
+static void ReportBadTextureReference(Stmt *S, const ASTContext &Context) {
+  ReportCustom(S, Context,
+               "texture samples must be performed on lambda parameters");
 }
 
-static void ReportUnattributedTexture(ParmVarDecl *PVD, const SourceManager &SM) {
-  ReportCustom(PVD, SM, "sampled textures must be attributed with [[hsh::*_texture(n)]]");
+static void ReportUnattributedTexture(ParmVarDecl *PVD,
+                                      const ASTContext &Context) {
+  ReportCustom(
+      PVD, Context,
+      "sampled textures must be attributed with [[hsh::*_texture(n)]]");
 }
 
-static void ReportNonConstexprSampler(Expr *E, const SourceManager &SM) {
-  ReportCustom(E, SM, "sampler arguments must be constexpr");
+static void ReportNonConstexprSampler(Expr *E, const ASTContext &Context) {
+  ReportCustom(E, Context, "sampler arguments must be constexpr");
 }
 
-static void ReportBadSamplerStructFormat(Expr *E, const SourceManager &SM) {
-  ReportCustom(E, SM, "sampler structure is not consistent");
+static void ReportBadSamplerStructFormat(Expr *E, const ASTContext &Context) {
+  ReportCustom(E, Context, "sampler structure is not consistent");
 }
 
-static void ReportBadVertexPositionType(ParmVarDecl *PVD, const SourceManager &SM) {
-  ReportCustom(PVD, SM, "vertex position must be a hsh::float4");
+static void ReportBadVertexPositionType(ParmVarDecl *PVD,
+                                        const ASTContext &Context) {
+  ReportCustom(PVD, Context, "vertex position must be a hsh::float4");
 }
 
-static void ReportBadColorTargetType(ParmVarDecl *PVD, const SourceManager &SM) {
-  ReportCustom(PVD, SM, "fragment color target must be a hsh::float4");
+static void ReportBadColorTargetType(ParmVarDecl *PVD,
+                                     const ASTContext &Context) {
+  ReportCustom(PVD, Context, "fragment color target must be a hsh::float4");
 }
 
 class LastAssignmentFinder : public StmtVisitor<LastAssignmentFinder, bool> {
-  const SourceManager &SM;
+  const ASTContext &Context;
   VarDecl *Var = nullptr;
   Stmt *End = nullptr;
   Stmt *Assign = nullptr;
@@ -447,10 +496,10 @@ class LastAssignmentFinder : public StmtVisitor<LastAssignmentFinder, bool> {
   }
 
 public:
-  explicit LastAssignmentFinder(const SourceManager &SM) : SM(SM) {}
+  explicit LastAssignmentFinder(const ASTContext &Context) : Context(Context) {}
 
   bool VisitStmt(Stmt *S) {
-    ReportUnsupportedStmt(S, SM);
+    ReportUnsupportedStmt(S, Context);
     return true;
   }
 
@@ -477,9 +526,7 @@ public:
     return true;
   }
 
-  bool VisitNullStmt(NullStmt *) {
-    return true;
-  }
+  static bool VisitNullStmt(NullStmt *) { return true; }
 
   bool VisitValueStmt(ValueStmt *ValueStmt) {
     return DoVisit(ValueStmt->getExprStmt());
@@ -488,7 +535,7 @@ public:
   bool VisitBinaryOperator(BinaryOperator *BinOp) {
     if (BinOp->isAssignmentOp()) {
       {
-        SaveAndRestore<Stmt*> SavedAssign(Assign, BinOp);
+        SaveAndRestore<Stmt *> SavedAssign(Assign, BinOp);
         if (!DoVisit(BinOp->getLHS()))
           return false;
       }
@@ -508,13 +555,11 @@ public:
   }
 
   bool VisitExpr(Expr *E) {
-    ReportUnsupportedStmt(E, SM);
+    ReportUnsupportedStmt(E, Context);
     return true;
   }
 
-  bool VisitBlockExpr(BlockExpr *Block) {
-    return DoVisit(Block->getBody());
-  }
+  bool VisitBlockExpr(BlockExpr *Block) { return DoVisit(Block->getBody()); }
 
   bool VisitCallExpr(CallExpr *CallExpr) {
     for (Expr *Arg : CallExpr->arguments()) {
@@ -535,7 +580,7 @@ public:
   bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *CallExpr) {
     if (CallExpr->getNumArgs() >= 1 && CallExpr->isAssignmentOp()) {
       {
-        SaveAndRestore<Stmt*> SavedAssign(Assign, CallExpr);
+        SaveAndRestore<Stmt *> SavedAssign(Assign, CallExpr);
         if (!DoVisit(CallExpr->getArg(0)))
           return false;
       }
@@ -566,15 +611,11 @@ public:
     return DoVisit(MemberExpr->getBase());
   }
 
-  bool VisitFloatingLiteral(FloatingLiteral *) {
-    return true;
-  }
+  static bool VisitFloatingLiteral(FloatingLiteral *) { return true; }
 
-  bool VisitIntegerLiteral(IntegerLiteral *) {
-    return true;
-  }
+  static bool VisitIntegerLiteral(IntegerLiteral *) { return true; }
 
-  std::tuple<Stmt*, Stmt*> Find(VarDecl *V, Stmt *Body, Stmt *E = nullptr) {
+  std::tuple<Stmt *, Stmt *> Find(VarDecl *V, Stmt *Body, Stmt *E = nullptr) {
     Var = V;
     End = E;
     DoVisit(Body);
@@ -610,17 +651,24 @@ struct SamplerConfig {
   HshSamplerWrapMode Wrap = HSW_Repeat;
   SamplerConfig() = default;
   explicit SamplerConfig(const APValue &Val) {
-    Filter = HshSamplerFilterMode(Val.getStructField(0).getInt().getSExtValue());
+    Filter =
+        HshSamplerFilterMode(Val.getStructField(0).getInt().getSExtValue());
     Wrap = HshSamplerWrapMode(Val.getStructField(1).getInt().getSExtValue());
   }
 };
 
-template <typename TexAttr>
-constexpr HshStage StageOfTextureAttr() { return HshNoStage; }
-template <> constexpr HshStage StageOfTextureAttr<HshVertexTextureAttr>() { return HshVertexStage; }
-template <> constexpr HshStage StageOfTextureAttr<HshFragmentTextureAttr>() { return HshFragmentStage; }
+template <typename TexAttr> constexpr HshStage StageOfTextureAttr() {
+  return HshNoStage;
+}
+template <> constexpr HshStage StageOfTextureAttr<HshVertexTextureAttr>() {
+  return HshVertexStage;
+}
+template <> constexpr HshStage StageOfTextureAttr<HshFragmentTextureAttr>() {
+  return HshFragmentStage;
+}
 
-class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStage> {
+class StagesBuilder
+    : public StmtVisitor<StagesBuilder, Expr *, HshStage, HshStage> {
   ASTContext &Context;
   unsigned UseStages;
 
@@ -631,41 +679,48 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
     VarDecl *Consumer = nullptr;
     HshStage SStage = HshNoStage, DStage = HshNoStage;
 
-    MemberExpr *createFieldReference(ASTContext &Context, Expr *E, VarDecl *VD, bool IgnoreExisting = false) {
+    MemberExpr *createFieldReference(ASTContext &Context, Expr *E, VarDecl *VD,
+                                     bool IgnoreExisting = false) {
       FieldDecl *Field = getFieldForExpr(Context, E, IgnoreExisting);
       if (!Field)
         return nullptr;
-      return MemberExpr::CreateImplicit(Context, DeclRefExpr::Create(Context, {}, {}, VD, false,
-                                                                     SourceLocation{}, E->getType(), VK_XValue),
-                                        false, Field, Field->getType(), VK_XValue, OK_Ordinary);
+      return MemberExpr::CreateImplicit(
+          Context,
+          DeclRefExpr::Create(Context, {}, {}, VD, false, SourceLocation{},
+                              E->getType(), VK_XValue),
+          false, Field, Field->getType(), VK_XValue, OK_Ordinary);
     }
 
   public:
-    void initializeRecord(ASTContext &Context, DeclContext *LambdaDeclContext, HshStage S, HshStage D) {
+    void initializeRecord(ASTContext &Context, DeclContext *LambdaDeclContext,
+                          HshStage S, HshStage D) {
       std::string RecordName;
-      llvm::raw_string_ostream RNS(RecordName);
+      raw_string_ostream RNS(RecordName);
       RNS << HshStageToString(S) << "_to_" << HshStageToString(D);
-      Record = CXXRecordDecl::Create(Context, TTK_Struct, LambdaDeclContext, {}, {},
-                                     &Context.Idents.get(RNS.str()));
+      Record = CXXRecordDecl::Create(Context, TTK_Struct, LambdaDeclContext, {},
+                                     {}, &Context.Idents.get(RNS.str()));
       Record->startDefinition();
 
-      CanQualType CDType = Record->getTypeForDecl()->getCanonicalTypeUnqualified();
+      CanQualType CDType =
+          Record->getTypeForDecl()->getCanonicalTypeUnqualified();
 
       {
         std::string VarName;
-        llvm::raw_string_ostream VNS(VarName);
+        raw_string_ostream VNS(VarName);
         VNS << "to_" << HshStageToString(D);
         VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
-                                      &Context.Idents.get(VNS.str()), CDType, nullptr, SC_None);
+                                      &Context.Idents.get(VNS.str()), CDType,
+                                      nullptr, SC_None);
         Producer = VD;
       }
 
       {
         std::string VarName;
-        llvm::raw_string_ostream VNS(VarName);
+        raw_string_ostream VNS(VarName);
         VNS << "from_" << HshStageToString(S);
         VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
-                                      &Context.Idents.get(VNS.str()), CDType, nullptr, SC_None);
+                                      &Context.Idents.get(VNS.str()), CDType,
+                                      nullptr, SC_None);
         Consumer = VD;
       }
 
@@ -673,7 +728,7 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
       DStage = D;
     }
 
-    static bool isSameComparisonOperand(Expr* E1, Expr* E2) {
+    static bool isSameComparisonOperand(Expr *E1, Expr *E2) {
       if (E1 == E2)
         return true;
       E1->setValueKind(VK_RValue);
@@ -681,16 +736,19 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
       return Expr::isSameComparisonOperand(E1, E2);
     }
 
-    FieldDecl *getFieldForExpr(ASTContext &Context, Expr *E, bool IgnoreExisting = false) {
+    FieldDecl *getFieldForExpr(ASTContext &Context, Expr *E,
+                               bool IgnoreExisting = false) {
       for (auto &P : Fields) {
         if (isSameComparisonOperand(P.first, E))
           return IgnoreExisting ? nullptr : P.second;
       }
       std::string FieldName;
-      llvm::raw_string_ostream FNS(FieldName);
-      FNS << '_' << HshStageToString(SStage)[0] << HshStageToString(DStage)[0] << Fields.size();
-      FieldDecl *FD = FieldDecl::Create(Context, Record, {}, {}, &Context.Idents.get(FNS.str()),
-                                        E->getType().getUnqualifiedType(), {}, {}, false, ICIS_NoInit);
+      raw_string_ostream FNS(FieldName);
+      FNS << '_' << HshStageToString(SStage)[0] << HshStageToString(DStage)[0]
+          << Fields.size();
+      FieldDecl *FD = FieldDecl::Create(
+          Context, Record, {}, {}, &Context.Idents.get(FNS.str()),
+          E->getType().getUnqualifiedType(), {}, {}, false, ICIS_NoInit);
       FD->setAccess(AS_public);
       Record->addDecl(FD);
       Fields.push_back(std::make_pair(E, FD));
@@ -710,11 +768,13 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
     CXXRecordDecl *getRecord() const { return Record; }
   };
 
-  std::array<InterfaceRecord, HshMaxStage> HostToStageRecords; /* Indexed by consumer stage */
-  std::array<InterfaceRecord, HshMaxStage> InterStageRecords; /* Indexed by consumer stage */
+  std::array<InterfaceRecord, HshMaxStage>
+      HostToStageRecords; /* Indexed by consumer stage */
+  std::array<InterfaceRecord, HshMaxStage>
+      InterStageRecords; /* Indexed by consumer stage */
   struct StageStmtList {
     SmallVector<Stmt *, 16> Stmts;
-    SmallVector<std::pair<unsigned, VarDecl*>, 16> StmtDeclRefCount;
+    SmallVector<std::pair<unsigned, VarDecl *>, 16> StmtDeclRefCount;
   };
   std::array<StageStmtList, HshMaxStage> StageStmts;
   struct SampleCall {
@@ -727,24 +787,27 @@ class StagesBuilder : public StmtVisitor<StagesBuilder, Expr*, HshStage, HshStag
   AssignmentFinderInfo AssignFindInfo;
 
   template <typename T>
-  SmallVector<Expr*, 4> DoVisitExprRange(T Range, HshStage From, HshStage To) {
-    SmallVector<Expr*, 4> Res;
+  SmallVector<Expr *, 4> DoVisitExprRange(T Range, HshStage From, HshStage To) {
+    SmallVector<Expr *, 4> Res;
     for (Expr *E : Range)
       Res.push_back(Visit(E, From, To));
     return Res;
   }
 
 public:
-  StagesBuilder(ASTContext &Context, DeclContext *LambdaDeclContext, unsigned UseStages)
-    : Context(Context), UseStages(UseStages) {
+  StagesBuilder(ASTContext &Context, DeclContext *LambdaDeclContext,
+                unsigned UseStages)
+      : Context(Context), UseStages(UseStages) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        HostToStageRecords[D].initializeRecord(Context, LambdaDeclContext, HshHostStage, HshStage(D));
+        HostToStageRecords[D].initializeRecord(Context, LambdaDeclContext,
+                                               HshHostStage, HshStage(D));
       }
     }
     for (int D = HshControlStage, S = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        InterStageRecords[D].initializeRecord(Context, LambdaDeclContext, HshStage(S), HshStage(D));
+        InterStageRecords[D].initializeRecord(Context, LambdaDeclContext,
+                                              HshStage(S), HshStage(D));
         S = D;
       }
     }
@@ -768,7 +831,8 @@ public:
     return Visit(UnOp->getSubExpr(), From, To);
   }
 
-  Expr *VisitGenericSelectionExpr(GenericSelectionExpr *GSE, HshStage From, HshStage To) {
+  Expr *VisitGenericSelectionExpr(GenericSelectionExpr *GSE, HshStage From,
+                                  HshStage To) {
     return Visit(GSE->getResultExpr(), From, To);
   }
 
@@ -780,7 +844,8 @@ public:
     return Visit(CE->getSubExpr(), From, To);
   }
 
-  Expr *VisitImplicitCastExpr(ImplicitCastExpr *ICE, HshStage From, HshStage To) {
+  Expr *VisitImplicitCastExpr(ImplicitCastExpr *ICE, HshStage From,
+                              HshStage To) {
     return Visit(ICE->getSubExpr(), From, To);
   }
 
@@ -788,11 +853,13 @@ public:
     return Visit(FE->getSubExpr(), From, To);
   }
 
-  Expr *VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE, HshStage From, HshStage To) {
+  Expr *VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE,
+                                      HshStage From, HshStage To) {
     return Visit(MTE->getSubExpr(), From, To);
   }
 
-  Expr *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP, HshStage From, HshStage To) {
+  Expr *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP,
+                                          HshStage From, HshStage To) {
     return Visit(NTTP->getReplacement(), From, To);
   }
   /* End ignores */
@@ -810,54 +877,64 @@ public:
         if (UseStages & (1u << unsigned(D))) {
           InterfaceRecord &SRecord = InterStageRecords[S];
           InterfaceRecord &DRecord = InterStageRecords[D];
-          if (MemberExpr *Producer = DRecord.createProducerFieldReference(Context, E))
+          if (MemberExpr *Producer =
+                  DRecord.createProducerFieldReference(Context, E))
             addStageStmt(
-              new(Context) BinaryOperator(Producer,
-                                          S == From ? E : SRecord.createConsumerFieldReference(Context, E),
-                                          BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {}), HshStage(S));
+                new (Context) BinaryOperator(
+                    Producer,
+                    S == From
+                        ? E
+                        : SRecord.createConsumerFieldReference(Context, E),
+                    BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {}),
+                HshStage(S));
           S = D;
         }
       }
     } else {
-      if (MemberExpr *Producer = HostToStageRecords[To].createProducerFieldReference(Context, E))
-        addStageStmt(
-          new(Context) BinaryOperator(Producer, E, BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {}), From);
+      if (MemberExpr *Producer =
+              HostToStageRecords[To].createProducerFieldReference(Context, E))
+        addStageStmt(new (Context)
+                         BinaryOperator(Producer, E, BO_Assign, E->getType(),
+                                        VK_XValue, OK_Ordinary, {}, {}),
+                     From);
     }
-    InterfaceRecord &Record = From == HshHostStage ? HostToStageRecords[To] : InterStageRecords[To];
+    InterfaceRecord &Record =
+        From == HshHostStage ? HostToStageRecords[To] : InterStageRecords[To];
     return Record.createConsumerFieldReference(Context, E);
   }
 
   /*
-   * Construction expressions are a form of component-wise type conversions in hsh.
-   * They may be lifted to the target stage.
+   * Construction expressions are a form of component-wise type conversions in
+   * hsh. They may be lifted to the target stage.
    */
-  Expr *VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr, HshStage From, HshStage To) {
+  Expr *VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr, HshStage From,
+                              HshStage To) {
     auto Arguments = DoVisitExprRange(ConstructExpr->arguments(), From, To);
-    CXXConstructExpr *NCE =
-      CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(),
-                                     ConstructExpr->getType(),
-                                     Context.getTrivialTypeSourceInfo(ConstructExpr->getType()),
-                                     Arguments, {},
-                                     ConstructExpr->hadMultipleCandidates(),
-                                     ConstructExpr->isListInitialization(),
-                                     ConstructExpr->isStdInitListInitialization(),
-                                     ConstructExpr->requiresZeroInitialization());
+    CXXConstructExpr *NCE = CXXTemporaryObjectExpr::Create(
+        Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
+        Context.getTrivialTypeSourceInfo(ConstructExpr->getType()), Arguments,
+        {}, ConstructExpr->hadMultipleCandidates(),
+        ConstructExpr->isListInitialization(),
+        ConstructExpr->isStdInitListInitialization(),
+        ConstructExpr->requiresZeroInitialization());
     return NCE;
   }
 
   /*
-   * DeclRef expressions may connect directly to a construction expression and should
-   * therefore be lifted to the target stage.
+   * DeclRef expressions may connect directly to a construction expression and
+   * should therefore be lifted to the target stage.
    */
   Expr *VisitDeclRefExpr(DeclRefExpr *DeclRef, HshStage From, HshStage To) {
     if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
         return VisitExpr(DeclRef, From, To);
-      auto [Assign, NextCompoundChild] =
-      LastAssignmentFinder(Context.getSourceManager()).Find(VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
+      auto [Assign, NextCompoundChild] = LastAssignmentFinder(Context).Find(
+          VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
       if (Assign) {
-        SaveAndRestore<Stmt*> SavedCompoundChild(AssignFindInfo.LastCompoundChild, NextCompoundChild);
-        SaveAndRestore<VarDecl*> SavedSelectedVarDecl(AssignFindInfo.SelectedVarDecl, VD);
+        SaveAndRestore<Stmt *> SavedCompoundChild(
+            AssignFindInfo.LastCompoundChild, NextCompoundChild);
+        SaveAndRestore<VarDecl *> SavedSelectedVarDecl(
+            AssignFindInfo.SelectedVarDecl, VD);
         return Visit(Assign, From, To);
       }
     }
@@ -869,14 +946,16 @@ public:
     for (Decl *D : DeclStmt->getDeclGroup()) {
       if (auto *VD = dyn_cast<VarDecl>(D)) {
         if (VD == AssignFindInfo.SelectedVarDecl) {
-          auto *NVD = VarDecl::Create(Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
-                                      VD->getType().getUnqualifiedType(), nullptr, SC_None);
+          auto *NVD = VarDecl::Create(
+              Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
+              VD->getType().getUnqualifiedType(), nullptr, SC_None);
           auto *NDS = new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {});
           if (Expr *Init = VD->getInit())
             NVD->setInit(Visit(Init, From, To));
           liftDeclStmt(NDS, From, To, VD);
-          return DeclRefExpr::Create(Context, {}, {}, NVD, true, SourceLocation{},
-                                     VD->getType().getNonReferenceType(), VK_RValue);
+          return DeclRefExpr::Create(
+              Context, {}, {}, NVD, true, SourceLocation{},
+              VD->getType().getNonReferenceType(), VK_RValue);
         }
       }
     }
@@ -888,7 +967,8 @@ public:
    * Certain trivial expressions like type conversions may be lifted into
    * the target stage rather than creating redundant inter-stage data.
    */
-  Expr *createInterStageReferenceExpr(Expr *E, HshStage From, HshStage To, const AssignmentFinderInfo& AFI) {
+  Expr *createInterStageReferenceExpr(Expr *E, HshStage From, HshStage To,
+                                      const AssignmentFinderInfo &AFI) {
     AssignFindInfo = AFI;
     return Visit(E, From, To);
   }
@@ -896,7 +976,9 @@ public:
   void addStageStmt(Stmt *S, HshStage Stage, VarDecl *OrigDecl = nullptr) {
     if (auto *DS = dyn_cast<DeclStmt>(S)) {
       auto RefCountIt = StageStmts[Stage].StmtDeclRefCount.begin();
-      for (auto I = StageStmts[Stage].Stmts.begin(), E = StageStmts[Stage].Stmts.end(); I != E; ++I, ++RefCountIt) {
+      for (auto I = StageStmts[Stage].Stmts.begin(),
+                E = StageStmts[Stage].Stmts.end();
+           I != E; ++I, ++RefCountIt) {
         if (isa<DeclStmt>(*I)) {
           if (RefCountIt->second == OrigDecl) {
             ++RefCountIt->first;
@@ -913,10 +995,13 @@ public:
     StageStmts[Stage].StmtDeclRefCount.push_back({1, OrigDecl});
   }
 
-  void liftDeclStmt(DeclStmt *DS, HshStage From, HshStage To, VarDecl *OrigDecl) {
+  void liftDeclStmt(DeclStmt *DS, HshStage From, HshStage To,
+                    VarDecl *OrigDecl) {
     addStageStmt(DS, To, OrigDecl);
     auto RefCountIt = StageStmts[From].StmtDeclRefCount.begin();
-    for (auto I = StageStmts[From].Stmts.begin(), E = StageStmts[From].Stmts.end(); I != E; ++I, ++RefCountIt) {
+    for (auto I = StageStmts[From].Stmts.begin(),
+              E = StageStmts[From].Stmts.end();
+         I != E; ++I, ++RefCountIt) {
       if (isa<DeclStmt>(*I)) {
         if (RefCountIt->second == OrigDecl) {
           if (--RefCountIt->first == 0) {
@@ -929,21 +1014,21 @@ public:
     }
   }
 
-  template<typename TexAttr>
+  template <typename TexAttr>
   std::pair<HshStage, APSInt> getTextureIndex(TexAttr *A) {
     Expr::EvalResult Res;
     A->getIndex()->EvaluateAsInt(Res, Context);
     return {StageOfTextureAttr<TexAttr>(), Res.Val.getInt()};
   }
 
-  template<typename TexAttr>
+  template <typename TexAttr>
   std::pair<HshStage, APSInt> getTextureIndex(ParmVarDecl *PVD) {
     if (auto *A = PVD->getAttr<TexAttr>())
       return getTextureIndex(A);
     return {HshNoStage, APSInt{}};
   }
 
-  template<typename TexAttrA, typename TexAttrB, typename... Rest>
+  template <typename TexAttrA, typename TexAttrB, typename... Rest>
   std::pair<HshStage, APSInt> getTextureIndex(ParmVarDecl *PVD) {
     if (auto *A = PVD->getAttr<TexAttrA>())
       return getTextureIndex(A);
@@ -955,24 +1040,26 @@ public:
   }
 
   void registerSampleCall(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C) {
-    if (auto *DR = dyn_cast<DeclRefExpr>(C->getImplicitObjectArgument()->IgnoreParenImpCasts())) {
+    if (auto *DR = dyn_cast<DeclRefExpr>(
+            C->getImplicitObjectArgument()->IgnoreParenImpCasts())) {
       if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
         auto [TexStage, TexIdx] = getTextureIndex(PVD);
-        auto& StageCalls = SampleCalls[TexStage];
-        for (const auto& Call : StageCalls)
+        auto &StageCalls = SampleCalls[TexStage];
+        for (const auto &Call : StageCalls)
           if (Call.Expr == C)
             return;
         APValue Res;
         Expr *SamplerArg = C->getArg(1);
         if (!SamplerArg->isCXX11ConstantExpr(Context, &Res)) {
-          ReportNonConstexprSampler(SamplerArg, Context.getSourceManager());
+          ReportNonConstexprSampler(SamplerArg, Context);
           return;
         }
         if (!SamplerConfig::ValidateSamplerStruct(Res)) {
-          ReportBadSamplerStructFormat(SamplerArg, Context.getSourceManager());
+          ReportBadSamplerStructFormat(SamplerArg, Context);
           return;
         }
-        StageCalls.push_back({C, unsigned(TexIdx.getZExtValue()), SamplerConfig{Res}});
+        StageCalls.push_back(
+            {C, unsigned(TexIdx.getZExtValue()), SamplerConfig{Res}});
       }
     }
   }
@@ -1007,14 +1094,15 @@ public:
     for (int S = HshHostStage; S < HshMaxStage; ++S) {
       if (UseStages & (1u << unsigned(S))) {
         llvm::outs() << HshStageToString(HshStage(S)) << " statements:\n";
-        auto *Stmts = CompoundStmt::Create(Context, StageStmts[S].Stmts, {}, {});
+        auto *Stmts =
+            CompoundStmt::Create(Context, StageStmts[S].Stmts, {}, {});
         Stmts->printPretty(llvm::outs(), nullptr, Policy);
       }
     }
   }
 };
 
-using StmtResult = std::pair<Stmt*, HshStage>;
+using StmtResult = std::pair<Stmt *, HshStage>;
 class ValueTracer : public StmtVisitor<ValueTracer, StmtResult> {
   ASTContext &Context;
   const HshBuiltins &Builtins;
@@ -1031,9 +1119,9 @@ class ValueTracer : public StmtVisitor<ValueTracer, StmtResult> {
 
   struct VisitExprRangeResult {
     HshStage Stage = HshNoStage;
-    SmallVector<Expr*, 4> Exprs;
+    SmallVector<Expr *, 4> Exprs;
     SmallVector<HshStage, 4> ExprStages;
-    operator ArrayRef<Expr*>() { return Exprs; }
+    operator ArrayRef<Expr *>() { return Exprs; }
   };
 
   template <typename T>
@@ -1050,17 +1138,19 @@ class ValueTracer : public StmtVisitor<ValueTracer, StmtResult> {
     return {Res};
   }
 
-  void DoPromoteExprRange(VisitExprRangeResult& Res) {
+  void DoPromoteExprRange(VisitExprRangeResult &Res) {
     auto ExprStageI = Res.ExprStages.begin();
     for (Expr *&E : Res.Exprs) {
-      E = Builder.createInterStageReferenceExpr(E, *ExprStageI, Res.Stage, AssignFindInfo);
+      E = Builder.createInterStageReferenceExpr(E, *ExprStageI, Res.Stage,
+                                                AssignFindInfo);
       ++ExprStageI;
     }
   }
 
 public:
-  explicit ValueTracer(ASTContext &Context, const HshBuiltins &Builtins, StagesBuilder &Promotions)
-  : Context(Context), Builtins(Builtins), Builder(Promotions) {}
+  explicit ValueTracer(ASTContext &Context, const HshBuiltins &Builtins,
+                       StagesBuilder &Promotions)
+      : Context(Context), Builtins(Builtins), Builder(Promotions) {}
 
   /* Begin ignores */
   StmtResult VisitBlockExpr(BlockExpr *Block) {
@@ -1091,21 +1181,20 @@ public:
     return Visit(ICE->getSubExpr());
   }
 
-  StmtResult VisitFullExpr(FullExpr *FE) {
-    return Visit(FE->getSubExpr());
-  }
+  StmtResult VisitFullExpr(FullExpr *FE) { return Visit(FE->getSubExpr()); }
 
   StmtResult VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *MTE) {
     return Visit(MTE->getSubExpr());
   }
 
-  StmtResult VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP) {
+  StmtResult
+  VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *NTTP) {
     return Visit(NTTP->getReplacement());
   }
   /* End ignores */
 
   StmtResult VisitStmt(Stmt *S) {
-    ReportUnsupportedStmt(S, Context.getSourceManager());
+    ReportUnsupportedStmt(S, Context);
     return ErrorResult;
   }
 
@@ -1113,8 +1202,9 @@ public:
     for (Decl *D : DeclStmt->getDeclGroup()) {
       if (auto *VD = dyn_cast<VarDecl>(D)) {
         if (VD == AssignFindInfo.SelectedVarDecl) {
-          auto *NVD = VarDecl::Create(Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
-                                      VD->getType().getUnqualifiedType(), nullptr, SC_None);
+          auto *NVD = VarDecl::Create(
+              Context, VD->getDeclContext(), {}, {}, VD->getIdentifier(),
+              VD->getType().getUnqualifiedType(), nullptr, SC_None);
           HshStage Stage = HshNoStage;
           if (Expr *Init = VD->getInit()) {
             auto [InitStmt, InitStage] = Visit(Init);
@@ -1123,14 +1213,15 @@ public:
             NVD->setInit(cast<Expr>(InitStmt));
             Stage = InitStage;
           }
-          return {new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {}), Stage};
+          return {new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {}),
+                  Stage};
         }
       }
     }
     return ErrorResult;
   }
 
-  StmtResult VisitNullStmt(NullStmt *NS) { return {NS, HshNoStage}; }
+  static StmtResult VisitNullStmt(NullStmt *NS) { return {NS, HshNoStage}; }
 
   StmtResult VisitBinaryOperator(BinaryOperator *BinOp) {
     auto [LStmt, LStage] = Visit(BinOp->getLHS());
@@ -1164,21 +1255,25 @@ public:
       }
     }
 
-    LStmt = Builder.createInterStageReferenceExpr(cast<Expr>(LStmt), LStage, Stage, AssignFindInfo);
-    RStmt = Builder.createInterStageReferenceExpr(cast<Expr>(RStmt), RStage, Stage, AssignFindInfo);
-    auto *NewBinOp = new (Context) BinaryOperator(cast<Expr>(LStmt), cast<Expr>(RStmt), BinOp->getOpcode(),
-                                                  BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
+    LStmt = Builder.createInterStageReferenceExpr(cast<Expr>(LStmt), LStage,
+                                                  Stage, AssignFindInfo);
+    RStmt = Builder.createInterStageReferenceExpr(cast<Expr>(RStmt), RStage,
+                                                  Stage, AssignFindInfo);
+    auto *NewBinOp = new (Context)
+        BinaryOperator(cast<Expr>(LStmt), cast<Expr>(RStmt), BinOp->getOpcode(),
+                       BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
 
     return {NewBinOp, Stage};
   }
 
   StmtResult VisitExpr(Expr *E) {
-    ReportUnsupportedStmt(E, Context.getSourceManager());
+    ReportUnsupportedStmt(E, Context);
     return ErrorResult;
   }
 
   StmtResult VisitCallExpr(CallExpr *CallExpr) {
-    if (auto *DeclRef = dyn_cast<DeclRefExpr>(CallExpr->getCallee()->IgnoreParenImpCasts())) {
+    if (auto *DeclRef = dyn_cast<DeclRefExpr>(
+            CallExpr->getCallee()->IgnoreParenImpCasts())) {
       if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
         HshBuiltinFunction Func = Builtins.identifyBuiltinFunction(FD);
         if (Func != HBF_None) {
@@ -1187,19 +1282,24 @@ public:
             return ErrorResult;
 
           if (CallExpr->getNumArgs() == 2) {
-            const bool LHSInterpolated = GetInterpolated(Arguments->ExprStages[0]);
-            const bool RHSInterpolated = GetInterpolated(Arguments->ExprStages[1]);
-            if ((LHSInterpolated || RHSInterpolated) && !HshBuiltins::isInterpolationDistributed(Func))
+            const bool LHSInterpolated =
+                GetInterpolated(Arguments->ExprStages[0]);
+            const bool RHSInterpolated =
+                GetInterpolated(Arguments->ExprStages[1]);
+            if ((LHSInterpolated || RHSInterpolated) &&
+                !HshBuiltins::isInterpolationDistributed(Func))
               Arguments->Stage = Target;
           }
 
           DoPromoteExprRange(*Arguments);
-          auto* NCE = CallExpr::Create(Context, CallExpr->getCallee(), *Arguments, CallExpr->getType(), VK_XValue, {});
+          auto *NCE =
+              CallExpr::Create(Context, CallExpr->getCallee(), *Arguments,
+                               CallExpr->getType(), VK_XValue, {});
           return {NCE, Arguments->Stage};
         }
       }
     }
-    ReportUnsupportedFunctionCall(CallExpr, Context.getSourceManager());
+    ReportUnsupportedFunctionCall(CallExpr, Context);
     return ErrorResult;
   }
 
@@ -1207,41 +1307,44 @@ public:
     CXXMethodDecl *MD = CallExpr->getMethodDecl();
     HshBuiltinCXXMethod Method = Builtins.identifyBuiltinMethod(MD);
     switch (Method) {
-      case HBM_sample_texture2d: {
-        HshStage Stage = HshNoStage;
-        ParmVarDecl *PVD = nullptr;
-        if (auto *TexRef = dyn_cast<DeclRefExpr>(CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts()))
-          PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
-        if (PVD) {
-          if (PVD->hasAttr<HshVertexTextureAttr>())
-            Stage = HshVertexStage;
-          else if (PVD->hasAttr<HshFragmentTextureAttr>())
-            Stage = HshFragmentStage;
-          else
-            ReportUnattributedTexture(PVD, Context.getSourceManager());
-        } else {
-          ReportBadTextureReference(CallExpr, Context.getSourceManager());
-        }
-        auto [UVStmt, UVStage] = Visit(CallExpr->getArg(0));
-        if (!UVStmt)
-          return ErrorResult;
-        Builder.registerSampleCall(Method, CallExpr);
-        UVStmt = Builder.createInterStageReferenceExpr(cast<Expr>(UVStmt), UVStage, Stage, AssignFindInfo);
-        std::array<Expr*, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
-        auto *NMCE = CXXMemberCallExpr::Create(Context, CallExpr->getCallee(), NewArgs,
-                                               CallExpr->getType(), VK_XValue, {});
-        return {NMCE, Stage};
+    case HBM_sample_texture2d: {
+      HshStage Stage = HshNoStage;
+      ParmVarDecl *PVD = nullptr;
+      if (auto *TexRef = dyn_cast<DeclRefExpr>(
+              CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts()))
+        PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
+      if (PVD) {
+        if (PVD->hasAttr<HshVertexTextureAttr>())
+          Stage = HshVertexStage;
+        else if (PVD->hasAttr<HshFragmentTextureAttr>())
+          Stage = HshFragmentStage;
+        else
+          ReportUnattributedTexture(PVD, Context);
+      } else {
+        ReportBadTextureReference(CallExpr, Context);
       }
-      default:
-        ReportUnsupportedFunctionCall(CallExpr, Context.getSourceManager());
-        break;
+      auto [UVStmt, UVStage] = Visit(CallExpr->getArg(0));
+      if (!UVStmt)
+        return ErrorResult;
+      Builder.registerSampleCall(Method, CallExpr);
+      UVStmt = Builder.createInterStageReferenceExpr(
+          cast<Expr>(UVStmt), UVStage, Stage, AssignFindInfo);
+      std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
+      auto *NMCE =
+          CXXMemberCallExpr::Create(Context, CallExpr->getCallee(), NewArgs,
+                                    CallExpr->getType(), VK_XValue, {});
+      return {NMCE, Stage};
+    }
+    default:
+      ReportUnsupportedFunctionCall(CallExpr, Context);
+      break;
     }
     return ErrorResult;
   }
 
   StmtResult VisitCastExpr(CastExpr *CastExpr) {
     if (Builtins.identifyBuiltinType(CastExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeCast(CastExpr, Context.getSourceManager());
+      ReportUnsupportedTypeCast(CastExpr, Context);
       return ErrorResult;
     }
     return Visit(CastExpr->getSubExpr());
@@ -1249,23 +1352,22 @@ public:
 
   StmtResult VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr) {
     if (Builtins.identifyBuiltinType(ConstructExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeConstruct(ConstructExpr, Context.getSourceManager());
+      ReportUnsupportedTypeConstruct(ConstructExpr, Context);
       return ErrorResult;
     }
 
-    auto Arguments = DoVisitExprRange(ConstructExpr->arguments(), ConstructExpr);
+    auto Arguments =
+        DoVisitExprRange(ConstructExpr->arguments(), ConstructExpr);
     if (!Arguments)
       return ErrorResult;
     DoPromoteExprRange(*Arguments);
-    CXXConstructExpr *NCE =
-      CXXTemporaryObjectExpr::Create(Context, ConstructExpr->getConstructor(),
-                                     ConstructExpr->getType(),
-                                     Context.getTrivialTypeSourceInfo(ConstructExpr->getType()),
-                                     *Arguments, {},
-                                     ConstructExpr->hadMultipleCandidates(),
-                                     ConstructExpr->isListInitialization(),
-                                     ConstructExpr->isStdInitListInitialization(),
-                                     ConstructExpr->requiresZeroInitialization());
+    CXXConstructExpr *NCE = CXXTemporaryObjectExpr::Create(
+        Context, ConstructExpr->getConstructor(), ConstructExpr->getType(),
+        Context.getTrivialTypeSourceInfo(ConstructExpr->getType()), *Arguments,
+        {}, ConstructExpr->hadMultipleCandidates(),
+        ConstructExpr->isListInitialization(),
+        ConstructExpr->isStdInitListInitialization(),
+        ConstructExpr->requiresZeroInitialization());
     return {NCE, Arguments->Stage};
   }
 
@@ -1300,25 +1402,28 @@ public:
     }
 
     DoPromoteExprRange(*Arguments);
-    auto *NCE = CXXOperatorCallExpr::Create(Context, CallExpr->getOperator(), CallExpr->getCallee(), *Arguments,
-                                            CallExpr->getType(), VK_XValue, {}, {});
+    auto *NCE = CXXOperatorCallExpr::Create(
+        Context, CallExpr->getOperator(), CallExpr->getCallee(), *Arguments,
+        CallExpr->getType(), VK_XValue, {}, {});
     return {NCE, Arguments->Stage};
   }
 
   StmtResult VisitDeclRefExpr(DeclRefExpr *DeclRef) {
     if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
-      if (!InMemberExpr && Builtins.identifyBuiltinType(VD->getType()) == HBT_None) {
-        ReportUnsupportedTypeReference(DeclRef, Context.getSourceManager());
+      if (!InMemberExpr &&
+          Builtins.identifyBuiltinType(VD->getType()) == HBT_None) {
+        ReportUnsupportedTypeReference(DeclRef, Context);
         return ErrorResult;
       }
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
         return {DeclRef, DetermineParmVarStage(PVD)};
-      auto [Assign, NextCompoundChild] =
-        LastAssignmentFinder(Context.getSourceManager()).Find(VD, AssignFindInfo.Body,
-                                                              AssignFindInfo.LastCompoundChild);
+      auto [Assign, NextCompoundChild] = LastAssignmentFinder(Context).Find(
+          VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
       if (Assign) {
-        SaveAndRestore<Stmt*> SavedCompoundChild(AssignFindInfo.LastCompoundChild, NextCompoundChild);
-        SaveAndRestore<VarDecl*> SavedSelectedVarDecl(AssignFindInfo.SelectedVarDecl, VD);
+        SaveAndRestore<Stmt *> SavedCompoundChild(
+            AssignFindInfo.LastCompoundChild, NextCompoundChild);
+        SaveAndRestore<VarDecl *> SavedSelectedVarDecl(
+            AssignFindInfo.SelectedVarDecl, VD);
         auto [AssignStmt, AssignStage] = Visit(Assign);
         if (!AssignStmt)
           return ErrorResult;
@@ -1338,20 +1443,26 @@ public:
   }
 
   StmtResult VisitMemberExpr(MemberExpr *MemberExpr) {
-    if (!InMemberExpr && Builtins.identifyBuiltinType(MemberExpr->getType()) == HBT_None) {
-      ReportUnsupportedTypeReference(MemberExpr, Context.getSourceManager());
+    if (!InMemberExpr &&
+        Builtins.identifyBuiltinType(MemberExpr->getType()) == HBT_None) {
+      ReportUnsupportedTypeReference(MemberExpr, Context);
       return ErrorResult;
     }
     SaveAndRestore<bool> SavedInMemberExpr(InMemberExpr, true);
     auto [BaseStmt, BaseStage] = Visit(MemberExpr->getBase());
-    auto *NME = MemberExpr::CreateImplicit(Context, cast<Expr>(BaseStmt), false, MemberExpr->getMemberDecl(),
-                                           MemberExpr->getType(), VK_XValue, OK_Ordinary);
+    auto *NME = MemberExpr::CreateImplicit(
+        Context, cast<Expr>(BaseStmt), false, MemberExpr->getMemberDecl(),
+        MemberExpr->getType(), VK_XValue, OK_Ordinary);
     return {NME, BaseStage};
   }
 
-  StmtResult VisitFloatingLiteral(FloatingLiteral *FL) { return {FL, HshNoStage}; }
+  static StmtResult VisitFloatingLiteral(FloatingLiteral *FL) {
+    return {FL, HshNoStage};
+  }
 
-  StmtResult VisitIntegerLiteral(IntegerLiteral *IL) { return {IL, HshNoStage}; }
+  static StmtResult VisitIntegerLiteral(IntegerLiteral *IL) {
+    return {IL, HshNoStage};
+  }
 
   void Trace(Stmt *Assign, Stmt *B, Stmt *LCC, HshStage T) {
     AssignFindInfo.Body = B;
@@ -1360,7 +1471,8 @@ public:
     auto [AssignStmt, AssignStage] = Visit(Assign);
     if (!AssignStage)
       return;
-    AssignStmt = Builder.createInterStageReferenceExpr(cast<Expr>(AssignStmt), AssignStage, T, AssignFindInfo);
+    AssignStmt = Builder.createInterStageReferenceExpr(
+        cast<Expr>(AssignStmt), AssignStage, T, AssignFindInfo);
     Builder.addStageStmt(AssignStmt, T);
   }
 };
@@ -1372,9 +1484,9 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
 
 template <typename ImplClass>
 struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
-  HshBuiltins& Builtins;
+  HshBuiltins &Builtins;
   explicit ShaderPrintingPolicy(HshBuiltins &Builtins)
-  : ShaderPrintingPolicyBase(LangOptions()), Builtins(Builtins) {
+      : ShaderPrintingPolicyBase(LangOptions()), Builtins(Builtins) {
     Callbacks = this;
     IncludeTagDefinition = false;
     SuppressTagKeyword = true;
@@ -1387,32 +1499,39 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
   StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
     auto HBT = Builtins.identifyBuiltinType(D->getTypeForDecl());
-    if (HBT == HBT_None) return {};
+    if (HBT == HBT_None)
+      return {};
     return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBT);
   }
 
   StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const override {
     if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
       auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
-      if (HBM == HBM_None) return {};
+      if (HBM == HBM_None)
+        return {};
       return ImplClass::identifierOfCXXMethod(HBM, MemberCall);
     }
-    if (auto *DeclRef = dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
+    if (auto *DeclRef =
+            dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
       if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
         auto HBF = Builtins.identifyBuiltinFunction(FD);
-        if (HBF == HBF_None) return {};
+        if (HBF == HBF_None)
+          return {};
         return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBF);
       }
     }
     return {};
   }
 
-  bool overrideCallArguments(CallExpr *C,
-    const std::function<void(StringRef)> &StringArg, const std::function<void(Expr*)> &ExprArg) const override {
+  bool overrideCallArguments(
+      CallExpr *C, const std::function<void(StringRef)> &StringArg,
+      const std::function<void(Expr *)> &ExprArg) const override {
     if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
       auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
-      if (HBM == HBM_None) return {};
-      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg, ExprArg);
+      if (HBM == HBM_None)
+        return {};
+      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg,
+                                                   ExprArg);
     }
     return false;
   }
@@ -1420,7 +1539,8 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const override {
     if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
       if (PVD->hasAttr<HshPositionAttr>())
-        return static_cast<const ImplClass&>(*this).identifierOfVertexPosition();
+        return static_cast<const ImplClass &>(*this)
+            .identifierOfVertexPosition();
     }
     return {};
   }
@@ -1428,70 +1548,103 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
 struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
   static constexpr HshTarget SourceTarget = HT_GLSL;
-  static constexpr StringRef identifierOfVertexPosition() { return llvm::StringLiteral("gl_Position"); }
+  static constexpr StringRef identifierOfVertexPosition() {
+    return llvm::StringLiteral("gl_Position");
+  }
 
-  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C) {
+  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
+                                                   CXXMemberCallExpr *C) {
     switch (HBM) {
-      case HBM_sample_texture2d:
-        return llvm::StringLiteral("texture");
-      default:
-        return {};
+    case HBM_sample_texture2d:
+      return llvm::StringLiteral("texture");
+    default:
+      return {};
     }
   }
 
-  static constexpr bool overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
-    const std::function<void(StringRef)> &StringArg, const std::function<void(Expr*)> &ExprArg) {
+  static constexpr bool
+  overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
+                             const std::function<void(StringRef)> &StringArg,
+                             const std::function<void(Expr *)> &ExprArg) {
     switch (HBM) {
-      case HBM_sample_texture2d: {
-        ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
-        ExprArg(C->getArg(0));
-        return true;
-      }
-      default:
-        return false;
+    case HBM_sample_texture2d: {
+      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      ExprArg(C->getArg(0));
+      return true;
+    }
+    default:
+      return false;
     }
   }
 
   using ShaderPrintingPolicy<GLSLPrintingPolicy>::ShaderPrintingPolicy;
 };
 
-static std::unique_ptr<ShaderPrintingPolicyBase> MakePrintingPolicy(HshTarget Target, HshBuiltins &Builtins) {
+static std::unique_ptr<ShaderPrintingPolicyBase>
+MakePrintingPolicy(HshTarget Target, HshBuiltins &Builtins) {
   switch (Target) {
-    case HT_GLSL:
-    case HT_HLSL:
-    case HT_HLSL_BIN:
-    case HT_METAL:
-    case HT_METAL_BIN_MAC:
-    case HT_METAL_BIN_IOS:
-    case HT_METAL_BIN_TVOS:
-    case HT_SPIRV:
-    case HT_DXIL:
-      return std::make_unique<GLSLPrintingPolicy>(Builtins);
+  case HT_GLSL:
+  case HT_HLSL:
+  case HT_HLSL_BIN:
+  case HT_METAL:
+  case HT_METAL_BIN_MAC:
+  case HT_METAL_BIN_IOS:
+  case HT_METAL_BIN_TVOS:
+  case HT_SPIRV:
+  case HT_DXIL:
+    return std::make_unique<GLSLPrintingPolicy>(Builtins);
   }
 }
 
 static const std::regex BadCharReg(R"([^_0-9a-zA-Z])");
-static std::string SanitizedName(const char* Name) {
+static std::string SanitizedName(const char *Name) {
   std::string TmpName = std::regex_replace(Name, BadCharReg, "_");
   std::string SanitizedName;
-  llvm::raw_string_ostream OS(SanitizedName);
+  raw_string_ostream OS(SanitizedName);
   if (!TmpName.empty() && TmpName[0] >= '0' && TmpName[0] <= '9')
     OS << '_';
   OS << TmpName;
   return OS.str();
 }
 
-static std::string SanitizedNameOfLocation(SourceLocation Loc, const SourceManager& SM) {
+static std::string SanitizedNameOfLocation(SourceLocation Loc,
+                                           const SourceManager &SM) {
   if (Loc.isFileID()) {
     PresumedLoc PLoc = SM.getPresumedLoc(Loc);
     std::string Ret = SanitizedName(PLoc.getFilename());
-    llvm::raw_string_ostream OS(Ret);
+    raw_string_ostream OS(Ret);
     OS << Ret << "_L" << PLoc.getLine();
     return OS.str();
   } else {
     return "<<<BAD LOCATION>>>"s;
   }
 }
+
+class LocationNamespaceSearch
+    : public RecursiveASTVisitor<LocationNamespaceSearch> {
+  ASTContext &Context;
+  SourceLocation L;
+  NamespaceDecl *InNS = nullptr;
+
+public:
+  explicit LocationNamespaceSearch(ASTContext &Context) : Context(Context) {}
+
+  bool VisitNamespaceDecl(NamespaceDecl *NS) {
+    auto Range = NS->getSourceRange();
+    if (Range.getBegin() < L && L < Range.getEnd()) {
+      InNS = NS;
+      return false;
+    }
+    return true;
+  }
+
+  NamespaceDecl *findNamespace(SourceLocation Location) {
+    L = Location;
+    InNS = nullptr;
+    TraverseAST(Context);
+    return InNS;
+  }
+};
 
 class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   HshBuiltins Builtins;
@@ -1500,16 +1653,18 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
   std::unique_ptr<raw_pwrite_stream> Out;
-  std::map<SourceLocation, std::string> SeenIncludes;
+  std::map<FileID, std::map<SourceLocation, std::string>> SeenIncludes;
+  std::map<FileID, std::map<SourceLocation, std::string>> SeenHeadIncludes;
 
 public:
   explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
-  : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()),
-    Targets(Targets), Out(CI.createDefaultOutputFile(false)) {}
+      : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()),
+        Targets(Targets), Out(CI.createDefaultOutputFile(false)) {}
 
   void run(const MatchFinder::MatchResult &Result) override {
-    if (auto* Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
-      DeclContext *LambdaDeclContext = Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
+    if (auto *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
+      DeclContext *LambdaDeclContext =
+          Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
 
       auto IncludePath = getIncludePathBeforeLambda(Lambda->getBeginLoc());
       auto IOut = CI.createOutputFile(IncludePath, false, true, "", "", true);
@@ -1529,12 +1684,12 @@ public:
         if (DetermineParmVarDirection(Param) != HshInput) {
           if (Param->hasAttr<HshPositionAttr>()) {
             if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
-              ReportBadVertexPositionType(Param, Context.getSourceManager());
+              ReportBadVertexPositionType(Param, Context);
               return;
             }
           } else if (Param->hasAttr<HshColorTargetAttr>()) {
             if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
-              ReportBadColorTargetType(Param, Context.getSourceManager());
+              ReportBadColorTargetType(Param, Context);
               return;
             }
           }
@@ -1546,13 +1701,16 @@ public:
 
       for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
-          if (DetermineParmVarDirection(Param) == HshInput || DetermineParmVarStage(Param) != HshStage(i))
+          if (DetermineParmVarDirection(Param) == HshInput ||
+              DetermineParmVarStage(Param) != HshStage(i))
             continue;
-          auto [Assign, LastCompoundChild] = LastAssignmentFinder(Context.getSourceManager()).Find(Param, Body);
+          auto [Assign, LastCompoundChild] =
+              LastAssignmentFinder(Context).Find(Param, Body);
           if (Context.getDiagnostics().hasErrorOccurred())
             return;
           if (Assign)
-            ValueTracer(Context, Builtins, Builder).Trace(Assign, Body, LastCompoundChild, HshStage(i));
+            ValueTracer(Context, Builtins, Builder)
+                .Trace(Assign, Body, LastCompoundChild, HshStage(i));
         }
       }
 
@@ -1562,7 +1720,7 @@ public:
         Builder.printResults(*Policy);
       }
 
-      std::array<CompoundStmt*, HshMaxStage> StageBodies{};
+      std::array<CompoundStmt *, HshMaxStage> StageBodies{};
       for (int i = HshHostStage; i < HshMaxStage; ++i) {
 
 #if 0
@@ -1636,17 +1794,34 @@ public:
 #endif
       }
 
-
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Body);
     }
   }
 
-  void HandleTranslationUnit(ASTContext& Context) override {
-    if (Context.getDiagnostics().hasErrorOccurred())
+  void HandleTranslationUnit(ASTContext &Context) override {
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    if (Diags.hasErrorOccurred())
       return;
 
-    Builtins.findBuiltinDecls(Context.getTranslationUnitDecl(), Context.getSourceManager());
+    for (const auto &HeadIncludeFile : SeenHeadIncludes) {
+      for (const auto &HeadInclude : HeadIncludeFile.second) {
+        if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
+                HeadInclude.first)) {
+          unsigned DiagID = Diags.getCustomDiagID(
+              DiagnosticsEngine::Error,
+              ".hshhead include in must appear in global scope");
+          Diags.Report(HeadInclude.first, DiagID);
+          unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                                   "included in namespace");
+          Diags.Report(NS->getLocation(), DiagID2);
+          return;
+        }
+      }
+    }
+
+    Builtins.findBuiltinDecls(Context.getTranslationUnitDecl(),
+                              Context.getSourceManager());
     if (Context.getDiagnostics().hasErrorOccurred()) {
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Context.getTranslationUnitDecl());
@@ -1655,16 +1830,18 @@ public:
 
     MatchFinder Finder;
     Finder.addMatcher(
-      attributedStmt(
-        allOf(
-          hasStmtAttr(attr::HshGeneratorLambda),
-          hasDescendant(lambdaExpr(stmt().bind("id"))))), this);
+        attributedStmt(allOf(hasStmtAttr(attr::HshGeneratorLambda),
+                             hasDescendant(lambdaExpr(stmt().bind("id"))))),
+        this);
     Finder.matchAST(Context);
   }
 
   StringRef getIncludePathBeforeLambda(SourceLocation LambdaLoc) const {
     PresumedLoc PLoc = Context.getSourceManager().getPresumedLoc(LambdaLoc);
-    for (const auto& I : SeenIncludes) {
+    auto FileSearch = SeenIncludes.find(PLoc.getFileID());
+    if (FileSearch == SeenIncludes.end())
+      return {};
+    for (const auto &I : FileSearch->second) {
       PresumedLoc IPLoc = Context.getSourceManager().getPresumedLoc(I.first);
       if (IPLoc.getFileID() != PLoc.getFileID())
         continue;
@@ -1675,51 +1852,92 @@ public:
   }
 
   void registerHshInclude(SourceLocation HashLoc, StringRef RelativePath) {
-    SeenIncludes[HashLoc] = RelativePath;
+    auto FileID = Context.getSourceManager().getFileID(HashLoc);
+    auto Search = SeenHeadIncludes.find(FileID);
+    if (Search == SeenHeadIncludes.end()) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, ".hsh include in file without .hshhead");
+      Diags.Report(HashLoc, DiagID);
+      std::string IncludeStr;
+      raw_string_ostream OS(IncludeStr);
+      auto FileName = Context.getSourceManager().getFilename(HashLoc);
+      OS << "#include \"" << sys::path::filename(FileName) << ".hshhead\"";
+      auto BeginLoc = Context.getSourceManager().getLocForStartOfFile(FileID);
+      unsigned DiagID2 = Diags.getCustomDiagID(
+          DiagnosticsEngine::Note, "add .hshhead include in global scope");
+      auto Diag2 = Diags.Report(BeginLoc, DiagID2);
+      Diag2.AddFixItHint(FixItHint::CreateInsertion(BeginLoc, OS.str()));
+      return;
+    }
+    SeenIncludes[FileID][HashLoc] = RelativePath;
+  }
+
+  void registerHshHeadInclude(SourceLocation HashLoc, StringRef RelativePath) {
+    auto FileID = Context.getSourceManager().getFileID(HashLoc);
+    auto Search = SeenHeadIncludes.find(FileID);
+    if (Search != SeenHeadIncludes.end()) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "multiple .hshhead includes in one file");
+      Diags.Report(HashLoc, DiagID);
+      unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                               "previous include was here");
+      Diags.Report(Search->second.begin()->first, DiagID2);
+      return;
+    }
+    SeenHeadIncludes[FileID][HashLoc] = RelativePath;
   }
 
   class PPCallbacks : public clang::PPCallbacks {
     GenerateConsumer &Consumer;
     FileManager &FM;
     SourceManager &SM;
+
   public:
-    explicit PPCallbacks(GenerateConsumer &Consumer, FileManager &FM, SourceManager &SM)
-    : Consumer(Consumer), FM(FM), SM(SM) {}
+    explicit PPCallbacks(GenerateConsumer &Consumer, FileManager &FM,
+                         SourceManager &SM)
+        : Consumer(Consumer), FM(FM), SM(SM) {}
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
       if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
         SmallString<1024> VirtualFilePath(llvm::StringLiteral("./"));
         VirtualFilePath += FileName;
-        FM.getVirtualFile(VirtualFilePath, StubInclude.size(), std::time(nullptr));
+        FM.getVirtualFile(VirtualFilePath, StubInclude.size(),
+                          std::time(nullptr));
         RecoveryPath.push_back('.');
         return true;
       }
       return false;
     }
-    void InclusionDirective(SourceLocation HashLoc,
-                            const Token &IncludeTok,
-                            StringRef FileName,
-                            bool IsAngled,
+    void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
+                            StringRef FileName, bool IsAngled,
                             CharSourceRange FilenameRange,
-                            const FileEntry *File,
-                            StringRef SearchPath,
+                            const FileEntry *File, StringRef SearchPath,
                             StringRef RelativePath,
                             const clang::Module *Imported,
                             SrcMgr::CharacteristicKind FileType) override {
       if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
         assert(File && "File must exist at this point");
-        SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(StubInclude));
+        SM.overrideFileContents(File,
+                                llvm::MemoryBuffer::getMemBuffer(StubInclude));
         Consumer.registerHshInclude(HashLoc, RelativePath);
+      } else if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
+        assert(File && "File must exist at this point");
+        SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(""));
+        Consumer.registerHshHeadInclude(HashLoc, RelativePath);
       }
     }
   };
 };
 
-std::unique_ptr<ASTConsumer> GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
+std::unique_ptr<ASTConsumer>
+GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
-  CI.getPreprocessor().addPPCallbacks(std::make_unique<GenerateConsumer::PPCallbacks>(
-    *Consumer, CI.getFileManager(), CI.getSourceManager()));
+  CI.getPreprocessor().addPPCallbacks(
+      std::make_unique<GenerateConsumer::PPCallbacks>(
+          *Consumer, CI.getFileManager(), CI.getSourceManager()));
   return Consumer;
 }
 
-}
+} // namespace clang::hshgen

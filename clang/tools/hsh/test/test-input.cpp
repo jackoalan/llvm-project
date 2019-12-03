@@ -1,3 +1,4 @@
+#include "test-input.cpp.hshhead"
 namespace std {
 template<typename _Tp>
 struct remove_reference
@@ -105,6 +106,20 @@ enum class PostMode {
   Nothing,
   AddDynamicColor,
   MultiplyDynamicColor
+};
+
+enum HshTarget {
+  HT_GLSL
+};
+
+enum HshStage {
+  HshVertex
+};
+
+template <unsigned ID>
+struct fetch_shader {
+  template <HshTarget, HshStage>
+  static const unsigned char* data;
 };
 
 void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,

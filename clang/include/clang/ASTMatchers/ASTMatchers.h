@@ -221,6 +221,19 @@ extern const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasDecl>
 extern const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasTemplateDecl>
     typeAliasTemplateDecl;
 
+/// Matches attributed statements.
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, AttributedStmt>
+    attributedStmt;
+
+/// Matches attributed statements of a specific kind.
+AST_MATCHER_P(AttributedStmt, hasStmtAttr, attr::Kind, AttrKind) {
+  for (const auto *Attr : Node.getAttrs()) {
+    if (Attr->getKind() == AttrKind)
+      return true;
+  }
+  return false;
+}
+
 /// Matches AST nodes that were expanded within the main-file.
 ///
 /// Example matches X but not Y
