@@ -26,9 +26,11 @@ enum HshTarget {
 
 class GenerateAction : public ASTFrontendAction {
   OwningArrayRef<HshTarget> Targets;
+
 public:
   explicit GenerateAction(ArrayRef<HshTarget> Targets) : Targets(Targets) {}
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef InFile) override;
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef InFile) override;
 };
 
-}
+} // namespace clang::hshgen
