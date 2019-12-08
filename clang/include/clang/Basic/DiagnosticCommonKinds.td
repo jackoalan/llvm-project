@@ -123,8 +123,9 @@ def warn_cxx20_compat_consteval : Warning<
   InGroup<CXX2aCompat>, DefaultIgnore;
 
 def err_hsh_include_no_lambda : Error<
-  "expected a hsh generator lambda to follow #include \"*.hsh\"">;
-
+  "expected a hsh generator lambda to follow hsh_*">;
+def note_hsh_remove_semicolon : Note<
+  "remove semicolon to connect hsh_* to lambda statement">;
 }
 
 let CategoryName = "Nullability Issue" in {

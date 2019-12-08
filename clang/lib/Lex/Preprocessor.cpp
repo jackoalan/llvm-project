@@ -168,6 +168,7 @@ Preprocessor::Preprocessor(std::shared_ptr<PreprocessorOptions> PPOpts,
     ExcludedConditionalDirectiveSkipMappings->clear();
 
   MaxTokens = LangOpts.MaxTokens;
+  HshWatch = false;
 }
 
 Preprocessor::~Preprocessor() {
@@ -728,6 +729,9 @@ IdentifierInfo *Preprocessor::LookUpIdentifierInfo(Token &Identifier) const {
     Identifier.setKind(tok::identifier);
   else
     Identifier.setKind(II->getTokenID());
+
+  if (HshWatch && II->getName().startswith("hsh_"))
+    II->setHasMacroDefinition(true);
 
   return II;
 }

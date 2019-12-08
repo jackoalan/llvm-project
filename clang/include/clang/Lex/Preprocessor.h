@@ -1063,6 +1063,9 @@ public:
   }
 
   MacroDefinition getMacroDefinition(const IdentifierInfo *II) {
+    if (HshWatch && II->getName().startswith("hsh_"))
+      return getMacroDefinition(getIdentifierInfo("_hsh_dummy"));
+
     if (!II->hasMacroDefinition())
       return {};
 
@@ -2355,6 +2358,9 @@ public:
   /// A macro is used, update information about macros that need unused
   /// warnings.
   void markMacroAsUsed(MacroInfo *MI);
+
+  /// True if hsh_* identifiers should be handled specially
+  bool HshWatch;
 
 private:
   Optional<unsigned>

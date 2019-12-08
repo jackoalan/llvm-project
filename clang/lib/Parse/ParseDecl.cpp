@@ -2345,7 +2345,15 @@ Decl *Parser::ParseDeclarationAfterDeclaratorAndAttributes(
   // Parse declarator '=' initializer.
   // If a '==' or '+=' is found, suggest a fixit to '='.
   if (isTokenEqualOrEqualTypo()) {
-    SourceLocation EqualLoc = ConsumeToken();
+    SourceLocation EqualLoc;
+    {
+      // An assignment involving an identifer prefixed with hsh_
+      // should trigger an expansion of a dummy hsh base:
+      // ::hsh::_HshDummy(); [[hsh::generator_lambda]]
+      SaveAndRestore SavedHshWatch(PP.HshWatch,
+          PP.getSourceManager().isInMainFile(Tok.getLocation()));
+      EqualLoc = ConsumeToken();
+    }
 
     if (Tok.is(tok::kw_delete)) {
       if (D.isFunctionDeclarator())

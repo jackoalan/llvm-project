@@ -14,15 +14,15 @@
 #include "clang/AST/ASTDumper.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/GlobalDecl.h"
+#include "clang/AST/QualTypeNames.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Hsh/HshGenerator.h"
+#include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/PreprocessorOptions.h"
-
-#include <regex>
 
 namespace clang::hshgen {
 
@@ -100,9 +100,10 @@ public:
   };
 
 private:
-  std::array<const clang::TagDecl *, HBT_Max> Types{};
-  std::array<const clang::FunctionDecl *, HBF_Max> Functions{};
-  std::array<const clang::CXXMethodDecl *, HBM_Max> Methods{};
+  ClassTemplateDecl *BaseRecordType = nullptr;
+  std::array<const TagDecl *, HBT_Max> Types{};
+  std::array<const FunctionDecl *, HBF_Max> Functions{};
+  std::array<const CXXMethodDecl *, HBM_Max> Methods{};
 
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
@@ -188,6 +189,18 @@ private:
     }
   };
 
+  class ClassTemplateFinder : public DeclFinder<ClassTemplateFinder> {
+  public:
+    bool VisitClassTemplateDecl(ClassTemplateDecl *Type) {
+      if (InHshNS && Type->getDeclName().isIdentifier() &&
+          Type->getName() == Name) {
+        Found = Type;
+        return false;
+      }
+      return true;
+    }
+  };
+
   class MethodFinder : public DeclFinder<MethodFinder> {
     StringRef Record;
     SmallVector<StringRef, 8> Params;
@@ -234,8 +247,7 @@ private:
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "type %0; is hsh.h included?");
-      auto Diag = Diags.Report(DiagID);
-      Diag.AddString(Name);
+      Diags.Report(DiagID) << Name;
     }
   }
 
@@ -248,8 +260,7 @@ private:
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "function %0; is hsh.h included?");
-      auto Diag = Diags.Report(DiagID);
-      Diag.AddString(Name);
+      Diags.Report(DiagID) << Name;
     }
   }
 
@@ -262,13 +273,24 @@ private:
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "method %0; is hsh.h included?");
-      auto Diag = Diags.Report(DiagID);
-      Diag.AddString(Name);
+      Diags.Report(DiagID) << Name;
     }
   }
 
 public:
-  void findBuiltinDecls(TranslationUnitDecl *TU, SourceManager &SM) {
+  void findBuiltinDecls(ASTContext &Context) {
+    TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
+    SourceManager &SM = Context.getSourceManager();
+    if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(
+            ClassTemplateFinder().Find(llvm::StringLiteral("_HshBase"), TU))) {
+      BaseRecordType = cast<ClassTemplateDecl>(T->getFirstDecl());
+    } else {
+      DiagnosticsEngine &Diags = SM.getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of _HshBase; "
+                                    "is hsh.h included?");
+      Diags.Report(DiagID);
+    }
 #define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
   addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
           TypeFinder().Find(llvm::StringLiteral(#Name), TU));
@@ -363,6 +385,33 @@ public:
   QualType getType(HshBuiltinType Tp) const {
     return getTypeDecl(Tp)->getTypeForDecl()->getCanonicalTypeUnqualified();
   }
+
+  static TypeSourceInfo *getFullyQualifiedTemplateSpecializationTypeInfo(
+      ASTContext &Context, TemplateDecl *TDecl,
+      const TemplateArgumentListInfo &Args) {
+    QualType Underlying =
+        Context.getTemplateSpecializationType(TemplateName(TDecl), Args);
+    Underlying = TypeName::getFullyQualifiedType(Underlying, Context);
+    return Context.getTrivialTypeSourceInfo(Underlying);
+  }
+
+  CXXRecordDecl *getHshBaseSpecialization(ASTContext &Context, StringRef Name) {
+    CXXRecordDecl *Record = CXXRecordDecl::Create(
+        Context, TTK_Class, Context.getTranslationUnitDecl(), {}, {},
+        &Context.Idents.get(Name));
+    Record->startDefinition();
+
+    TemplateArgumentListInfo TemplateArgs;
+    TemplateArgs.addArgument(TemplateArgumentLoc(
+        QualType{Record->getTypeForDecl(), 0}, (TypeSourceInfo *)nullptr));
+    TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
+        Context, BaseRecordType, TemplateArgs);
+    CXXBaseSpecifier BaseSpec({}, false, true, AS_public, TSI, {});
+    CXXBaseSpecifier *Bases = &BaseSpec;
+    Record->setBases(&Bases, 1);
+
+    return Record;
+  }
 };
 
 template <>
@@ -416,9 +465,8 @@ ReportCustom(T *S, const ASTContext &Context, const char (&FormatString)[N],
              DiagnosticsEngine::Level level = DiagnosticsEngine::Error) {
   DiagnosticsEngine &Diags = Context.getDiagnostics();
   unsigned DiagID = Diags.getCustomDiagID(level, FormatString);
-  auto Diag = Diags.Report(S->getBeginLoc(), DiagID);
-  Diag.AddSourceRange(CharSourceRange::getCharRange(S->getSourceRange()));
-  return Diag;
+  return Diags.Report(S->getBeginLoc(), DiagID)
+         << CharSourceRange(S->getSourceRange(), false);
 }
 
 static void ReportUnsupportedStmt(Stmt *S, const ASTContext &Context) {
@@ -672,6 +720,28 @@ class StagesBuilder
   ASTContext &Context;
   unsigned UseStages;
 
+  static IdentifierInfo &getToIdent(ASTContext &Context, HshStage Stage) {
+    std::string VarName;
+    raw_string_ostream VNS(VarName);
+    VNS << "to_" << HshStageToString(Stage);
+    return Context.Idents.get(VNS.str());
+  }
+
+  static IdentifierInfo &getFromIdent(ASTContext &Context, HshStage Stage) {
+    std::string VarName;
+    raw_string_ostream VNS(VarName);
+    VNS << "from_" << HshStageToString(Stage);
+    return Context.Idents.get(VNS.str());
+  }
+
+  static IdentifierInfo &getFromToIdent(ASTContext &Context, HshStage From,
+                                        HshStage To) {
+    std::string RecordName;
+    raw_string_ostream RNS(RecordName);
+    RNS << HshStageToString(From) << "_to_" << HshStageToString(To);
+    return Context.Idents.get(RNS.str());
+  }
+
   class InterfaceRecord {
     CXXRecordDecl *Record = nullptr;
     SmallVector<std::pair<Expr *, FieldDecl *>, 8> Fields;
@@ -692,37 +762,24 @@ class StagesBuilder
     }
 
   public:
-    void initializeRecord(ASTContext &Context, DeclContext *LambdaDeclContext,
+    void initializeRecord(ASTContext &Context, DeclContext *SpecDeclContext,
                           HshStage S, HshStage D) {
-      std::string RecordName;
-      raw_string_ostream RNS(RecordName);
-      RNS << HshStageToString(S) << "_to_" << HshStageToString(D);
-      Record = CXXRecordDecl::Create(Context, TTK_Struct, LambdaDeclContext, {},
-                                     {}, &Context.Idents.get(RNS.str()));
+      Record = CXXRecordDecl::Create(Context, TTK_Struct, SpecDeclContext, {},
+                                     {}, &getFromToIdent(Context, S, D));
       Record->startDefinition();
 
       CanQualType CDType =
           Record->getTypeForDecl()->getCanonicalTypeUnqualified();
 
-      {
-        std::string VarName;
-        raw_string_ostream VNS(VarName);
-        VNS << "to_" << HshStageToString(D);
-        VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
-                                      &Context.Idents.get(VNS.str()), CDType,
-                                      nullptr, SC_None);
-        Producer = VD;
-      }
+      VarDecl *PVD =
+          VarDecl::Create(Context, SpecDeclContext, {}, {},
+                          &getToIdent(Context, D), CDType, nullptr, SC_None);
+      Producer = PVD;
 
-      {
-        std::string VarName;
-        raw_string_ostream VNS(VarName);
-        VNS << "from_" << HshStageToString(S);
-        VarDecl *VD = VarDecl::Create(Context, LambdaDeclContext, {}, {},
-                                      &Context.Idents.get(VNS.str()), CDType,
-                                      nullptr, SC_None);
-        Consumer = VD;
-      }
+      VarDecl *CVD =
+          VarDecl::Create(Context, SpecDeclContext, {}, {},
+                          &getFromIdent(Context, S), CDType, nullptr, SC_None);
+      Consumer = CVD;
 
       SStage = S;
       DStage = D;
@@ -783,6 +840,7 @@ class StagesBuilder
     SamplerConfig Config;
   };
   std::array<SmallVector<SampleCall, 4>, HshMaxStage> SampleCalls;
+  SmallVector<ParmVarDecl *, 4> UsedCaptures;
 
   AssignmentFinderInfo AssignFindInfo;
 
@@ -795,18 +853,18 @@ class StagesBuilder
   }
 
 public:
-  StagesBuilder(ASTContext &Context, DeclContext *LambdaDeclContext,
+  StagesBuilder(ASTContext &Context, DeclContext *SpecDeclContext,
                 unsigned UseStages)
       : Context(Context), UseStages(UseStages) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        HostToStageRecords[D].initializeRecord(Context, LambdaDeclContext,
+        HostToStageRecords[D].initializeRecord(Context, SpecDeclContext,
                                                HshHostStage, HshStage(D));
       }
     }
     for (int D = HshControlStage, S = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
-        InterStageRecords[D].initializeRecord(Context, LambdaDeclContext,
+        InterStageRecords[D].initializeRecord(Context, SpecDeclContext,
                                               HshStage(S), HshStage(D));
         S = D;
       }
@@ -1064,19 +1122,56 @@ public:
     }
   }
 
-  void finalizeResults() {
+  void registerUsedCapture(ParmVarDecl *PVD) {
+    for (auto *EC : UsedCaptures)
+      if (EC == PVD)
+        return;
+    UsedCaptures.push_back(PVD);
+  }
+
+  auto captures() const {
+    return llvm::iterator_range(UsedCaptures.begin(), UsedCaptures.end());
+  }
+
+  ArrayRef<Stmt *> hostStatements() const {
+    return StageStmts[HshHostStage].Stmts;
+  }
+
+  void finalizeResults(ASTContext &Context, CXXRecordDecl *SpecRecord) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
-      if (UseStages & (1u << unsigned(D)))
-        HostToStageRecords[D].finalizeRecord();
+      if (UseStages & (1u << unsigned(D))) {
+        auto &RecDecl = HostToStageRecords[D];
+        RecDecl.finalizeRecord();
+        SpecRecord->addDecl(RecDecl.getRecord());
+      }
     }
 
     for (int D = HshControlStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D)))
         InterStageRecords[D].finalizeRecord();
     }
+
+    SmallVector<Stmt *, 16> NewHostStmts;
+    NewHostStmts.reserve(StageStmts[HshHostStage].Stmts.size() + 5);
+    for (int S = HshVertexStage; S < HshMaxStage; ++S) {
+      if (UseStages & (1u << unsigned(S))) {
+        auto *RecordDecl = HostToStageRecords[S].getRecord();
+        CanQualType CDType =
+            RecordDecl->getTypeForDecl()->getCanonicalTypeUnqualified();
+        VarDecl *BindingVar = VarDecl::Create(Context, SpecRecord, {}, {},
+                                              &getToIdent(Context, HshStage(S)),
+                                              CDType, {}, SC_None);
+        NewHostStmts.push_back(new (Context)
+                                   DeclStmt(DeclGroupRef(BindingVar), {}, {}));
+      }
+    }
+    NewHostStmts.insert(NewHostStmts.end(),
+                        StageStmts[HshHostStage].Stmts.begin(),
+                        StageStmts[HshHostStage].Stmts.end());
+    StageStmts[HshHostStage].Stmts = std::move(NewHostStmts);
   }
 
-  void printResults(const PrintingPolicy &Policy) {
+  void printResults(const PrintingPolicy &Policy, raw_ostream &OS) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
         HostToStageRecords[D].getRecord()->print(llvm::outs(), Policy);
@@ -1415,8 +1510,12 @@ public:
         ReportUnsupportedTypeReference(DeclRef, Context);
         return ErrorResult;
       }
-      if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
-        return {DeclRef, DetermineParmVarStage(PVD)};
+      if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl())) {
+        HshStage Stage = DetermineParmVarStage(PVD);
+        if (Stage == HshHostStage)
+          Builder.registerUsedCapture(PVD);
+        return {DeclRef, Stage};
+      }
       auto [Assign, NextCompoundChild] = LastAssignmentFinder(Context).Find(
           VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
       if (Assign) {
@@ -1596,30 +1695,6 @@ MakePrintingPolicy(HshTarget Target, HshBuiltins &Builtins) {
   }
 }
 
-static const std::regex BadCharReg(R"([^_0-9a-zA-Z])");
-static std::string SanitizedName(const char *Name) {
-  std::string TmpName = std::regex_replace(Name, BadCharReg, "_");
-  std::string SanitizedName;
-  raw_string_ostream OS(SanitizedName);
-  if (!TmpName.empty() && TmpName[0] >= '0' && TmpName[0] <= '9')
-    OS << '_';
-  OS << TmpName;
-  return OS.str();
-}
-
-static std::string SanitizedNameOfLocation(SourceLocation Loc,
-                                           const SourceManager &SM) {
-  if (Loc.isFileID()) {
-    PresumedLoc PLoc = SM.getPresumedLoc(Loc);
-    std::string Ret = SanitizedName(PLoc.getFilename());
-    raw_string_ostream OS(Ret);
-    OS << Ret << "_L" << PLoc.getLine();
-    return OS.str();
-  } else {
-    return "<<<BAD LOCATION>>>"s;
-  }
-}
-
 class LocationNamespaceSearch
     : public RecursiveASTVisitor<LocationNamespaceSearch> {
   ASTContext &Context;
@@ -1652,32 +1727,25 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   ASTContext &Context;
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
-  std::unique_ptr<raw_pwrite_stream> Out;
-  std::map<FileID, std::map<SourceLocation, std::string>> SeenIncludes;
-  std::map<FileID, std::map<SourceLocation, std::string>> SeenHeadIncludes;
+  std::unique_ptr<raw_pwrite_stream> OS;
+  Optional<std::pair<SourceLocation, std::string>> HeadInclude;
+  std::map<SourceLocation, std::pair<SourceRange, std::string>>
+      SeenHshExpansions;
 
 public:
   explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
       : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()),
-        Targets(Targets), Out(CI.createDefaultOutputFile(false)) {}
+        Targets(Targets) {}
 
   void run(const MatchFinder::MatchResult &Result) override {
-    if (auto *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id")) {
-      DeclContext *LambdaDeclContext =
-          Lambda->getType()->getAsCXXRecordDecl()->getDeclContext();
-
-      auto IncludePath = getIncludePathBeforeLambda(Lambda->getBeginLoc());
-      auto IOut = CI.createOutputFile(IncludePath, false, true, "", "", true);
-      *IOut << StubInclude;
+    auto *LambdaAttr = Result.Nodes.getNodeAs<AttributedStmt>("attrid");
+    auto *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id");
+    if (Lambda && LambdaAttr) {
+      auto ExpName = getExpansionNameBeforeLambda(LambdaAttr);
+      assert(!ExpName.empty() && "Expansion name should exist");
 
       auto *CallOperator = Lambda->getCallOperator();
       Stmt *Body = CallOperator->getBody();
-      for (const auto &Cap : Lambda->captures()) {
-        if (Cap.capturesThis())
-          continue;
-        Cap.getCapturedVar()->print(llvm::outs(), Context.getPrintingPolicy());
-        llvm::outs() << '\n';
-      }
 
       unsigned UseStages = 1;
       for (ParmVarDecl *Param : CallOperator->parameters()) {
@@ -1697,7 +1765,9 @@ public:
         }
       }
 
-      StagesBuilder Builder(Context, LambdaDeclContext, UseStages);
+      CXXRecordDecl *SpecRecord =
+          Builtins.getHshBaseSpecialization(Context, ExpName);
+      StagesBuilder Builder(Context, SpecRecord, UseStages);
 
       for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
@@ -1714,85 +1784,55 @@ public:
         }
       }
 
-      Builder.finalizeResults();
+      Builder.finalizeResults(Context, SpecRecord);
+      SpecRecord->addDecl(
+          AccessSpecDecl::Create(Context, AS_public, SpecRecord, {}, {}));
+      // Make constructor
+      SmallVector<QualType, 4> ConstructorArgs;
+      SmallVector<ParmVarDecl *, 4> ConstructorParms;
+      for (const auto *Cap : Builder.captures()) {
+        ConstructorArgs.push_back(Cap->getType());
+        ConstructorParms.push_back(ParmVarDecl::Create(
+            Context, SpecRecord, {}, {}, Cap->getIdentifier(),
+            ConstructorArgs.back(), {}, SC_None, nullptr));
+      }
+      CanQualType CDType =
+          SpecRecord->getTypeForDecl()->getCanonicalTypeUnqualified();
+      QualType FuncType = Context.getFunctionType(CDType, ConstructorArgs, {});
+      CXXConstructorDecl *CD = CXXConstructorDecl::Create(
+          Context, SpecRecord, {},
+          {Context.DeclarationNames.getCXXConstructorName(CDType), {}},
+          FuncType, {}, {}, false, false, CSK_unspecified);
+      CD->setParams(ConstructorParms);
+      CD->setAccess(AS_public);
+      CD->setBody(
+          CompoundStmt::Create(Context, Builder.hostStatements(), {}, {}));
+      SpecRecord->addDecl(CD);
+      SpecRecord->completeDefinition();
+
+      SourceManager &SM = Context.getSourceManager();
+      StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
+      *OS << "/* Auto-generated .hshhead for " << MainName
+          << " */\n\n"
+             "namespace {\n\n";
+      SpecRecord->print(*OS, Context.getPrintingPolicy());
+      *OS << ";\n#define " << ExpName << " ::" << ExpName << "(";
+      bool NeedsComma = false;
+      for (const auto *Cap : Builder.captures()) {
+        if (!NeedsComma)
+          NeedsComma = true;
+        else
+          *OS << ", ";
+        *OS << Cap->getIdentifier()->getName();
+      }
+      *OS << ");\n\n";
+
       for (const auto &T : Targets) {
         auto Policy = MakePrintingPolicy(T, Builtins);
-        Builder.printResults(*Policy);
+        Builder.printResults(*Policy, *OS);
       }
 
-      std::array<CompoundStmt *, HshMaxStage> StageBodies{};
-      for (int i = HshHostStage; i < HshMaxStage; ++i) {
-
-#if 0
-        if (i == HshHostStage) {
-          CXXRecordDecl *RecordDecl = CXXRecordDecl::CreateLambda(Context, LambdaDeclContext, {}, {}, false, false, LCD_ByRef);
-          CXXMethodDecl *LambdaCall = CXXMethodDecl::Create(Context, RecordDecl, {}, {Context.DeclarationNames.getCXXOperatorName(OO_Call), {}}, {}, {}, SC_None, false, CSK_unspecified, {});
-          SmallVector<Stmt*, 8> LambdaStmts;
-
-          std::string LocName;
-          auto IncludePath = getIncludePathBeforeLambda(Lambda->getBeginLoc());
-          if (!IncludePath.empty())
-            LocName = SanitizedName(IncludePath.data());
-          else
-            LocName = SanitizedNameOfLocation(Lambda->getBeginLoc(), SM);
-          CXXRecordDecl *BindingRecord = CXXRecordDecl::Create(Context, TTK_Class, LambdaCall, {}, {}, &Context.Idents.get(LocName));
-          BindingRecord->startDefinition();
-          FieldDecl *FD = FieldDecl::Create(Context, BindingRecord, {}, {}, &Context.Idents.get("test"),
-            Builtins.getType(HBT_float3), {}, {}, false, ICIS_NoInit);
-          FD->setAccess(AS_public);
-          BindingRecord->addDecl(FD);
-          BindingRecord->addDecl(AccessSpecDecl::Create(Context, AS_public, BindingRecord, {}, {}));
-          CanQualType CDType = BindingRecord->getTypeForDecl()->getCanonicalTypeUnqualified();
-          SmallVector<QualType, 8> ConstructorArgs;
-          SmallVector<ParmVarDecl*, 8> ConstructorParms;
-          SmallVector<Expr*, 8> ConstructorInstArgs;
-          for (const auto &Cap : Lambda->captures()) {
-            if (!Cap.capturesThis()) {
-              ConstructorArgs.push_back(Cap.getCapturedVar()->getType());
-              ConstructorParms.push_back(ParmVarDecl::Create(Context, BindingRecord, {}, {},
-                Cap.getCapturedVar()->getIdentifier(), ConstructorArgs.back(), {}, SC_None, nullptr));
-              ConstructorInstArgs.push_back(DeclRefExpr::Create(Context, {}, {}, Cap.getCapturedVar(), true, SourceLocation{},
-                Cap.getCapturedVar()->getType().getNonReferenceType(), VK_LValue));
-            }
-          }
-          QualType FuncType = Context.getFunctionType(CDType, ConstructorArgs, {});
-          CXXConstructorDecl *CD = CXXConstructorDecl::Create(Context, BindingRecord, {},
-            {Context.DeclarationNames.getCXXConstructorName(CDType), {}}, FuncType, {}, {}, false, false, CSK_unspecified);
-          CD->setParams(ConstructorParms);
-          CD->setAccess(AS_public);
-          CD->setBody(CompoundStmt::CreateEmpty(Context, 0));
-          BindingRecord->addDecl(CD);
-          BindingRecord->completeDefinition();
-          VarDecl *BindingVar = VarDecl::Create(Context, RecordDecl, {}, {}, &Context.Idents.get("binding"), CDType, {}, SC_None);
-          BindingVar->setInit(CXXConstructExpr::Create(Context, CDType, {}, CD, false, ConstructorInstArgs, false, true, false, false,
-                                                       CXXConstructExpr::CK_Complete, {}));
-          BindingVar->setInitStyle(VarDecl::ListInit);
-          std::array<Decl*, 2> BindingDecls{BindingRecord, BindingVar};
-          LambdaStmts.push_back(new (Context) DeclStmt(DeclGroupRef::Create(Context, BindingDecls.data(), 2), {}, {}));
-          LambdaStmts.push_back(ReturnStmt::Create(Context, {},
-            DeclRefExpr::Create(Context, {}, {}, BindingVar, false, SourceLocation{}, BindingVar->getType(), VK_XValue), nullptr));
-
-          CompoundStmt *LambdaBody = CompoundStmt::Create(Context, LambdaStmts, {}, {});
-          LambdaCall->setBody(LambdaBody);
-
-          RecordDecl->addDecl(LambdaCall);
-          LambdaExpr *LambdaExpr = LambdaExpr::Create(Context, RecordDecl, {}, LCD_ByRef, {}, {}, false, false, {}, {}, false);
-
-          llvm::outs() << "Resulting Lambda\n";
-          LambdaExpr->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
-          llvm::outs() << "();\n[[hsh::generator_lambda]]\n";
-          llvm::outs().flush();
-          break;
-        }
-#endif
-
-#if 0
-        StageBodies[i] = CompoundStmt::Create(Context, Stmts, {}, {});
-        llvm::outs() << "Statements for " << HshStageToString(HshStage(i)) << '\n';
-        StageBodies[i]->printPretty(llvm::outs(), nullptr, Context.getPrintingPolicy());
-        llvm::outs() << '\n';
-#endif
-      }
+      *OS << "}\n";
 
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Body);
@@ -1804,89 +1844,98 @@ public:
     if (Diags.hasErrorOccurred())
       return;
 
-    for (const auto &HeadIncludeFile : SeenHeadIncludes) {
-      for (const auto &HeadInclude : HeadIncludeFile.second) {
-        if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
-                HeadInclude.first)) {
-          unsigned DiagID = Diags.getCustomDiagID(
-              DiagnosticsEngine::Error,
-              ".hshhead include in must appear in global scope");
-          Diags.Report(HeadInclude.first, DiagID);
-          unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
-                                                   "included in namespace");
-          Diags.Report(NS->getLocation(), DiagID2);
-          return;
-        }
-      }
+    const unsigned IncludeDiagID = Diags.getCustomDiagID(
+        DiagnosticsEngine::Error,
+        ".hshhead include in must appear in global scope");
+    if (!HeadInclude) {
+      Diags.Report(IncludeDiagID);
+      return;
+    }
+    if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
+            HeadInclude->first)) {
+      Diags.Report(HeadInclude->first, IncludeDiagID);
+      unsigned NoteDiagID = Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                                  "included in namespace");
+      Diags.Report(NS->getLocation(), NoteDiagID);
+      return;
     }
 
-    Builtins.findBuiltinDecls(Context.getTranslationUnitDecl(),
-                              Context.getSourceManager());
+    Builtins.findBuiltinDecls(Context);
     if (Context.getDiagnostics().hasErrorOccurred()) {
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Context.getTranslationUnitDecl());
       return;
     }
 
+    OS = CI.createDefaultOutputFile(false);
+
+    /*
+     * Find lambdas that are attributed with hsh::generator_lambda and exist
+     * within the main file.
+     */
     MatchFinder Finder;
     Finder.addMatcher(
-        attributedStmt(allOf(hasStmtAttr(attr::HshGeneratorLambda),
-                             hasDescendant(lambdaExpr(stmt().bind("id"))))),
+        attributedStmt(stmt().bind("attrid"),
+                       allOf(hasStmtAttr(attr::HshGeneratorLambda),
+                             hasDescendant(lambdaExpr(
+                                 stmt().bind("id"), isExpansionInMainFile())))),
         this);
     Finder.matchAST(Context);
   }
 
-  StringRef getIncludePathBeforeLambda(SourceLocation LambdaLoc) const {
-    PresumedLoc PLoc = Context.getSourceManager().getPresumedLoc(LambdaLoc);
-    auto FileSearch = SeenIncludes.find(PLoc.getFileID());
-    if (FileSearch == SeenIncludes.end())
-      return {};
-    for (const auto &I : FileSearch->second) {
-      PresumedLoc IPLoc = Context.getSourceManager().getPresumedLoc(I.first);
-      if (IPLoc.getFileID() != PLoc.getFileID())
-        continue;
-      if (IPLoc.getLine() == PLoc.getLine() - 1)
-        return I.second;
+  StringRef
+  getExpansionNameBeforeLambda(const AttributedStmt *LambdaAttr) const {
+    for (auto *Attr : LambdaAttr->getAttrs()) {
+      if (Attr->getKind() == attr::HshGeneratorLambda) {
+        PresumedLoc PLoc =
+            Context.getSourceManager().getPresumedLoc(Attr->getLoc());
+        for (const auto &Exp : SeenHshExpansions) {
+          PresumedLoc IPLoc =
+              Context.getSourceManager().getPresumedLoc(Exp.first);
+          if (IPLoc.getLine() == PLoc.getLine())
+            return Exp.second.second;
+        }
+      }
     }
     return {};
   }
 
-  void registerHshInclude(SourceLocation HashLoc, StringRef RelativePath) {
-    auto FileID = Context.getSourceManager().getFileID(HashLoc);
-    auto Search = SeenHeadIncludes.find(FileID);
-    if (Search == SeenHeadIncludes.end()) {
-      DiagnosticsEngine &Diags = Context.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(
-          DiagnosticsEngine::Error, ".hsh include in file without .hshhead");
-      Diags.Report(HashLoc, DiagID);
-      std::string IncludeStr;
-      raw_string_ostream OS(IncludeStr);
-      auto FileName = Context.getSourceManager().getFilename(HashLoc);
-      OS << "#include \"" << sys::path::filename(FileName) << ".hshhead\"";
-      auto BeginLoc = Context.getSourceManager().getLocForStartOfFile(FileID);
-      unsigned DiagID2 = Diags.getCustomDiagID(
-          DiagnosticsEngine::Note, "add .hshhead include in global scope");
-      auto Diag2 = Diags.Report(BeginLoc, DiagID2);
-      Diag2.AddFixItHint(FixItHint::CreateInsertion(BeginLoc, OS.str()));
-      return;
+  void registerHshHeadInclude(SourceLocation HashLoc, StringRef RelativePath) {
+    if (Context.getSourceManager().isWrittenInMainFile(HashLoc)) {
+      if (HeadInclude) {
+        DiagnosticsEngine &Diags = Context.getDiagnostics();
+        unsigned DiagID = Diags.getCustomDiagID(
+            DiagnosticsEngine::Error, "multiple .hshhead includes in one file");
+        Diags.Report(HashLoc, DiagID);
+        unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                                 "previous include was here");
+        Diags.Report(HeadInclude->first, DiagID2);
+        return;
+      } else {
+        HeadInclude.emplace(HashLoc, RelativePath);
+      }
     }
-    SeenIncludes[FileID][HashLoc] = RelativePath;
   }
 
-  void registerHshHeadInclude(SourceLocation HashLoc, StringRef RelativePath) {
-    auto FileID = Context.getSourceManager().getFileID(HashLoc);
-    auto Search = SeenHeadIncludes.find(FileID);
-    if (Search != SeenHeadIncludes.end()) {
-      DiagnosticsEngine &Diags = Context.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(
-          DiagnosticsEngine::Error, "multiple .hshhead includes in one file");
-      Diags.Report(HashLoc, DiagID);
-      unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
-                                               "previous include was here");
-      Diags.Report(Search->second.begin()->first, DiagID2);
-      return;
+  void registerHshExpansion(SourceRange Range, StringRef Name) {
+    if (Context.getSourceManager().isWrittenInMainFile(Range.getBegin())) {
+      for (auto &Exps : SeenHshExpansions) {
+        if (Exps.second.second == Name) {
+          DiagnosticsEngine &Diags = Context.getDiagnostics();
+          unsigned DiagID = Diags.getCustomDiagID(
+              DiagnosticsEngine::Error, "hsh_* macro must be suffixed with "
+                                        "identifier unique to the file");
+          Diags.Report(Range.getBegin(), DiagID)
+              << CharSourceRange(Range, false);
+          unsigned NoteDiagId = Diags.getCustomDiagID(
+              DiagnosticsEngine::Note, "previous identifier usage is here");
+          Diags.Report(Exps.first, NoteDiagId)
+              << CharSourceRange(Exps.second.first, false);
+          return;
+        }
+      }
+      SeenHshExpansions[Range.getBegin()] = std::make_pair(Range, Name);
     }
-    SeenHeadIncludes[FileID][HashLoc] = RelativePath;
   }
 
   class PPCallbacks : public clang::PPCallbacks {
@@ -1900,7 +1949,7 @@ public:
         : Consumer(Consumer), FM(FM), SM(SM) {}
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
+      if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
         SmallString<1024> VirtualFilePath(llvm::StringLiteral("./"));
         VirtualFilePath += FileName;
         FM.getVirtualFile(VirtualFilePath, StubInclude.size(),
@@ -1917,15 +1966,18 @@ public:
                             StringRef RelativePath,
                             const clang::Module *Imported,
                             SrcMgr::CharacteristicKind FileType) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hsh"))) {
-        assert(File && "File must exist at this point");
-        SM.overrideFileContents(File,
-                                llvm::MemoryBuffer::getMemBuffer(StubInclude));
-        Consumer.registerHshInclude(HashLoc, RelativePath);
-      } else if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
+      if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
         assert(File && "File must exist at this point");
         SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(""));
         Consumer.registerHshHeadInclude(HashLoc, RelativePath);
+      }
+    }
+    void MacroExpands(const Token &MacroNameTok, const MacroDefinition &MD,
+                      SourceRange Range, const MacroArgs *Args) override {
+      if (MacroNameTok.is(tok::identifier)) {
+        StringRef Name = MacroNameTok.getIdentifierInfo()->getName();
+        if (Name.startswith("hsh_"))
+          Consumer.registerHshExpansion(Range, Name);
       }
     }
   };
@@ -1933,6 +1985,9 @@ public:
 
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
+  auto Policy = CI.getASTContext().getPrintingPolicy();
+  Policy.Indentation = 1;
+  CI.getASTContext().setPrintingPolicy(Policy);
   auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(

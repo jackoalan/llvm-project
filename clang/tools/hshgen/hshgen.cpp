@@ -32,7 +32,7 @@ int main(int argc, const char **argv) {
       cl::Positional, cl::desc("<output>"), cl::Required,
       cl::cat(llvm::cl::GeneralCategory), cl::sub(*cl::AllSubCommands));
 
-  static cl::OptionCategory HshCategory("Hsh Options");
+  static cl::OptionCategory HshCategory("Hsh Generator Options");
 
   struct TargetOption {
     hshgen::HshTarget Target;
@@ -57,7 +57,7 @@ int main(int argc, const char **argv) {
       {hshgen::HT_DXIL, "dxil", "DXIL Binary Target (requires dxcompiler.dll)"},
   };
 
-  if (!cl::ParseCommandLineOptions(argc, argv, "hsh codegen tool"))
+  if (!cl::ParseCommandLineOptions(argc, argv, "Hsh Codegen Tool"))
     return 1;
 
   const std::string ProgramName = sys::path::filename(StringRef(argv[0]));

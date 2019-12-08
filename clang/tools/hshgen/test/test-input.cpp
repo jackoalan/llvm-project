@@ -1,4 +1,3 @@
-#include "test-input.cpp.hshhead"
 namespace std {
 template<typename _Tp>
 struct remove_reference
@@ -91,7 +90,27 @@ struct vertex_buffer : detail::base_vertex_buffer {
   vertex_buffer(std::size_t, const T (&ref)[N]) : ref(ref), len(N) {}
 };
 float dot(const float3&, const float3&);
+
+template<class ImplClass>
+class _HshBase {
+public:
+  void draw(std::size_t, std::size_t) {}
+  void bind(hsh::detail::base_vertex_buffer) {}
+};
+
+class _HshDummy {
+public:
+  void draw(std::size_t, std::size_t) {}
+  void bind(hsh::detail::base_vertex_buffer) {}
+};
+/*
+ * This macro is internally expanded within the hsh generator
+ * for any identifiers prefixed with hsh_ being assigned.
+ */
+#define _hsh_dummy ::hsh::_HshDummy(); [[hsh::generator_lambda]]
 }
+
+#include "test-input.cpp.hshhead"
 
 namespace MyNS {
 
@@ -136,8 +155,7 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
   // Generated include defines anonymous struct and opens initialization bracket.
   // Captured values the shader is interested in are assigned to the first
   // constructor parameters bound at the end of the include.
-  auto MyBinding =
-#include "DrawSomething2.hsh"
+  auto MyBinding = hsh_DrawSomething
   [&](const MyFormat& vertData [[hsh::vertex_buffer(0)]], // Stands in for current vertex (vertex shader) or
                                                            // interpolated value (fragment shader)
       hsh::texture2d<float> tex0 [[hsh::fragment_texture(0)]], // texture sampler
@@ -210,38 +228,10 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
       hsh::dot(finalNormal/*v*/, -/*h*/lightDir/*h*/)/*v promoted to f via distribution test,
                                                         trigger vertex left fetch,
                                                         trigger host right fetch*/}/*f*/, 1.f}/*f*/;
-
-#if 0
-    struct HostToVertex {
-      hsh::float4x4 _hv0; // xf
-      hsh::float3x3 _hv1; // normalXf
-    };
-    struct HostToFragment {
-      hsh::float3 _hf0; // -lightDir
-    };
-    struct VertexToFragment {
-      hsh::float3 _vf0; // finalNormal
-    };
-#endif
-    // postMode is marked as a host condition. This means all basic blocks that depend on postMode as a branch
-    // condition will be compiled as separate shader objects. Due to the inherent geometric complexity,
-    // host conditions should be used sparingly.
-#if 0
-    switch (postMode) {
-      case PostMode::AddDynamicColor:
-        fragColor += dynColor;
-        break;
-      case PostMode::MultiplyDynamicColor:
-        fragColor *= dynColor;
-        break;
-      default: break;
-    }
-#endif
   };
 
   // The hsh_binding object has handles of host-processed data buffers ready to draw with.
   MyBinding.bind(hsh::vertex_buffer{0, MyBuffer});
   MyBinding.draw(0, 4);
 }
-
 }

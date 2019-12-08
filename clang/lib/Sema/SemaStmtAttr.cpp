@@ -186,6 +186,9 @@ static Attr *handleHshGeneratorLambdaAttr(Sema &S, Stmt *St, const ParsedAttr &A
     }
   } else {
     S.Diag(St->getBeginLoc(), diag::err_hsh_include_no_lambda);
+    if (isa<NullStmt>(St))
+      S.Diag(St->getBeginLoc(), diag::note_hsh_remove_semicolon)
+          << FixItHint::CreateRemoval(St->getSourceRange());
     return nullptr;
   }
 

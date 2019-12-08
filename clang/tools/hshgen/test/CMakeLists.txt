@@ -14,9 +14,9 @@ function(target_hsh target)
     set(out_dir "HshFiles/${rel_dir}")
     set(out_path "${bin_dir}/${out_dir}hsh_${rel_file}.cpp")
     file(MAKE_DIRECTORY "${bin_dir}/${out_dir}")
-    add_custom_command(OUTPUT "${out_path}" COMMAND "$<TARGET_FILE:hsh>"
+    add_custom_command(OUTPUT "${out_path}" COMMAND "$<TARGET_FILE:hshgen>"
                        ARGS --glsl "${src_path}" "hsh_${rel_file}.cpp"
-                       DEPENDS hsh "${src_path}"
+                       DEPENDS hshgen "${src_path}"
                        WORKING_DIRECTORY "${bin_dir}/${out_dir}")
     set_source_files_properties("${source}" PROPERTIES
             INCLUDE_DIRECTORIES "${bin_dir}/${out_dir}"
