@@ -1,22 +1,5 @@
-namespace std {
-template<typename _Tp>
-struct remove_reference
-{ typedef _Tp   type; };
-
-template<typename _Tp>
-struct remove_reference<_Tp&>
-{ typedef _Tp   type; };
-
-template<typename _Tp>
-struct remove_reference<_Tp&&>
-{ typedef _Tp   type; };
-
-template<typename _Tp>
-constexpr typename std::remove_reference<_Tp>::type &&
-move(_Tp &&__t) noexcept { return static_cast<typename std::remove_reference<_Tp>::type &&>(__t); }
-
-using size_t = unsigned int;
-}
+#include <type_traits>
+#include <utility>
 
 namespace hsh {
 namespace detail {
@@ -91,8 +74,63 @@ struct vertex_buffer : detail::base_vertex_buffer {
 };
 float dot(const float3&, const float3&);
 
+enum Target {
+  HT_GLSL
+};
+
+enum Stage {
+  VertexStage,
+  ControlStage,
+  EvaluationStage,
+  GeometryStage,
+  FragmentStage,
+  MaxStage
+};
+
+class VulkanResourceHandlers {
+public:
+  using uniform_handle = int;
+  template<Stage S, typename T>
+  static uniform_handle push_uniform(const T &uniform) {
+    return {};
+  }
+};
+
+struct _HshShaderData {
+  std::size_t size = 0;
+  const unsigned char *data = nullptr;
+  unsigned long hash = 0;
+  constexpr _HshShaderData() = default;
+  template <typename T>
+  constexpr _HshShaderData(const T data, unsigned long hash)
+  : size(std::extent_v<T>), data(data), hash(hash) {}
+};
+
+struct _HshGlobalListNode;
+_HshGlobalListNode *_GlobalListHead = nullptr;
+struct _HshGlobalListNode {
+  typedef void(*RegisterFunc)();
+  RegisterFunc func;
+  _HshGlobalListNode *next;
+  explicit _HshGlobalListNode(RegisterFunc func)
+  : func(func), next(_GlobalListHead) {
+    _GlobalListHead = this;
+  }
+};
+
+using ResourceHandlers = VulkanResourceHandlers;
+
 template<class ImplClass>
 class _HshBase {
+  //std::array<ResourceHandlers::uniform_handle, MaxStage> UniformHandles;
+protected:
+  static void global_build() {
+
+  }
+  template<Stage S, typename T>
+  void push_uniform(const T &uniform) {
+    //UniformHandles[S] = ResourceHandlers::push_uniform<S, T>(uniform);
+  }
 public:
   void draw(std::size_t, std::size_t) {}
   void bind(hsh::detail::base_vertex_buffer) {}
@@ -125,20 +163,6 @@ enum class PostMode {
   Nothing,
   AddDynamicColor,
   MultiplyDynamicColor
-};
-
-enum HshTarget {
-  HT_GLSL
-};
-
-enum HshStage {
-  HshVertex
-};
-
-template <unsigned ID>
-struct fetch_shader {
-  template <HshTarget, HshStage>
-  static const unsigned char* data;
 };
 
 void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,

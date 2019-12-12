@@ -21,7 +21,7 @@ function(target_hsh target)
     set_source_files_properties("${source}" PROPERTIES
             INCLUDE_DIRECTORIES "${bin_dir}/${out_dir}"
             OBJECT_DEPENDS "${out_path}"
-            COMPILE_FLAGS "-Wno-unknown-attributes -Wno-unused-value")
+            COMPILE_FLAGS -Wno-unknown-attributes)
     target_sources(${target} PUBLIC "${out_path}")
   endforeach()
 endfunction()

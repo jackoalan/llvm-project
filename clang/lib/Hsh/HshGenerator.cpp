@@ -31,17 +31,6 @@ using namespace clang;
 using namespace clang::ast_matchers;
 using namespace std::literals;
 
-constexpr llvm::StringLiteral
-    StubInclude("[&]() {\n"
-                "  class {\n"
-                "  public:\n"
-                "    void draw(std::size_t, std::size_t) {}\n"
-                "    void bind(hsh::detail::base_vertex_buffer) {}\n"
-                "  } hsh_binding;\n"
-                "  return hsh_binding;\n"
-                "}();\n"
-                "[[hsh::generator_lambda]]\n");
-
 enum HshStage : int {
   HshNoStage = -1,
   HshHostStage = 0,
@@ -101,6 +90,11 @@ public:
 
 private:
   ClassTemplateDecl *BaseRecordType = nullptr;
+  FunctionTemplateDecl *PushUniformMethod = nullptr;
+  EnumDecl *EnumTarget = nullptr;
+  EnumDecl *EnumStage = nullptr;
+  CXXRecordDecl *ShaderDataRecordType = nullptr;
+  CXXRecordDecl *GlobalListNodeRecordType = nullptr;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
   std::array<const CXXMethodDecl *, HBM_Max> Methods{};
@@ -279,18 +273,78 @@ private:
 
 public:
   void findBuiltinDecls(ASTContext &Context) {
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
     TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
     SourceManager &SM = Context.getSourceManager();
     if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(
             ClassTemplateFinder().Find(llvm::StringLiteral("_HshBase"), TU))) {
       BaseRecordType = cast<ClassTemplateDecl>(T->getFirstDecl());
+      auto *TemplDecl = BaseRecordType->getTemplatedDecl();
+      using FuncTemplIt =
+          CXXRecordDecl::specific_decl_iterator<FunctionTemplateDecl>;
+      for (FuncTemplIt TI(TemplDecl->decls_begin()), TE(TemplDecl->decls_end());
+           TI != TE; ++TI) {
+        if (TI->getName() == llvm::StringLiteral("push_uniform"))
+          PushUniformMethod = *TI;
+      }
+      if (!PushUniformMethod) {
+        unsigned DiagID = Diags.getCustomDiagID(
+            DiagnosticsEngine::Error, "unable to locate declaration of "
+                                      "_HshBase::push_uniform; "
+                                      "is hsh.h included?");
+        Diags.Report(DiagID);
+      }
     } else {
-      DiagnosticsEngine &Diags = SM.getDiagnostics();
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of _HshBase; "
                                     "is hsh.h included?");
       Diags.Report(DiagID);
     }
+
+    if (auto *E = dyn_cast_or_null<EnumDecl>(
+            TypeFinder().Find(llvm::StringLiteral("Target"), TU))) {
+      EnumTarget = E;
+    } else {
+      unsigned DiagID =
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "unable to locate declaration of enum Target; "
+                                "is hsh.h included?");
+      Diags.Report(DiagID);
+    }
+
+    if (auto *E = dyn_cast_or_null<EnumDecl>(
+            TypeFinder().Find(llvm::StringLiteral("Stage"), TU))) {
+      EnumStage = E;
+    } else {
+      unsigned DiagID =
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "unable to locate declaration of enum Stage; "
+                                "is hsh.h included?");
+      Diags.Report(DiagID);
+    }
+
+    if (auto *R = dyn_cast_or_null<CXXRecordDecl>(
+            TypeFinder().Find(llvm::StringLiteral("_HshShaderData"), TU))) {
+      ShaderDataRecordType = R;
+    } else {
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "unable to locate declaration of _HshShaderData; "
+          "is hsh.h included?");
+      Diags.Report(DiagID);
+    }
+
+    if (auto *R = dyn_cast_or_null<CXXRecordDecl>(
+            TypeFinder().Find(llvm::StringLiteral("_HshGlobalListNode"), TU))) {
+      GlobalListNodeRecordType = R;
+    } else {
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "unable to locate declaration of _HshGlobalListNode; "
+          "is hsh.h included?");
+      Diags.Report(DiagID);
+    }
+
 #define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
   addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
           TypeFinder().Find(llvm::StringLiteral(#Name), TU));
@@ -395,7 +449,8 @@ public:
     return Context.getTrivialTypeSourceInfo(Underlying);
   }
 
-  CXXRecordDecl *getHshBaseSpecialization(ASTContext &Context, StringRef Name) {
+  CXXRecordDecl *getHshBaseSpecialization(ASTContext &Context,
+                                          StringRef Name) const {
     CXXRecordDecl *Record = CXXRecordDecl::Create(
         Context, TTK_Class, Context.getTranslationUnitDecl(), {}, {},
         &Context.Idents.get(Name));
@@ -411,6 +466,57 @@ public:
     Record->setBases(&Bases, 1);
 
     return Record;
+  }
+
+  CXXMemberCallExpr *getPushUniformCall(ASTContext &Context, VarDecl *Decl,
+                                        HshStage Stage) const {
+    auto *NTTP = cast<NonTypeTemplateParmDecl>(
+        PushUniformMethod->getTemplateParameters()->getParam(0));
+    std::array<TemplateArgument, 1> TemplateArgs = {TemplateArgument{
+        Context, APSInt(APInt(32, int(Stage) - 1)), NTTP->getType()}};
+    auto *PushUniform =
+        cast<CXXMethodDecl>(PushUniformMethod->getTemplatedDecl());
+    TemplateArgumentListInfo CallTemplArgs(PushUniformMethod->getLocation(),
+                                           {});
+    CallTemplArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgs[0], (Expr *)nullptr));
+    auto *ThisExpr = new (Context) CXXThisExpr({}, Context.VoidTy, true);
+    auto *ME = MemberExpr::Create(
+        Context, ThisExpr, true, {}, {}, {}, PushUniform,
+        DeclAccessPair::make(PushUniform, PushUniform->getAccess()), {},
+        &CallTemplArgs, Context.VoidTy, VK_XValue, OK_Ordinary, NOUR_None);
+    std::array<Expr *, 1> Args{DeclRefExpr::Create(Context, {}, {}, Decl, false,
+                                                   SourceLocation{},
+                                                   Decl->getType(), VK_XValue)};
+    return CXXMemberCallExpr::Create(Context, ME, Args, Context.VoidTy,
+                                     VK_XValue, {});
+  }
+
+  VarTemplateDecl *getDataVarTemplate(ASTContext &Context,
+                                      DeclContext *DC) const {
+    std::array<NamedDecl *, 2> Parms{
+        NonTypeTemplateParmDecl::Create(
+            Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"),
+            QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr),
+        NonTypeTemplateParmDecl::Create(
+            Context, DC, {}, {}, 0, 0, &Context.Idents.get("S"),
+            QualType{EnumStage->getTypeForDecl(), 0}, false, nullptr)};
+    auto *TPL =
+        TemplateParameterList::Create(Context, {}, {}, Parms, {}, nullptr);
+    auto *VD =
+        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"),
+                        QualType{ShaderDataRecordType->getTypeForDecl(), 0},
+                        nullptr, SC_Static);
+    VD->setConstexpr(true);
+    return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
+                                   VD);
+  }
+
+  VarDecl *getGlobalListNode(ASTContext &Context, DeclContext *DC) const {
+    return VarDecl::Create(
+        Context, DC, {}, {}, &Context.Idents.get("global"),
+        QualType{GlobalListNodeRecordType->getTypeForDecl(), 0}, nullptr,
+        SC_Static);
   }
 };
 
@@ -1137,7 +1243,8 @@ public:
     return StageStmts[HshHostStage].Stmts;
   }
 
-  void finalizeResults(ASTContext &Context, CXXRecordDecl *SpecRecord) {
+  void finalizeResults(ASTContext &Context, HshBuiltins &Builtins,
+                       CXXRecordDecl *SpecRecord) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
         auto &RecDecl = HostToStageRecords[D];
@@ -1151,8 +1258,9 @@ public:
         InterStageRecords[D].finalizeRecord();
     }
 
+    std::array<VarDecl *, HshMaxStage> HostToStageVars{};
     SmallVector<Stmt *, 16> NewHostStmts;
-    NewHostStmts.reserve(StageStmts[HshHostStage].Stmts.size() + 5);
+    NewHostStmts.reserve(StageStmts[HshHostStage].Stmts.size() + 10);
     for (int S = HshVertexStage; S < HshMaxStage; ++S) {
       if (UseStages & (1u << unsigned(S))) {
         auto *RecordDecl = HostToStageRecords[S].getRecord();
@@ -1161,6 +1269,7 @@ public:
         VarDecl *BindingVar = VarDecl::Create(Context, SpecRecord, {}, {},
                                               &getToIdent(Context, HshStage(S)),
                                               CDType, {}, SC_None);
+        HostToStageVars[S] = BindingVar;
         NewHostStmts.push_back(new (Context)
                                    DeclStmt(DeclGroupRef(BindingVar), {}, {}));
       }
@@ -1168,6 +1277,11 @@ public:
     NewHostStmts.insert(NewHostStmts.end(),
                         StageStmts[HshHostStage].Stmts.begin(),
                         StageStmts[HshHostStage].Stmts.end());
+    for (int S = HshVertexStage; S < HshMaxStage; ++S) {
+      if (auto *VD = HostToStageVars[S])
+        NewHostStmts.push_back(
+            Builtins.getPushUniformCall(Context, VD, HshStage(S)));
+    }
     StageStmts[HshHostStage].Stmts = std::move(NewHostStmts);
   }
 
@@ -1591,6 +1705,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
     SuppressTagKeyword = true;
     SuppressScope = true;
     AnonymousTagLocations = false;
+    SuppressImplicitBase = true;
 
     DisableTypeQualifiers = true;
     DisableListInitialization = true;
@@ -1784,39 +1899,53 @@ public:
         }
       }
 
-      Builder.finalizeResults(Context, SpecRecord);
+      // Add global list node static
+      SpecRecord->addDecl(Builtins.getGlobalListNode(Context, SpecRecord));
+
+      // Finalize expressions and add host to stage records
+      Builder.finalizeResults(Context, Builtins, SpecRecord);
+
+      // Set public access
       SpecRecord->addDecl(
           AccessSpecDecl::Create(Context, AS_public, SpecRecord, {}, {}));
+
       // Make constructor
       SmallVector<QualType, 4> ConstructorArgs;
       SmallVector<ParmVarDecl *, 4> ConstructorParms;
       for (const auto *Cap : Builder.captures()) {
-        ConstructorArgs.push_back(Cap->getType());
+        ConstructorArgs.push_back(
+            Cap->getType().isPODType(Context)
+                ? Cap->getType()
+                : Context.getLValueReferenceType(Cap->getType().withConst()));
         ConstructorParms.push_back(ParmVarDecl::Create(
             Context, SpecRecord, {}, {}, Cap->getIdentifier(),
             ConstructorArgs.back(), {}, SC_None, nullptr));
       }
       CanQualType CDType =
           SpecRecord->getTypeForDecl()->getCanonicalTypeUnqualified();
-      QualType FuncType = Context.getFunctionType(CDType, ConstructorArgs, {});
       CXXConstructorDecl *CD = CXXConstructorDecl::Create(
           Context, SpecRecord, {},
           {Context.DeclarationNames.getCXXConstructorName(CDType), {}},
-          FuncType, {}, {}, false, false, CSK_unspecified);
+          Context.getFunctionType(CDType, ConstructorArgs, {}), {}, {}, false,
+          false, CSK_unspecified);
       CD->setParams(ConstructorParms);
       CD->setAccess(AS_public);
       CD->setBody(
           CompoundStmt::Create(Context, Builder.hostStatements(), {}, {}));
       SpecRecord->addDecl(CD);
+
+      // Add shader data var template
+      SpecRecord->addDecl(Builtins.getDataVarTemplate(Context, SpecRecord));
+
       SpecRecord->completeDefinition();
 
-      SourceManager &SM = Context.getSourceManager();
-      StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
-      *OS << "/* Auto-generated .hshhead for " << MainName
-          << " */\n\n"
-             "namespace {\n\n";
+      // Emit shader record
       SpecRecord->print(*OS, Context.getPrintingPolicy());
-      *OS << ";\n#define " << ExpName << " ::" << ExpName << "(";
+      *OS << ";\nhsh::_HshGlobalListNode " << ExpName << "::global{&" << ExpName
+          << "::global_build};\n";
+
+      // Emit define macro for capturing args
+      *OS << "#define " << ExpName << " ::" << ExpName << "(";
       bool NeedsComma = false;
       for (const auto *Cap : Builder.captures()) {
         if (!NeedsComma)
@@ -1825,14 +1954,13 @@ public:
           *OS << ", ";
         *OS << Cap->getIdentifier()->getName();
       }
-      *OS << ");\n\n";
+      *OS << "); (void)\n\n";
 
+      // Emit shader data
       for (const auto &T : Targets) {
         auto Policy = MakePrintingPolicy(T, Builtins);
         Builder.printResults(*Policy, *OS);
       }
-
-      *OS << "}\n";
 
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Body);
@@ -1844,9 +1972,9 @@ public:
     if (Diags.hasErrorOccurred())
       return;
 
-    const unsigned IncludeDiagID = Diags.getCustomDiagID(
-        DiagnosticsEngine::Error,
-        ".hshhead include in must appear in global scope");
+    const unsigned IncludeDiagID =
+        Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                              "hshhead include in must appear in global scope");
     if (!HeadInclude) {
       Diags.Report(IncludeDiagID);
       return;
@@ -1869,6 +1997,12 @@ public:
 
     OS = CI.createDefaultOutputFile(false);
 
+    SourceManager &SM = Context.getSourceManager();
+    StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
+    *OS << "/* Auto-generated hshhead for " << MainName
+        << " */\n\n"
+           "namespace {\n\n";
+
     /*
      * Find lambdas that are attributed with hsh::generator_lambda and exist
      * within the main file.
@@ -1881,6 +2015,8 @@ public:
                                  stmt().bind("id"), isExpansionInMainFile())))),
         this);
     Finder.matchAST(Context);
+
+    *OS << "}\n";
   }
 
   StringRef
@@ -1905,7 +2041,7 @@ public:
       if (HeadInclude) {
         DiagnosticsEngine &Diags = Context.getDiagnostics();
         unsigned DiagID = Diags.getCustomDiagID(
-            DiagnosticsEngine::Error, "multiple .hshhead includes in one file");
+            DiagnosticsEngine::Error, "multiple hshhead includes in one file");
         Diags.Report(HashLoc, DiagID);
         unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
                                                  "previous include was here");
@@ -1952,8 +2088,7 @@ public:
       if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
         SmallString<1024> VirtualFilePath(llvm::StringLiteral("./"));
         VirtualFilePath += FileName;
-        FM.getVirtualFile(VirtualFilePath, StubInclude.size(),
-                          std::time(nullptr));
+        FM.getVirtualFile(VirtualFilePath, 0, std::time(nullptr));
         RecoveryPath.push_back('.');
         return true;
       }
@@ -1986,7 +2121,8 @@ public:
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   auto Policy = CI.getASTContext().getPrintingPolicy();
-  Policy.Indentation = 1;
+  Policy.Indentation = true;
+  Policy.SuppressImplicitBase = true;
   CI.getASTContext().setPrintingPolicy(Policy);
   auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
   CI.getPreprocessor().addPPCallbacks(
