@@ -1,5 +1,6 @@
 #include <type_traits>
 #include <utility>
+#include <array>
 
 namespace hsh {
 namespace detail {
@@ -75,7 +76,15 @@ struct vertex_buffer : detail::base_vertex_buffer {
 float dot(const float3&, const float3&);
 
 enum Target {
-  HT_GLSL
+  HT_GLSL,
+  HT_HLSL,
+  HT_DXBC,
+  HT_DXIL,
+  HT_SPIRV,
+  HT_METAL,
+  HT_METAL_BIN_MAC,
+  HT_METAL_BIN_IOS,
+  HT_METAL_BIN_TVOS,
 };
 
 enum Stage {
@@ -96,14 +105,19 @@ public:
   }
 };
 
-struct _HshShaderData {
+struct _HshShaderDataBlob {
   std::size_t size = 0;
-  const unsigned char *data = nullptr;
-  unsigned long hash = 0;
-  constexpr _HshShaderData() = default;
+  const std::uint8_t *data = nullptr;
+  std::uint64_t hash = 0;
+  constexpr _HshShaderDataBlob() = default;
   template <typename T>
-  constexpr _HshShaderData(const T data, unsigned long hash)
-  : size(std::extent_v<T>), data(data), hash(hash) {}
+  constexpr _HshShaderDataBlob(const T data, std::uint64_t hash)
+  : size(std::extent<T>::value), data(data), hash(hash) {}
+};
+
+template <Target T>
+struct _HshShaderData {
+  std::array<_HshShaderDataBlob, MaxStage> stages;
 };
 
 struct _HshGlobalListNode;

@@ -10,6 +10,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_carray_ostream.h"
 #include "llvm/Support/raw_comment_ostream.h"
+#include "llvm/Support/xxhash.h"
 
 #include "clang/AST/ASTDumper.h"
 #include "clang/AST/DeclVisitor.h"
@@ -23,6 +24,8 @@
 #include "clang/Hsh/HshGenerator.h"
 #include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/PreprocessorOptions.h"
+
+#include <unordered_set>
 
 namespace clang::hshgen {
 
@@ -93,7 +96,7 @@ private:
   FunctionTemplateDecl *PushUniformMethod = nullptr;
   EnumDecl *EnumTarget = nullptr;
   EnumDecl *EnumStage = nullptr;
-  CXXRecordDecl *ShaderDataRecordType = nullptr;
+  ClassTemplateDecl *ShaderDataTemplateType = nullptr;
   CXXRecordDecl *GlobalListNodeRecordType = nullptr;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
@@ -323,9 +326,10 @@ public:
       Diags.Report(DiagID);
     }
 
-    if (auto *R = dyn_cast_or_null<CXXRecordDecl>(
-            TypeFinder().Find(llvm::StringLiteral("_HshShaderData"), TU))) {
-      ShaderDataRecordType = R;
+    if (auto *T =
+            dyn_cast_or_null<ClassTemplateDecl>(ClassTemplateFinder().Find(
+                llvm::StringLiteral("_HshShaderData"), TU))) {
+      ShaderDataTemplateType = T;
     } else {
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error,
@@ -468,6 +472,17 @@ public:
     return Record;
   }
 
+  QualType getHshShaderDataSpecializationType(ASTContext &Context) const {
+    auto *NTTP = cast<NonTypeTemplateParmDecl>(
+        ShaderDataTemplateType->getTemplateParameters()->getParam(0));
+    TemplateArgumentListInfo TemplateArgs;
+    TemplateArgs.addArgument(TemplateArgumentLoc(
+        TemplateArgument{NTTP, NTTP->getType()}, (Expr *)nullptr));
+    TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
+        Context, ShaderDataTemplateType, TemplateArgs);
+    return TSI->getType();
+  }
+
   CXXMemberCallExpr *getPushUniformCall(ASTContext &Context, VarDecl *Decl,
                                         HshStage Stage) const {
     auto *NTTP = cast<NonTypeTemplateParmDecl>(
@@ -494,20 +509,31 @@ public:
 
   VarTemplateDecl *getDataVarTemplate(ASTContext &Context,
                                       DeclContext *DC) const {
+    NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
+        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"),
+        QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
     std::array<NamedDecl *, 2> Parms{
-        NonTypeTemplateParmDecl::Create(
-            Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"),
-            QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr),
+        TargetParm,
         NonTypeTemplateParmDecl::Create(
             Context, DC, {}, {}, 0, 0, &Context.Idents.get("S"),
             QualType{EnumStage->getTypeForDecl(), 0}, false, nullptr)};
     auto *TPL =
         TemplateParameterList::Create(Context, {}, {}, Parms, {}, nullptr);
-    auto *VD =
-        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"),
-                        QualType{ShaderDataRecordType->getTypeForDecl(), 0},
-                        nullptr, SC_Static);
+
+    auto *PExpr =
+        DeclRefExpr::Create(Context, {}, {}, TargetParm, false,
+                            SourceLocation{}, TargetParm->getType(), VK_XValue);
+    TemplateArgumentListInfo TemplateArgs;
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument{PExpr}, PExpr));
+    TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
+        Context, ShaderDataTemplateType, TemplateArgs);
+
+    auto *VD = VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"),
+                               TSI->getType(), nullptr, SC_Static);
     VD->setConstexpr(true);
+    VD->setInitStyle(VarDecl::ListInit);
+    VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
     return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
                                    VD);
   }
@@ -821,6 +847,196 @@ template <> constexpr HshStage StageOfTextureAttr<HshFragmentTextureAttr>() {
   return HshFragmentStage;
 }
 
+enum HshTextureKind { Texture2D, Texture3D, TextureCube };
+
+struct TextureRecord {
+  StringRef Name;
+  HshTextureKind Kind;
+};
+
+struct SamplerRecord {
+  StringRef Name;
+  SamplerConfig Config;
+};
+
+struct ShaderPrintingPolicyBase : PrintingPolicy {
+  HshTarget Target;
+  virtual ~ShaderPrintingPolicyBase() = default;
+  virtual void printStage(raw_ostream &OS, CXXRecordDecl *UniformRecord,
+                          CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
+                          ArrayRef<CXXRecordDecl *> VBOs,
+                          ArrayRef<TextureRecord> Textures,
+                          ArrayRef<SamplerRecord> Samplers, CompoundStmt *Stmts,
+                          HshStage Stage, HshStage From, HshStage To) = 0;
+  explicit ShaderPrintingPolicyBase(HshTarget Target)
+      : PrintingPolicy(LangOptions()), Target(Target) {}
+};
+
+template <typename ImplClass>
+struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
+  HshBuiltins &Builtins;
+  explicit ShaderPrintingPolicy(HshBuiltins &Builtins, HshTarget Target)
+      : ShaderPrintingPolicyBase(Target), Builtins(Builtins) {
+    Callbacks = this;
+    Indentation = 1;
+    IncludeTagDefinition = false;
+    SuppressTagKeyword = true;
+    SuppressScope = true;
+    AnonymousTagLocations = false;
+    SuppressImplicitBase = true;
+
+    DisableTypeQualifiers = true;
+    DisableListInitialization = true;
+  }
+
+  StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
+    auto HBT = Builtins.identifyBuiltinType(D->getTypeForDecl());
+    if (HBT == HBT_None)
+      return {};
+    return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBT);
+  }
+
+  StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const override {
+    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
+      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
+      if (HBM == HBM_None)
+        return {};
+      return ImplClass::identifierOfCXXMethod(HBM, MemberCall);
+    }
+    if (auto *DeclRef =
+            dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
+      if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
+        auto HBF = Builtins.identifyBuiltinFunction(FD);
+        if (HBF == HBF_None)
+          return {};
+        return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBF);
+      }
+    }
+    return {};
+  }
+
+  bool overrideCallArguments(
+      CallExpr *C, const std::function<void(StringRef)> &StringArg,
+      const std::function<void(Expr *)> &ExprArg) const override {
+    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
+      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
+      if (HBM == HBM_None)
+        return {};
+      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg,
+                                                   ExprArg);
+    }
+    return false;
+  }
+
+  StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const override {
+    if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
+      if (PVD->hasAttr<HshPositionAttr>())
+        return static_cast<const ImplClass &>(*this)
+            .identifierOfVertexPosition();
+    }
+    return {};
+  }
+};
+
+struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
+  static constexpr HshTarget SourceTarget = HT_GLSL;
+  static constexpr StringRef identifierOfVertexPosition() {
+    return llvm::StringLiteral("gl_Position");
+  }
+
+  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
+                                                   CXXMemberCallExpr *C) {
+    switch (HBM) {
+    case HBM_sample_texture2d:
+      return llvm::StringLiteral("texture");
+    default:
+      return {};
+    }
+  }
+
+  static constexpr bool
+  overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
+                             const std::function<void(StringRef)> &StringArg,
+                             const std::function<void(Expr *)> &ExprArg) {
+    switch (HBM) {
+    case HBM_sample_texture2d: {
+      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      ExprArg(C->getArg(0));
+      return true;
+    }
+    default:
+      return false;
+    }
+  }
+
+  void printStage(raw_ostream &OS, CXXRecordDecl *UniformRecord,
+                  CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
+                  ArrayRef<CXXRecordDecl *> VBOs,
+                  ArrayRef<TextureRecord> Textures,
+                  ArrayRef<SamplerRecord> Samplers, CompoundStmt *Stmts,
+                  HshStage Stage, HshStage From, HshStage To) override {
+    OS << "#version 450 core\n";
+    if (UniformRecord) {
+      OS << "layout(binding = " << int(Stage) - 1 << ") uniform HostBlock {\n";
+      for (auto *FD : UniformRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << '\n';
+      }
+      OS << "} from_host;\n";
+    }
+
+    if (FromRecord) {
+      OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
+         << "{\n";
+      for (auto *FD : FromRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << '\n';
+      }
+      OS << "} from_" << HshStageToString(From) << ";\n";
+    }
+
+    if (ToRecord) {
+      OS << "out " << HshStageToString(Stage) << "_to_" << HshStageToString(To)
+         << "{\n";
+      for (auto *FD : ToRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << '\n';
+      }
+      OS << "} to_" << HshStageToString(To) << ";\n";
+    }
+
+    OS << "void main() ";
+    Stmts->printPretty(OS, nullptr, *this);
+  }
+
+  using ShaderPrintingPolicy<GLSLPrintingPolicy>::ShaderPrintingPolicy;
+};
+
+static std::unique_ptr<ShaderPrintingPolicyBase>
+MakePrintingPolicy(HshBuiltins &Builtins, HshTarget Target) {
+  switch (Target) {
+  case HT_GLSL:
+  case HT_HLSL:
+  case HT_DXBC:
+  case HT_METAL:
+  case HT_METAL_BIN_MAC:
+  case HT_METAL_BIN_IOS:
+  case HT_METAL_BIN_TVOS:
+  case HT_SPIRV:
+  case HT_DXIL:
+    return std::make_unique<GLSLPrintingPolicy>(Builtins, Target);
+  }
+}
+
+struct StageSources {
+  HshTarget Target;
+  std::array<std::string, HshMaxStage> Sources;
+  explicit StageSources(HshTarget Target) : Target(Target) {}
+};
+
 class StagesBuilder
     : public StmtVisitor<StagesBuilder, Expr *, HshStage, HshStage> {
   ASTContext &Context;
@@ -937,6 +1153,7 @@ class StagesBuilder
       InterStageRecords; /* Indexed by consumer stage */
   struct StageStmtList {
     SmallVector<Stmt *, 16> Stmts;
+    CompoundStmt *CStmts = nullptr;
     SmallVector<std::pair<unsigned, VarDecl *>, 16> StmtDeclRefCount;
   };
   std::array<StageStmtList, HshMaxStage> StageStmts;
@@ -1258,9 +1475,10 @@ public:
         InterStageRecords[D].finalizeRecord();
     }
 
+    auto &HostStmts = StageStmts[HshHostStage];
     std::array<VarDecl *, HshMaxStage> HostToStageVars{};
     SmallVector<Stmt *, 16> NewHostStmts;
-    NewHostStmts.reserve(StageStmts[HshHostStage].Stmts.size() + 10);
+    NewHostStmts.reserve(HostStmts.Stmts.size() + HshMaxStage * 2);
     for (int S = HshVertexStage; S < HshMaxStage; ++S) {
       if (UseStages & (1u << unsigned(S))) {
         auto *RecordDecl = HostToStageRecords[S].getRecord();
@@ -1274,22 +1492,54 @@ public:
                                    DeclStmt(DeclGroupRef(BindingVar), {}, {}));
       }
     }
-    NewHostStmts.insert(NewHostStmts.end(),
-                        StageStmts[HshHostStage].Stmts.begin(),
-                        StageStmts[HshHostStage].Stmts.end());
+    NewHostStmts.insert(NewHostStmts.end(), HostStmts.Stmts.begin(),
+                        HostStmts.Stmts.end());
     for (int S = HshVertexStage; S < HshMaxStage; ++S) {
       if (auto *VD = HostToStageVars[S])
         NewHostStmts.push_back(
             Builtins.getPushUniformCall(Context, VD, HshStage(S)));
     }
-    StageStmts[HshHostStage].Stmts = std::move(NewHostStmts);
+    HostStmts.Stmts = std::move(NewHostStmts);
+
+    for (int S = HshHostStage; S < HshMaxStage; ++S) {
+      if (UseStages & (1u << unsigned(S))) {
+        auto &Stmts = StageStmts[S];
+        Stmts.CStmts = CompoundStmt::Create(Context, Stmts.Stmts, {}, {});
+      }
+    }
   }
 
-  void printResults(const PrintingPolicy &Policy, raw_ostream &OS) {
-    for (int D = HshVertexStage; D < HshMaxStage; ++D) {
-      if (UseStages & (1u << unsigned(D))) {
-        HostToStageRecords[D].getRecord()->print(llvm::outs(), Policy);
-        llvm::outs() << '\n';
+  HshStage previousUsedStage(HshStage S) const {
+    for (int D = S - 1; D >= HshVertexStage; --D) {
+      if (UseStages & (1u << unsigned(D)))
+        return HshStage(D);
+    }
+    return HshNoStage;
+  }
+
+  HshStage nextUsedStage(HshStage S) const {
+    for (int D = S + 1; D < HshMaxStage; ++D) {
+      if (UseStages & (1u << unsigned(D)))
+        return HshStage(D);
+    }
+    return HshNoStage;
+  }
+
+  StageSources printResults(ShaderPrintingPolicyBase &Policy) {
+    StageSources Sources(Policy.Target);
+
+    for (int S = HshVertexStage; S < HshMaxStage; ++S) {
+      if (UseStages & (1u << unsigned(S))) {
+        raw_string_ostream OS(Sources.Sources[S]);
+        Policy.printStage(
+            OS, HostToStageRecords[S].getRecord(),
+            InterStageRecords[S].getRecord(),
+            S + 1 != HshMaxStage ? InterStageRecords[S + 1].getRecord()
+                                 : nullptr,
+            {}, {}, {}, StageStmts[S].CStmts, HshStage(S),
+            previousUsedStage(HshStage(S)), nextUsedStage(HshStage(S)));
+        HostToStageRecords[S].getRecord()->print(llvm::outs(), Policy);
+        llvm::outs() << '\n' << OS.str() << '\n';
       }
     }
 
@@ -1308,6 +1558,8 @@ public:
         Stmts->printPretty(llvm::outs(), nullptr, Policy);
       }
     }
+
+    return Sources;
   }
 };
 
@@ -1690,123 +1942,64 @@ public:
   }
 };
 
-struct ShaderPrintingPolicyBase : PrintingPolicy {
-  virtual ~ShaderPrintingPolicyBase() = default;
-  using PrintingPolicy::PrintingPolicy;
+struct StageBinaries {
+  HshTarget Target;
+  std::array<std::pair<std::vector<uint8_t>, uint64_t>, HshMaxStage> Binaries;
+  void updateHashes() {
+    for (auto &Binary : Binaries)
+      if (!Binary.first.empty())
+        Binary.second = xxHash64(Binary.first);
+  }
+  explicit StageBinaries(HshTarget Target) : Target(Target) {}
 };
 
-template <typename ImplClass>
-struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
-  HshBuiltins &Builtins;
-  explicit ShaderPrintingPolicy(HshBuiltins &Builtins)
-      : ShaderPrintingPolicyBase(LangOptions()), Builtins(Builtins) {
-    Callbacks = this;
-    IncludeTagDefinition = false;
-    SuppressTagKeyword = true;
-    SuppressScope = true;
-    AnonymousTagLocations = false;
-    SuppressImplicitBase = true;
+class StagesCompilerBase {
+protected:
+  virtual StageBinaries doCompile() const = 0;
 
-    DisableTypeQualifiers = true;
-    DisableListInitialization = true;
-  }
-
-  StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
-    auto HBT = Builtins.identifyBuiltinType(D->getTypeForDecl());
-    if (HBT == HBT_None)
-      return {};
-    return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBT);
-  }
-
-  StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const override {
-    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
-      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
-      if (HBM == HBM_None)
-        return {};
-      return ImplClass::identifierOfCXXMethod(HBM, MemberCall);
-    }
-    if (auto *DeclRef =
-            dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
-      if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
-        auto HBF = Builtins.identifyBuiltinFunction(FD);
-        if (HBF == HBF_None)
-          return {};
-        return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBF);
-      }
-    }
-    return {};
-  }
-
-  bool overrideCallArguments(
-      CallExpr *C, const std::function<void(StringRef)> &StringArg,
-      const std::function<void(Expr *)> &ExprArg) const override {
-    if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
-      auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
-      if (HBM == HBM_None)
-        return {};
-      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg,
-                                                   ExprArg);
-    }
-    return false;
-  }
-
-  StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const override {
-    if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
-      if (PVD->hasAttr<HshPositionAttr>())
-        return static_cast<const ImplClass &>(*this)
-            .identifierOfVertexPosition();
-    }
-    return {};
+public:
+  virtual ~StagesCompilerBase() = default;
+  StageBinaries compile() const {
+    auto Binaries = doCompile();
+    Binaries.updateHashes();
+    return Binaries;
   }
 };
 
-struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
-  static constexpr HshTarget SourceTarget = HT_GLSL;
-  static constexpr StringRef identifierOfVertexPosition() {
-    return llvm::StringLiteral("gl_Position");
+class StagesCompilerText : public StagesCompilerBase {
+  const StageSources &Sources;
+
+protected:
+  StageBinaries doCompile() const override {
+    StageBinaries Binaries(Sources.Target);
+    auto OutIt = Binaries.Binaries.begin();
+    for (const auto &Stage : Sources.Sources) {
+      auto &Out = OutIt++->first;
+      if (Stage.empty())
+        continue;
+      Out.resize(Stage.size() + 1);
+      std::memcpy(&Out[0], Stage.data(), Stage.size());
+    }
+    return Binaries;
   }
 
-  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
-                                                   CXXMemberCallExpr *C) {
-    switch (HBM) {
-    case HBM_sample_texture2d:
-      return llvm::StringLiteral("texture");
-    default:
-      return {};
-    }
-  }
-
-  static constexpr bool
-  overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
-                             const std::function<void(StringRef)> &StringArg,
-                             const std::function<void(Expr *)> &ExprArg) {
-    switch (HBM) {
-    case HBM_sample_texture2d: {
-      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
-      ExprArg(C->getArg(0));
-      return true;
-    }
-    default:
-      return false;
-    }
-  }
-
-  using ShaderPrintingPolicy<GLSLPrintingPolicy>::ShaderPrintingPolicy;
+public:
+  explicit StagesCompilerText(const StageSources &Sources) : Sources(Sources) {}
 };
 
-static std::unique_ptr<ShaderPrintingPolicyBase>
-MakePrintingPolicy(HshTarget Target, HshBuiltins &Builtins) {
-  switch (Target) {
+static std::unique_ptr<StagesCompilerBase>
+MakeCompiler(const StageSources &Sources) {
+  switch (Sources.Target) {
   case HT_GLSL:
   case HT_HLSL:
-  case HT_HLSL_BIN:
+  case HT_DXBC:
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
   case HT_METAL_BIN_TVOS:
   case HT_SPIRV:
   case HT_DXIL:
-    return std::make_unique<GLSLPrintingPolicy>(Builtins);
+    return std::make_unique<StagesCompilerText>(Sources);
   }
 }
 
@@ -1843,9 +2036,16 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
   std::unique_ptr<raw_pwrite_stream> OS;
+  std::unordered_set<uint64_t> SeenHashes;
+  std::string AnonNSString;
+  raw_string_ostream AnonOS{AnonNSString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
   std::map<SourceLocation, std::pair<SourceRange, std::string>>
       SeenHshExpansions;
+
+  static std::string SymbolForHshHash(uint64_t Hash) {
+    return "_hsh_"s + llvm::utohexstr(Hash);
+  }
 
 public:
   explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
@@ -1940,27 +2140,52 @@ public:
       SpecRecord->completeDefinition();
 
       // Emit shader record
-      SpecRecord->print(*OS, Context.getPrintingPolicy());
-      *OS << ";\nhsh::_HshGlobalListNode " << ExpName << "::global{&" << ExpName
-          << "::global_build};\n";
+      SpecRecord->print(AnonOS, Context.getPrintingPolicy());
+      AnonOS << ";\nhsh::_HshGlobalListNode " << ExpName << "::global{&"
+             << ExpName << "::global_build};\n";
+
+      // Emit shader data
+      for (auto Target : Targets) {
+        auto Policy = MakePrintingPolicy(Builtins, Target);
+        auto Sources = Builder.printResults(*Policy);
+        auto Compiler = MakeCompiler(Sources);
+        auto Binaries = Compiler->compile();
+        auto SourceIt = Sources.Sources.begin();
+        int StageIt = HshHostStage;
+        for (auto &[Data, Hash] : Binaries.Binaries) {
+          auto &Source = *SourceIt++;
+          auto Stage = HshStage(StageIt++);
+          if (Data.empty())
+            continue;
+          if (SeenHashes.find(Hash) != SeenHashes.end())
+            continue;
+          SeenHashes.insert(Hash);
+          {
+            raw_comment_ostream CommentOut(*OS);
+            CommentOut << HshStageToString(Stage) << " source targeting "
+                       << HshTargetToString(Binaries.Target) << "\n\n";
+            CommentOut << Source;
+          }
+          *OS << "inline ";
+          {
+            raw_carray_ostream DataOut(*OS, SymbolForHshHash(Hash));
+            DataOut.write((const char *)Data.data(), Data.size());
+          }
+          *OS << "\n\n";
+        }
+      }
 
       // Emit define macro for capturing args
-      *OS << "#define " << ExpName << " ::" << ExpName << "(";
+      AnonOS << "#define " << ExpName << " ::" << ExpName << "(";
       bool NeedsComma = false;
       for (const auto *Cap : Builder.captures()) {
         if (!NeedsComma)
           NeedsComma = true;
         else
-          *OS << ", ";
-        *OS << Cap->getIdentifier()->getName();
+          AnonOS << ", ";
+        AnonOS << Cap->getIdentifier()->getName();
       }
-      *OS << "); (void)\n\n";
-
-      // Emit shader data
-      for (const auto &T : Targets) {
-        auto Policy = MakePrintingPolicy(T, Builtins);
-        Builder.printResults(*Policy, *OS);
-      }
+      AnonOS << "); (void)\n\n";
 
       ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
       P.Visit(Body);
@@ -1989,19 +2214,16 @@ public:
     }
 
     Builtins.findBuiltinDecls(Context);
-    if (Context.getDiagnostics().hasErrorOccurred()) {
-      ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
-      P.Visit(Context.getTranslationUnitDecl());
+    if (Context.getDiagnostics().hasErrorOccurred())
       return;
-    }
 
     OS = CI.createDefaultOutputFile(false);
 
     SourceManager &SM = Context.getSourceManager();
     StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
-    *OS << "/* Auto-generated hshhead for " << MainName
-        << " */\n\n"
-           "namespace {\n\n";
+    *OS << "/* Auto-generated hshhead for " << MainName << " */\n\n";
+
+    AnonOS << "namespace {\n\n";
 
     /*
      * Find lambdas that are attributed with hsh::generator_lambda and exist
@@ -2016,7 +2238,9 @@ public:
         this);
     Finder.matchAST(Context);
 
-    *OS << "}\n";
+    AnonOS << "}\n";
+
+    *OS << AnonOS.str();
   }
 
   StringRef
@@ -2121,7 +2345,7 @@ public:
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   auto Policy = CI.getASTContext().getPrintingPolicy();
-  Policy.Indentation = true;
+  Policy.Indentation = 1;
   Policy.SuppressImplicitBase = true;
   CI.getASTContext().setPrintingPolicy(Policy);
   auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);

@@ -15,14 +15,37 @@ namespace clang::hshgen {
 enum HshTarget {
   HT_GLSL,
   HT_HLSL,
-  HT_HLSL_BIN,
+  HT_DXBC,
+  HT_DXIL,
+  HT_SPIRV,
   HT_METAL,
   HT_METAL_BIN_MAC,
   HT_METAL_BIN_IOS,
   HT_METAL_BIN_TVOS,
-  HT_SPIRV,
-  HT_DXIL
 };
+
+constexpr StringRef HshTargetToString(HshTarget Target) {
+  switch (Target) {
+  case HT_GLSL:
+    return llvm::StringLiteral("glsl");
+  case HT_HLSL:
+    return llvm::StringLiteral("hlsl");
+  case HT_DXBC:
+    return llvm::StringLiteral("dxbc");
+  case HT_DXIL:
+    return llvm::StringLiteral("dxil");
+  case HT_SPIRV:
+    return llvm::StringLiteral("spirv");
+  case HT_METAL:
+    return llvm::StringLiteral("metal");
+  case HT_METAL_BIN_MAC:
+    return llvm::StringLiteral("metal-bin-mac");
+  case HT_METAL_BIN_IOS:
+    return llvm::StringLiteral("metal-bin-ios");
+  case HT_METAL_BIN_TVOS:
+    return llvm::StringLiteral("metal-bin-tvos");
+  }
+}
 
 class GenerateAction : public ASTFrontendAction {
   OwningArrayRef<HshTarget> Targets;

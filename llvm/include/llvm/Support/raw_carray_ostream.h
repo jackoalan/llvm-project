@@ -22,7 +22,7 @@ namespace llvm {
 /// bytes in.
 class raw_carray_ostream : public raw_ostream {
   raw_ostream &OS;
-  static constexpr size_t LineSize = 16;
+  static constexpr size_t LineSize = 12;
   size_t LineRem = 0;
 
   /// See raw_ostream::write_impl.
