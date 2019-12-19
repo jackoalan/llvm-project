@@ -18,10 +18,15 @@
 
 namespace clang {
 
+class BuiltinType;
 class CallExpr;
+class CompoundStmt;
+class CXXOperatorCallExpr;
+class CXXTemporaryObjectExpr;
 class DeclRefExpr;
 class Expr;
 class LangOptions;
+class MemberExpr;
 class SourceManager;
 class Stmt;
 class TagDecl;
@@ -29,7 +34,7 @@ class TagDecl;
 class PrinterHelper {
 public:
   virtual ~PrinterHelper();
-  virtual bool handledStmt(Stmt* E, raw_ostream& OS) = 0;
+  virtual bool handledStmt(Stmt *E, raw_ostream &OS) = 0;
 };
 
 /// Callbacks to use to customize the behavior of the pretty-printer.
@@ -43,20 +48,68 @@ public:
     return std::string(Path);
   }
 
+  /// Override name used for a BuiltinType.
+  virtual StringRef overrideBuiltinTypeName(const BuiltinType *T) const {
+    return {};
+  }
+
   /// Override name used in a TagDecl.
   virtual StringRef overrideTagDeclIdentifier(TagDecl *D) const { return {}; }
 
   /// Override name used in a call (including CXXMemberCallExprs).
-  virtual StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const { return {}; }
+  virtual StringRef overrideBuiltinFunctionIdentifier(CallExpr *C) const {
+    return {};
+  }
 
   /// Incrementally build call arguments using either supplied lambda.
   /// Returning false will apply default arguments instead.
-  virtual bool overrideCallArguments(CallExpr *C,
-    const std::function<void(StringRef)> &StringArg,
-    const std::function<void(Expr*)> &ExprArg) const { return false; }
+  virtual bool
+  overrideCallArguments(CallExpr *C,
+                        const std::function<void(StringRef)> &StringArg,
+                        const std::function<void(Expr *)> &ExprArg) const {
+    return false;
+  }
+
+  /// Incrementally print operator call to replace default grammar.
+  virtual bool
+  overrideCXXOperatorCall(CXXOperatorCallExpr *C, raw_ostream &OS,
+                          const std::function<void(Expr *)> &ExprArg) const {
+    return false;
+  }
+
+  /// Incrementally print temporary object expr replace default grammar.
+  virtual bool overrideCXXTemporaryObjectExpr(
+      CXXTemporaryObjectExpr *C, raw_ostream &OS,
+      const std::function<void(Expr *)> &ExprArg) const {
+    return false;
+  }
 
   /// Override name used in a DeclRefExpr.
-  virtual StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const { return {}; }
+  virtual StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const {
+    return {};
+  }
+
+  /// Prepend string to member expr base, optionally replacing it entirely.
+  virtual StringRef prependMemberExprBase(MemberExpr *ME,
+                                          bool &ReplaceBase) const {
+    return {};
+  }
+
+  /// Print member access operator as underscore in case it is flattened into
+  /// an identifier.
+  virtual bool shouldPrintMemberExprUnderscore(MemberExpr *ME) const {
+    return false;
+  }
+
+  /// Opportunity to print something before first statement.
+  virtual void
+  printCompoundStatementBefore(const std::function<raw_ostream &()> &Indent,
+                               CompoundStmt *CS) const {}
+
+  /// Opportunity to print something after last statement.
+  virtual void
+  printCompoundStatementAfter(const std::function<raw_ostream &()> &Indent,
+                              CompoundStmt *CS) const {}
 };
 
 /// Describes how types, statements, expressions, and declarations should be

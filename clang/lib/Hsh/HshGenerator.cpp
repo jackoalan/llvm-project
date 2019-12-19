@@ -6,7 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Config/config.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_carray_ostream.h"
 #include "llvm/Support/raw_comment_ostream.h"
@@ -25,7 +27,12 @@
 #include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/PreprocessorOptions.h"
 
+#include "dxc/dxcapi.h"
+
 #include <unordered_set>
+
+#define XSTR(X) #X
+#define STR(X) XSTR(X)
 
 namespace clang::hshgen {
 
@@ -33,6 +40,104 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 using namespace std::literals;
+
+#ifdef __EMULATE_UUID
+#define HSH_IID_PPV_ARGS(ppType)                                               \
+  DxcLibrary::SharedInstance->UUIDs.get<std::decay_t<decltype(**(ppType))>>(), \
+      reinterpret_cast<void **>(ppType)
+#else // __EMULATE_UUID
+#define HSH_IID_PPV_ARGS(ppType)                                               \
+  __uuidof(**(ppType)), IID_PPV_ARGS_Helper(ppType)
+#endif // __EMULATE_UUID
+
+class DxcLibrary {
+  sys::DynamicLibrary Library;
+  DxcCreateInstanceProc DxcCreateInstance;
+
+public:
+  static llvm::Optional<DxcLibrary> SharedInstance;
+  static void EnsureSharedInstance(StringRef ProgramDir,
+                                   DiagnosticsEngine &Diags) {
+    if (!SharedInstance)
+      SharedInstance.emplace(ProgramDir, Diags);
+  }
+
+#ifdef __EMULATE_UUID
+  struct ImportedUUIDs {
+    void *_IUnknown = nullptr;
+    void *_IDxcBlob = nullptr;
+    void *_IDxcBlobUtf8 = nullptr;
+    void *_IDxcResult = nullptr;
+    void *_IDxcCompiler3 = nullptr;
+    void import(sys::DynamicLibrary &Library) {
+      _IUnknown = Library.getAddressOfSymbol("_ZN8IUnknown11IUnknown_IDE");
+      _IDxcBlob = Library.getAddressOfSymbol("_ZN8IDxcBlob11IDxcBlob_IDE");
+      _IDxcBlobUtf8 =
+          Library.getAddressOfSymbol("_ZN12IDxcBlobUtf815IDxcBlobUtf8_IDE");
+      _IDxcResult =
+          Library.getAddressOfSymbol("_ZN10IDxcResult13IDxcResult_IDE");
+      _IDxcCompiler3 =
+          Library.getAddressOfSymbol("_ZN13IDxcCompiler316IDxcCompiler3_IDE");
+    }
+    template <typename T> REFIID get();
+  } UUIDs;
+#endif
+
+  explicit DxcLibrary(StringRef ProgramDir, DiagnosticsEngine &Diags) {
+    SmallString<64> LibPath(ProgramDir);
+    sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
+    std::string Err;
+    Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);
+    if (!Library.isValid()) {
+      Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                         "unable to load %0; %1"))
+          << LibPath << Err;
+      return;
+    }
+    DxcCreateInstance = reinterpret_cast<DxcCreateInstanceProc>(
+        Library.getAddressOfSymbol("DxcCreateInstance"));
+    if (!DxcCreateInstance) {
+      Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                         "unable to find DxcCreateInstance"));
+      return;
+    }
+#ifdef __EMULATE_UUID
+    UUIDs.import(Library);
+#endif
+  }
+
+  CComPtr<IDxcCompiler3> MakeCompiler() const;
+};
+llvm::Optional<DxcLibrary> DxcLibrary::SharedInstance;
+
+#ifdef __EMULATE_UUID
+template <> REFIID DxcLibrary::ImportedUUIDs::get<IUnknown>() {
+  return _IUnknown;
+}
+template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcBlob>() {
+  return _IDxcBlob;
+}
+template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcBlobUtf8>() {
+  return _IDxcBlobUtf8;
+}
+template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcResult>() {
+  return _IDxcResult;
+}
+template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcCompiler3>() {
+  return _IDxcCompiler3;
+}
+#endif
+
+CComPtr<IDxcCompiler3> DxcLibrary::MakeCompiler() const {
+  CComPtr<IDxcCompiler3> Ret;
+  DxcCreateInstance(CLSID_DxcCompiler, HSH_IID_PPV_ARGS(&Ret));
+  return Ret;
+}
+
+#define HSH_MAX_VERTEX_BUFFERS 32
+#define HSH_MAX_TEXTURES 32
+#define HSH_MAX_SAMPLERS 32
+#define HSH_MAX_COLOR_TARGETS 8
 
 enum HshStage : int {
   HshNoStage = -1,
@@ -64,9 +169,38 @@ static StringRef HshStageToString(HshStage Stage) {
   }
 }
 
+enum HshAttributeKind { PerVertex, PerInstance };
+
+enum HshFormat : uint8_t {
+  R8_UNORM,
+  RG8_UNORM,
+  RGB8_UNORM,
+  RGBA8_UNORM,
+  R16_UNORM,
+  RG16_UNORM,
+  RGB16_UNORM,
+  RGBA16_UNORM,
+  R8_SNORM,
+  RG8_SNORM,
+  RGB8_SNORM,
+  RGBA8_SNORM,
+  R16_SNORM,
+  RG16_SNORM,
+  RGB16_SNORM,
+  RGBA16_SNORM,
+  R32_SFLOAT,
+  RG32_SFLOAT,
+  RGB32_SFLOAT,
+  RGBA32_SFLOAT,
+};
+
 enum HshBuiltinType {
   HBT_None,
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix) HBT_##Name,
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal) HBT_##Name,
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal) HBT_##Name,
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  HBT_##Name##_float, HBT_##Name##_int, HBT_##Name##_uint,
 #include "BuiltinTypes.def"
   HBT_Max
 };
@@ -80,7 +214,7 @@ enum HshBuiltinFunction {
 
 enum HshBuiltinCXXMethod {
   HBM_None,
-#define BUILTIN_CXX_METHOD(Name, Record, ...) HBM_##Name##_##Record,
+#define BUILTIN_CXX_METHOD(Name, IsSwizzle, Record, ...) HBM_##Name##_##Record,
 #include "BuiltinCXXMethods.def"
   HBM_Max
 };
@@ -96,18 +230,78 @@ private:
   FunctionTemplateDecl *PushUniformMethod = nullptr;
   EnumDecl *EnumTarget = nullptr;
   EnumDecl *EnumStage = nullptr;
+  EnumDecl *EnumInputRate = nullptr;
+  EnumDecl *EnumFormat = nullptr;
   ClassTemplateDecl *ShaderDataTemplateType = nullptr;
   CXXRecordDecl *GlobalListNodeRecordType = nullptr;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
   std::array<const CXXMethodDecl *, HBM_Max> Methods{};
 
+  static void printEnumeratorString(raw_ostream &Out,
+                                    const PrintingPolicy &Policy, EnumDecl *ED,
+                                    const APSInt &Val) {
+    for (const EnumConstantDecl *ECD : ED->enumerators()) {
+      if (llvm::APSInt::isSameValue(ECD->getInitVal(), Val)) {
+        ECD->printQualifiedName(Out, Policy);
+        return;
+      }
+    }
+  }
+
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
   {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
    llvm::StringLiteral(#Metal)},
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal)                           \
+  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
+   llvm::StringLiteral(#Metal)},
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  {llvm::StringLiteral(#GLSLf), llvm::StringLiteral(#HLSLf),                   \
+   llvm::StringLiteral(#Metalf)},                                              \
+      {llvm::StringLiteral(#GLSLi), llvm::StringLiteral(#HLSLi),               \
+       llvm::StringLiteral(#Metali)},                                          \
+      {llvm::StringLiteral(#GLSLu), llvm::StringLiteral(#HLSLu),               \
+       llvm::StringLiteral(#Metalu)},
 #include "BuiltinTypes.def"
+  };
+
+  static constexpr bool BuiltinTypeVector[] = {
+      false,
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal) true,
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  false, false, false,
+#include "BuiltinTypes.def"
+  };
+
+  static constexpr bool BuiltinTypeMatrix[] = {
+      false,
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal) true,
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  false, false, false,
+#include "BuiltinTypes.def"
+  };
+
+  static constexpr bool BuiltinTypeTexture[] = {
+      false,
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  true, true, true,
+#include "BuiltinTypes.def"
+  };
+
+  static constexpr bool BuiltinMethodSwizzle[] = {
+      false,
+#define BUILTIN_CXX_METHOD(Name, IsSwizzle, Record, ...) IsSwizzle,
+#include "BuiltinCXXMethods.def"
   };
 
   static constexpr Spellings BuiltinFunctionSpellings[] = {
@@ -226,9 +420,11 @@ private:
     Decl *Find(StringRef N, StringRef R, StringRef P, TranslationUnitDecl *TU) {
       Name = N;
       Record = R;
-      P.split(Params, ',');
-      for (auto &ParamStr : Params)
-        ParamStr = ParamStr.trim();
+      if (P != "void") {
+        P.split(Params, ',');
+        for (auto &ParamStr : Params)
+          ParamStr = ParamStr.trim();
+      }
       Found = nullptr;
       Visit(TU);
       return Found;
@@ -241,10 +437,38 @@ private:
       Types[TypeKind] = T->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "type %0; is hsh.h included?");
-      Diags.Report(DiagID) << Name;
+                                    "type %0; is hsh.h included?"))
+          << Name;
+    }
+  }
+
+  void addTextureType(SourceManager &SM, HshBuiltinType FirstEnum,
+                      StringRef Name, Decl *D) {
+    DiagnosticsEngine &Diags = SM.getDiagnostics();
+    if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(D)) {
+      for (const auto *Spec : T->specializations()) {
+        QualType Tp = Spec->getTemplateArgs()[0].getAsType();
+        if (Tp->isSpecificBuiltinType(BuiltinType::Float)) {
+          Types[FirstEnum + 0] = Spec;
+        } else if (Tp->isSpecificBuiltinType(BuiltinType::Int)) {
+          Types[FirstEnum + 1] = Spec;
+        } else if (Tp->isSpecificBuiltinType(BuiltinType::UInt)) {
+          Types[FirstEnum + 2] = Spec;
+        } else {
+          Diags.Report(
+              Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                    "unknown texture specialization type "
+                                    "%0; must use float, int, unsigned int"))
+              << Tp.getAsString();
+        }
+      }
+    } else {
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "class template %0; is hsh.h included?"))
+          << Name;
     }
   }
 
@@ -254,10 +478,10 @@ private:
       Functions[FuncKind] = F->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "function %0; is hsh.h included?");
-      Diags.Report(DiagID) << Name;
+                                    "function %0; is hsh.h included?"))
+          << Name;
     }
   }
 
@@ -267,10 +491,10 @@ private:
       Methods[MethodKind] = dyn_cast<CXXMethodDecl>(M->getFirstDecl());
     } else {
       DiagnosticsEngine &Diags = SM.getDiagnostics();
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "method %0; is hsh.h included?");
-      Diags.Report(DiagID) << Name;
+                                    "method %0; is hsh.h included?"))
+          << Name;
     }
   }
 
@@ -291,39 +515,55 @@ public:
           PushUniformMethod = *TI;
       }
       if (!PushUniformMethod) {
-        unsigned DiagID = Diags.getCustomDiagID(
-            DiagnosticsEngine::Error, "unable to locate declaration of "
-                                      "_HshBase::push_uniform; "
-                                      "is hsh.h included?");
-        Diags.Report(DiagID);
+        Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                           "unable to locate declaration of "
+                                           "_HshBase::push_uniform; "
+                                           "is hsh.h included?"));
       }
     } else {
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of _HshBase; "
-                                    "is hsh.h included?");
-      Diags.Report(DiagID);
+                                    "is hsh.h included?"));
     }
 
     if (auto *E = dyn_cast_or_null<EnumDecl>(
             TypeFinder().Find(llvm::StringLiteral("Target"), TU))) {
       EnumTarget = E;
     } else {
-      unsigned DiagID =
+      Diags.Report(
           Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                 "unable to locate declaration of enum Target; "
-                                "is hsh.h included?");
-      Diags.Report(DiagID);
+                                "is hsh.h included?"));
     }
 
     if (auto *E = dyn_cast_or_null<EnumDecl>(
             TypeFinder().Find(llvm::StringLiteral("Stage"), TU))) {
       EnumStage = E;
     } else {
-      unsigned DiagID =
+      Diags.Report(
           Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                 "unable to locate declaration of enum Stage; "
-                                "is hsh.h included?");
-      Diags.Report(DiagID);
+                                "is hsh.h included?"));
+    }
+
+    if (auto *E = dyn_cast_or_null<EnumDecl>(
+            TypeFinder().Find(llvm::StringLiteral("_HshInputRate"), TU))) {
+      EnumInputRate = E;
+    } else {
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "unable to locate declaration of enum _HshInputRate; "
+          "is hsh.h included?"));
+    }
+
+    if (auto *E = dyn_cast_or_null<EnumDecl>(
+            TypeFinder().Find(llvm::StringLiteral("_HshFormat"), TU))) {
+      EnumFormat = E;
+    } else {
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "unable to locate declaration of enum _HshFormat; "
+          "is hsh.h included?"));
     }
 
     if (auto *T =
@@ -331,33 +571,38 @@ public:
                 llvm::StringLiteral("_HshShaderData"), TU))) {
       ShaderDataTemplateType = T;
     } else {
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error,
           "unable to locate declaration of _HshShaderData; "
-          "is hsh.h included?");
-      Diags.Report(DiagID);
+          "is hsh.h included?"));
     }
 
     if (auto *R = dyn_cast_or_null<CXXRecordDecl>(
             TypeFinder().Find(llvm::StringLiteral("_HshGlobalListNode"), TU))) {
       GlobalListNodeRecordType = R;
     } else {
-      unsigned DiagID = Diags.getCustomDiagID(
+      Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error,
           "unable to locate declaration of _HshGlobalListNode; "
-          "is hsh.h included?");
-      Diags.Report(DiagID);
+          "is hsh.h included?"));
     }
 
-#define BUILTIN_TYPE(Name, GLSL, HLSL, Metal, Vector, Matrix)                  \
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
   addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
           TypeFinder().Find(llvm::StringLiteral(#Name), TU));
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal)                           \
+  addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
+          TypeFinder().Find(llvm::StringLiteral(#Name), TU));
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  addTextureType(SM, HBT_##Name##_float, llvm::StringLiteral(#Name),           \
+                 ClassTemplateFinder().Find(llvm::StringLiteral(#Name), TU));
 #include "BuiltinTypes.def"
 #define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)                  \
   addFunction(SM, HBF_##Name, llvm::StringLiteral(#Name),                      \
               FuncFinder().Find(llvm::StringLiteral(#Name), TU));
 #include "BuiltinFunctions.def"
-#define BUILTIN_CXX_METHOD(Name, Record, ...)                                  \
+#define BUILTIN_CXX_METHOD(Name, IsSwizzle, Record, ...)                       \
   addCXXMethod(SM, HBM_##Name##_##Record,                                      \
                llvm::StringLiteral(#Record "::" #Name "(" #__VA_ARGS__ ")"),   \
                MethodFinder().Find(llvm::StringLiteral(#Name),                 \
@@ -432,6 +677,22 @@ public:
   template <HshTarget T>
   static constexpr StringRef getSpelling(HshBuiltinFunction Func);
 
+  static constexpr bool isVectorType(HshBuiltinType Tp) {
+    return BuiltinTypeVector[Tp];
+  }
+
+  static constexpr bool isMatrixType(HshBuiltinType Tp) {
+    return BuiltinTypeMatrix[Tp];
+  }
+
+  static constexpr bool isTextureType(HshBuiltinType Tp) {
+    return BuiltinTypeTexture[Tp];
+  }
+
+  static constexpr bool isSwizzleMethod(HshBuiltinCXXMethod M) {
+    return BuiltinMethodSwizzle[M];
+  }
+
   static constexpr bool isInterpolationDistributed(HshBuiltinFunction Func) {
     return BuiltinFunctionInterpDists[Func];
   }
@@ -487,51 +748,57 @@ public:
                                         HshStage Stage) const {
     auto *NTTP = cast<NonTypeTemplateParmDecl>(
         PushUniformMethod->getTemplateParameters()->getParam(0));
-    std::array<TemplateArgument, 1> TemplateArgs = {TemplateArgument{
-        Context, APSInt(APInt(32, int(Stage) - 1)), NTTP->getType()}};
+    TemplateArgument TemplateArg{Context, APSInt::get(int(Stage) - 1),
+                                 NTTP->getType()};
     auto *PushUniform =
         cast<CXXMethodDecl>(PushUniformMethod->getTemplatedDecl());
     TemplateArgumentListInfo CallTemplArgs(PushUniformMethod->getLocation(),
                                            {});
     CallTemplArgs.addArgument(
-        TemplateArgumentLoc(TemplateArgs[0], (Expr *)nullptr));
+        TemplateArgumentLoc(TemplateArg, (Expr *)nullptr));
     auto *ThisExpr = new (Context) CXXThisExpr({}, Context.VoidTy, true);
     auto *ME = MemberExpr::Create(
         Context, ThisExpr, true, {}, {}, {}, PushUniform,
         DeclAccessPair::make(PushUniform, PushUniform->getAccess()), {},
         &CallTemplArgs, Context.VoidTy, VK_XValue, OK_Ordinary, NOUR_None);
-    std::array<Expr *, 1> Args{DeclRefExpr::Create(Context, {}, {}, Decl, false,
-                                                   SourceLocation{},
-                                                   Decl->getType(), VK_XValue)};
-    return CXXMemberCallExpr::Create(Context, ME, Args, Context.VoidTy,
+    Expr *Arg =
+        DeclRefExpr::Create(Context, {}, {}, Decl, false, SourceLocation{},
+                            Decl->getType(), VK_XValue);
+    return CXXMemberCallExpr::Create(Context, ME, Arg, Context.VoidTy,
                                      VK_XValue, {});
   }
 
-  VarTemplateDecl *getDataVarTemplate(ASTContext &Context,
-                                      DeclContext *DC) const {
+  VarTemplateDecl *getDataVarTemplate(ASTContext &Context, DeclContext *DC,
+                                      uint32_t NumStages, uint32_t NumBindings,
+                                      uint32_t NumAttributes) const {
     NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
         Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"),
         QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
-    std::array<NamedDecl *, 2> Parms{
-        TargetParm,
-        NonTypeTemplateParmDecl::Create(
-            Context, DC, {}, {}, 0, 0, &Context.Idents.get("S"),
-            QualType{EnumStage->getTypeForDecl(), 0}, false, nullptr)};
     auto *TPL =
-        TemplateParameterList::Create(Context, {}, {}, Parms, {}, nullptr);
-
+        TemplateParameterList::Create(Context, {}, {}, TargetParm, {}, nullptr);
     auto *PExpr =
         DeclRefExpr::Create(Context, {}, {}, TargetParm, false,
                             SourceLocation{}, TargetParm->getType(), VK_XValue);
     TemplateArgumentListInfo TemplateArgs;
     TemplateArgs.addArgument(
         TemplateArgumentLoc(TemplateArgument{PExpr}, PExpr));
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument{Context, APSInt::get(NumStages),
+                                             Context.UnsignedIntTy},
+                            (Expr *)nullptr));
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument{Context, APSInt::get(NumBindings),
+                                             Context.UnsignedIntTy},
+                            (Expr *)nullptr));
+    TemplateArgs.addArgument(TemplateArgumentLoc(
+        TemplateArgument{Context, APSInt::get(NumAttributes),
+                         Context.UnsignedIntTy},
+        (Expr *)nullptr));
     TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
         Context, ShaderDataTemplateType, TemplateArgs);
 
     auto *VD = VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"),
                                TSI->getType(), nullptr, SC_Static);
-    VD->setConstexpr(true);
     VD->setInitStyle(VarDecl::ListInit);
     VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
     return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
@@ -543,6 +810,26 @@ public:
         Context, DC, {}, {}, &Context.Idents.get("global"),
         QualType{GlobalListNodeRecordType->getTypeForDecl(), 0}, nullptr,
         SC_Static);
+  }
+
+  void printTargetEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
+                             HshTarget Target) const {
+    printEnumeratorString(Out, Policy, EnumTarget, APSInt::get(Target));
+  }
+
+  void printStageEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
+                            HshStage Stage) const {
+    printEnumeratorString(Out, Policy, EnumStage, APSInt::get(Stage - 1));
+  }
+
+  void printInputRateEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
+                                HshAttributeKind InputRate) const {
+    printEnumeratorString(Out, Policy, EnumInputRate, APSInt::get(InputRate));
+  }
+
+  void printFormatEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
+                             HshFormat Format) const {
+    printEnumeratorString(Out, Policy, EnumFormat, APSInt::get(Format));
   }
 };
 
@@ -593,65 +880,164 @@ static HshInterfaceDirection DetermineParmVarDirection(ParmVarDecl *D) {
 
 template <typename T, unsigned N>
 static DiagnosticBuilder
-ReportCustom(T *S, const ASTContext &Context, const char (&FormatString)[N],
+ReportCustom(const T *S, const ASTContext &Context,
+             const char (&FormatString)[N],
              DiagnosticsEngine::Level level = DiagnosticsEngine::Error) {
   DiagnosticsEngine &Diags = Context.getDiagnostics();
-  unsigned DiagID = Diags.getCustomDiagID(level, FormatString);
-  return Diags.Report(S->getBeginLoc(), DiagID)
+  return Diags.Report(S->getBeginLoc(),
+                      Diags.getCustomDiagID(level, FormatString))
          << CharSourceRange(S->getSourceRange(), false);
 }
 
-static void ReportUnsupportedStmt(Stmt *S, const ASTContext &Context) {
+static void ReportUnsupportedStmt(const Stmt *S, const ASTContext &Context) {
   auto Diag = ReportCustom(
       S, Context,
       "statements of type %0 are not supported in hsh generator lambdas");
   Diag.AddString(S->getStmtClassName());
 }
 
-static void ReportUnsupportedFunctionCall(Stmt *S, const ASTContext &Context) {
+static void ReportUnsupportedFunctionCall(const Stmt *S,
+                                          const ASTContext &Context) {
   ReportCustom(S, Context, "function calls are limited to hsh intrinsics");
 }
 
-static void ReportUnsupportedTypeReference(Stmt *S, const ASTContext &Context) {
+static void ReportUnsupportedTypeReference(const Stmt *S,
+                                           const ASTContext &Context) {
   ReportCustom(S, Context, "references to values are limited to hsh types");
 }
 
-static void ReportUnsupportedTypeConstruct(Stmt *S, const ASTContext &Context) {
+static void ReportUnsupportedTypeConstruct(const Stmt *S,
+                                           const ASTContext &Context) {
   ReportCustom(S, Context, "constructors are limited to hsh types");
 }
 
-static void ReportUnsupportedTypeCast(Stmt *S, const ASTContext &Context) {
+static void ReportUnsupportedTypeCast(const Stmt *S,
+                                      const ASTContext &Context) {
   ReportCustom(S, Context, "type casts are limited to hsh types");
 }
 
-static void ReportBadTextureReference(Stmt *S, const ASTContext &Context) {
+static void ReportBadTextureReference(const Stmt *S,
+                                      const ASTContext &Context) {
   ReportCustom(S, Context,
                "texture samples must be performed on lambda parameters");
 }
 
-static void ReportUnattributedTexture(ParmVarDecl *PVD,
+static void ReportUnattributedTexture(const ParmVarDecl *PVD,
                                       const ASTContext &Context) {
   ReportCustom(
       PVD, Context,
       "sampled textures must be attributed with [[hsh::*_texture(n)]]");
 }
 
-static void ReportNonConstexprSampler(Expr *E, const ASTContext &Context) {
+static void ReportNonConstexprSampler(const Expr *E,
+                                      const ASTContext &Context) {
   ReportCustom(E, Context, "sampler arguments must be constexpr");
 }
 
-static void ReportBadSamplerStructFormat(Expr *E, const ASTContext &Context) {
+static void ReportBadSamplerStructFormat(const Expr *E,
+                                         const ASTContext &Context) {
   ReportCustom(E, Context, "sampler structure is not consistent");
 }
 
-static void ReportBadVertexPositionType(ParmVarDecl *PVD,
+static void ReportSamplerOverflow(const Expr *E, const ASTContext &Context) {
+  ReportCustom(E, Context,
+               "maximum sampler limit of " STR(HSH_MAX_SAMPLERS) " reached");
+}
+
+static void ReportBadVertexPositionType(const ParmVarDecl *PVD,
                                         const ASTContext &Context) {
   ReportCustom(PVD, Context, "vertex position must be a hsh::float4");
 }
 
-static void ReportBadColorTargetType(ParmVarDecl *PVD,
+static void ReportBadColorTargetType(const ParmVarDecl *PVD,
                                      const ASTContext &Context) {
   ReportCustom(PVD, Context, "fragment color target must be a hsh::float4");
+}
+
+static void ReportBadVertexBufferType(const ParmVarDecl *PVD,
+                                      const ASTContext &Context) {
+  ReportCustom(PVD, Context, "vertex buffer must be a struct or class");
+}
+
+static void ReportVertexBufferOutOfRange(const ParmVarDecl *PVD,
+                                         const ASTContext &Context) {
+  ReportCustom(PVD, Context,
+               "vertex buffer index must be in range [0," STR(
+                   HSH_MAX_VERTEX_BUFFERS) ")");
+}
+
+static void ReportVertexBufferDuplicate(const ParmVarDecl *PVD,
+                                        const ParmVarDecl *OtherPVD,
+                                        const ASTContext &Context) {
+  ReportCustom(PVD, Context, "vertex buffer index be unique");
+  ReportCustom(OtherPVD, Context, "previous buffer index here",
+               DiagnosticsEngine::Note);
+}
+
+static void ReportBadTextureType(const ParmVarDecl *PVD,
+                                 const ASTContext &Context) {
+  ReportCustom(PVD, Context, "texture must be a texture* type");
+}
+
+static void ReportTextureOutOfRange(const ParmVarDecl *PVD,
+                                    const ASTContext &Context) {
+  ReportCustom(PVD, Context,
+               "texture index must be in range [0," STR(HSH_MAX_TEXTURES) ")");
+}
+
+static void ReportTextureDuplicate(const ParmVarDecl *PVD,
+                                   const ParmVarDecl *OtherPVD,
+                                   const ASTContext &Context) {
+  ReportCustom(PVD, Context, "texture index be unique");
+  ReportCustom(OtherPVD, Context, "previous texture index here",
+               DiagnosticsEngine::Note);
+}
+
+static void ReportBadIntegerType(const Decl *D, const ASTContext &Context) {
+  ReportCustom(D, Context, "integers must be 32-bits in length");
+}
+
+static void ReportBadRecordType(const Decl *D, const ASTContext &Context) {
+  ReportCustom(D, Context,
+               "hsh record fields must be a builtin hsh vector or matrix, "
+               "float, double, or 32-bit integer");
+}
+
+static void ReportColorTargetOutOfRange(const ParmVarDecl *PVD,
+                                        const ASTContext &Context) {
+  ReportCustom(
+      PVD, Context,
+      "color target index must be in range [0," STR(HSH_MAX_COLOR_TARGETS) ")");
+}
+
+static bool CheckHshFieldTypeCompatibility(const HshBuiltins &Builtins,
+                                           const ASTContext &Context,
+                                           const ValueDecl *VD) {
+  QualType Tp = VD->getType();
+  HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
+  if (HBT != HBT_None && !HshBuiltins::isTextureType(HBT)) {
+    return true;
+  } else if (Tp->isIntegralOrEnumerationType()) {
+    if (Context.getIntWidth(Tp) != 32) {
+      ReportBadIntegerType(VD, Context);
+      return false;
+    }
+  } else if (Tp->isSpecificBuiltinType(BuiltinType::Float) ||
+             Tp->isSpecificBuiltinType(BuiltinType::Double)) {
+    return true;
+  }
+  ReportBadRecordType(VD, Context);
+  return false;
+}
+
+static bool CheckHshRecordCompatibility(const HshBuiltins &Builtins,
+                                        const ASTContext &Context,
+                                        const CXXRecordDecl *Record) {
+  bool Ret = true;
+  for (const auto *FD : Record->fields())
+    if (!CheckHshFieldTypeCompatibility(Builtins, Context, FD))
+      Ret = false;
+  return Ret;
 }
 
 class LastAssignmentFinder : public StmtVisitor<LastAssignmentFinder, bool> {
@@ -819,7 +1205,7 @@ enum HshSamplerWrapMode {
 };
 struct SamplerConfig {
   static constexpr unsigned NumFields = 2;
-  static constexpr bool ValidateSamplerStruct(const APValue &Val) {
+  static bool ValidateSamplerStruct(const APValue &Val) {
     if (!Val.isStruct() || Val.getStructNumFields() != NumFields)
       return false;
     for (unsigned i = 0; i < NumFields; ++i)
@@ -835,6 +1221,19 @@ struct SamplerConfig {
         HshSamplerFilterMode(Val.getStructField(0).getInt().getSExtValue());
     Wrap = HshSamplerWrapMode(Val.getStructField(1).getInt().getSExtValue());
   }
+  bool operator==(const SamplerConfig &Other) const {
+    return Filter == Other.Filter && Wrap == Other.Wrap;
+  }
+};
+
+struct SamplerRecord {
+  SamplerConfig Config;
+  unsigned UseStages;
+};
+
+struct ColorTargetRecord {
+  StringRef Name;
+  unsigned Index;
 };
 
 template <typename TexAttr> constexpr HshStage StageOfTextureAttr() {
@@ -847,16 +1246,72 @@ template <> constexpr HshStage StageOfTextureAttr<HshFragmentTextureAttr>() {
   return HshFragmentStage;
 }
 
-enum HshTextureKind { Texture2D, Texture3D, TextureCube };
+struct AttributeRecord {
+  StringRef Name;
+  const CXXRecordDecl *Record;
+  HshAttributeKind Kind;
+  uint8_t Binding;
+};
+
+enum HshTextureKind {
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  HTK_##Name##_float, HTK_##Name##_int, HTK_##Name##_uint,
+#include "BuiltinTypes.def"
+};
+
+constexpr HshTextureKind KindOfTextureType(HshBuiltinType Type) {
+  switch (Type) {
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  case HBT_##Name##_float:                                                     \
+    return HTK_##Name##_float;                                                 \
+  case HBT_##Name##_int:                                                       \
+    return HTK_##Name##_int;                                                   \
+  case HBT_##Name##_uint:                                                      \
+    return HTK_##Name##_uint;
+#include "BuiltinTypes.def"
+  default:
+    llvm_unreachable("invalid texture kind");
+  }
+}
+
+constexpr HshBuiltinType BuiltinTypeOfTexture(HshTextureKind Kind) {
+  switch (Kind) {
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  case HTK_##Name##_float:                                                     \
+    return HBT_##Name##_float;                                                 \
+  case HTK_##Name##_int:                                                       \
+    return HBT_##Name##_int;                                                   \
+  case HTK_##Name##_uint:                                                      \
+    return HBT_##Name##_uint;
+#include "BuiltinTypes.def"
+  }
+}
 
 struct TextureRecord {
   StringRef Name;
   HshTextureKind Kind;
+  unsigned UseStages;
 };
 
-struct SamplerRecord {
-  StringRef Name;
-  SamplerConfig Config;
+struct VertexBinding {
+  uint8_t Binding;
+  uint32_t Stride;
+  HshAttributeKind InputRate;
+};
+
+struct VertexAttribute {
+  uint32_t Offset;
+  uint8_t Binding;
+  HshFormat Format;
+};
+
+struct SampleCall {
+  CXXMemberCallExpr *Expr;
+  unsigned Index;
+  unsigned SamplerIndex;
 };
 
 struct ShaderPrintingPolicyBase : PrintingPolicy {
@@ -864,10 +1319,13 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
   virtual ~ShaderPrintingPolicyBase() = default;
   virtual void printStage(raw_ostream &OS, CXXRecordDecl *UniformRecord,
                           CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
-                          ArrayRef<CXXRecordDecl *> VBOs,
+                          ArrayRef<AttributeRecord> Attributes,
                           ArrayRef<TextureRecord> Textures,
-                          ArrayRef<SamplerRecord> Samplers, CompoundStmt *Stmts,
-                          HshStage Stage, HshStage From, HshStage To) = 0;
+                          ArrayRef<SamplerRecord> Samplers,
+                          ArrayRef<ColorTargetRecord> ColorTargets,
+                          CompoundStmt *Stmts, HshStage Stage, HshStage From,
+                          HshStage To, uint32_t UniformBinding,
+                          ArrayRef<SampleCall> SampleCalls) = 0;
   explicit ShaderPrintingPolicyBase(HshTarget Target)
       : PrintingPolicy(LangOptions()), Target(Target) {}
 };
@@ -889,6 +1347,19 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
     DisableListInitialization = true;
   }
 
+  StringRef overrideBuiltinTypeName(const BuiltinType *T) const override {
+    if (T->isSignedIntegerOrEnumerationType()) {
+      return ImplClass::SignedInt32Spelling;
+    } else if (T->isUnsignedIntegerOrEnumerationType()) {
+      return ImplClass::UnsignedInt32Spelling;
+    } else if (T->isSpecificBuiltinType(BuiltinType::Float)) {
+      return ImplClass::Float32Spelling;
+    } else if (T->isSpecificBuiltinType(BuiltinType::Double)) {
+      return ImplClass::Float64Spelling;
+    }
+    return {};
+  }
+
   StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
     auto HBT = Builtins.identifyBuiltinType(D->getTypeForDecl());
     if (HBT == HBT_None)
@@ -901,7 +1372,8 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
       auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
       if (HBM == HBM_None)
         return {};
-      return ImplClass::identifierOfCXXMethod(HBM, MemberCall);
+      return static_cast<const ImplClass &>(*this).identifierOfCXXMethod(
+          HBM, MemberCall);
     }
     if (auto *DeclRef =
             dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
@@ -922,8 +1394,8 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
       auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
       if (HBM == HBM_None)
         return {};
-      return ImplClass::overrideCXXMethodArguments(HBM, MemberCall, StringArg,
-                                                   ExprArg);
+      return static_cast<const ImplClass &>(*this).overrideCXXMethodArguments(
+          HBM, MemberCall, StringArg, ExprArg);
     }
     return false;
   }
@@ -931,17 +1403,52 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   StringRef overrideDeclRefIdentifier(DeclRefExpr *DR) const override {
     if (auto *PVD = dyn_cast<ParmVarDecl>(DR->getDecl())) {
       if (PVD->hasAttr<HshPositionAttr>())
-        return static_cast<const ImplClass &>(*this)
-            .identifierOfVertexPosition();
+        return static_cast<const ImplClass &>(*this).identifierOfVertexPosition(
+            PVD);
+      else if (PVD->hasAttr<HshColorTargetAttr>())
+        return static_cast<const ImplClass &>(*this).identifierOfColorTarget(
+            PVD);
     }
     return {};
+  }
+
+  StringRef prependMemberExprBase(MemberExpr *ME,
+                                  bool &ReplaceBase) const override {
+    if (auto *DRE = dyn_cast<DeclRefExpr>(ME->getBase())) {
+      if (DRE->getDecl()->hasAttr<HshVertexBufferAttr>() ||
+          DRE->getDecl()->hasAttr<HshInstanceBufferAttr>())
+        return ImplClass::VertexBufferBase;
+      if (ImplClass::NoUniformVarDecl &&
+          DRE->getDecl()->getName() == "_from_host")
+        ReplaceBase = true;
+    }
+    return {};
+  }
+
+  bool shouldPrintMemberExprUnderscore(MemberExpr *ME) const override {
+    if (auto *DRE = dyn_cast<DeclRefExpr>(ME->getBase())) {
+      return DRE->getDecl()->hasAttr<HshVertexBufferAttr>() ||
+             DRE->getDecl()->hasAttr<HshInstanceBufferAttr>();
+    }
+    return false;
   }
 };
 
 struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
   static constexpr HshTarget SourceTarget = HT_GLSL;
-  static constexpr StringRef identifierOfVertexPosition() {
+  static constexpr bool NoUniformVarDecl = true;
+  static constexpr llvm::StringLiteral SignedInt32Spelling{"int"};
+  static constexpr llvm::StringLiteral UnsignedInt32Spelling{"uint"};
+  static constexpr llvm::StringLiteral Float32Spelling{"float"};
+  static constexpr llvm::StringLiteral Float64Spelling{"double"};
+  static constexpr llvm::StringLiteral VertexBufferBase{""};
+
+  static constexpr StringRef identifierOfVertexPosition(ParmVarDecl *PVD) {
     return llvm::StringLiteral("gl_Position");
+  }
+
+  static constexpr StringRef identifierOfColorTarget(ParmVarDecl *PVD) {
+    return {};
   }
 
   static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
@@ -971,42 +1478,93 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
 
   void printStage(raw_ostream &OS, CXXRecordDecl *UniformRecord,
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
-                  ArrayRef<CXXRecordDecl *> VBOs,
+                  ArrayRef<AttributeRecord> Attributes,
                   ArrayRef<TextureRecord> Textures,
-                  ArrayRef<SamplerRecord> Samplers, CompoundStmt *Stmts,
-                  HshStage Stage, HshStage From, HshStage To) override {
+                  ArrayRef<SamplerRecord> Samplers,
+                  ArrayRef<ColorTargetRecord> ColorTargets, CompoundStmt *Stmts,
+                  HshStage Stage, HshStage From, HshStage To,
+                  uint32_t UniformBinding,
+                  ArrayRef<SampleCall> SampleCalls) override {
     OS << "#version 450 core\n";
     if (UniformRecord) {
-      OS << "layout(binding = " << int(Stage) - 1 << ") uniform HostBlock {\n";
+      OS << "layout(binding = " << UniformBinding << ") uniform host_to_"
+         << HshStageToString(Stage) << " {\n";
       for (auto *FD : UniformRecord->fields()) {
         OS << "  ";
         FD->print(OS, *this, 1);
-        OS << '\n';
+        OS << ";\n";
       }
-      OS << "} from_host;\n";
+      OS << "};\n";
     }
 
     if (FromRecord) {
       OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
-         << "{\n";
+         << " {\n";
       for (auto *FD : FromRecord->fields()) {
         OS << "  ";
         FD->print(OS, *this, 1);
-        OS << '\n';
+        OS << ";\n";
       }
-      OS << "} from_" << HshStageToString(From) << ";\n";
+      OS << "} _from_" << HshStageToString(From) << ";\n";
     }
 
     if (ToRecord) {
       OS << "out " << HshStageToString(Stage) << "_to_" << HshStageToString(To)
-         << "{\n";
+         << " {\n";
       for (auto *FD : ToRecord->fields()) {
         OS << "  ";
         FD->print(OS, *this, 1);
-        OS << '\n';
+        OS << ";\n";
       }
-      OS << "} to_" << HshStageToString(To) << ";\n";
+      OS << "} _to_" << HshStageToString(To) << ";\n";
     }
+
+    if (Stage == HshVertexStage) {
+      uint32_t Location = 0;
+      for (const auto &Attribute : Attributes) {
+        for (const auto *FD : Attribute.Record->fields()) {
+          QualType Tp = FD->getType().getUnqualifiedType();
+          HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
+          if (HshBuiltins::isMatrixType(HBT)) {
+            switch (HBT) {
+            case HBT_float3x3:
+              OS << "layout(location = " << Location << ") in ";
+              Tp.print(OS, *this);
+              OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
+              Location += 3;
+              break;
+            case HBT_float4x4:
+              OS << "layout(location = " << Location << ") in ";
+              Tp.print(OS, *this);
+              OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
+              Location += 4;
+              break;
+            default:
+              llvm_unreachable("Unhandled matrix type");
+            }
+          } else {
+            OS << "layout(location = " << Location++ << ") in ";
+            Tp.print(OS, *this);
+            OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
+          }
+        }
+      }
+    }
+
+    uint32_t TexBinding = 0;
+    for (const auto &Tex : Textures) {
+      if ((1u << Stage) & Tex.UseStages)
+        OS << "layout(binding = " << TexBinding << ") uniform "
+           << HshBuiltins::getSpelling<SourceTarget>(
+                  BuiltinTypeOfTexture(Tex.Kind))
+           << " " << Tex.Name << ";\n";
+      ++TexBinding;
+    }
+
+    if (Stage == HshFragmentStage)
+      for (const auto &CT : ColorTargets)
+        OS << "layout(location = " << CT.Index << ") out vec4 " << CT.Name
+           << ";\n";
 
     OS << "void main() ";
     Stmts->printPretty(OS, nullptr, *this);
@@ -1015,19 +1573,297 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
   using ShaderPrintingPolicy<GLSLPrintingPolicy>::ShaderPrintingPolicy;
 };
 
+struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
+  static constexpr HshTarget SourceTarget = HT_HLSL;
+  static constexpr bool NoUniformVarDecl = true;
+  static constexpr llvm::StringLiteral SignedInt32Spelling{"int"};
+  static constexpr llvm::StringLiteral UnsignedInt32Spelling{"uint"};
+  static constexpr llvm::StringLiteral Float32Spelling{"float"};
+  static constexpr llvm::StringLiteral Float64Spelling{"double"};
+  static constexpr llvm::StringLiteral VertexBufferBase{"_vert_data."};
+
+  std::string VertexPositionIdentifier;
+  StringRef identifierOfVertexPosition(ParmVarDecl *PVD) const {
+    return VertexPositionIdentifier;
+  }
+
+  mutable std::string ColorTargetIdentifier;
+  StringRef identifierOfColorTarget(ParmVarDecl *PVD) const {
+    ColorTargetIdentifier.clear();
+    raw_string_ostream OS(ColorTargetIdentifier);
+    OS << "_targets_out." << PVD->getName();
+    return OS.str();
+  }
+
+  mutable std::string CXXMethodIdentifier;
+  StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
+                                  CXXMemberCallExpr *C) const {
+    switch (HBM) {
+    case HBM_sample_texture2d: {
+      CXXMethodIdentifier.clear();
+      raw_string_ostream OS(CXXMethodIdentifier);
+      C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
+      OS << ".Sample";
+      return OS.str();
+    }
+    default:
+      return {};
+    }
+  }
+
+  ArrayRef<SampleCall> ThisSampleCalls;
+  bool
+  overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
+                             const std::function<void(StringRef)> &StringArg,
+                             const std::function<void(Expr *)> &ExprArg) const {
+    switch (HBM) {
+    case HBM_sample_texture2d: {
+      auto Search =
+          std::find_if(ThisSampleCalls.begin(), ThisSampleCalls.end(),
+                       [&](const auto &Other) { return C == Other.Expr; });
+      assert(Search != ThisSampleCalls.end() && "sample call must exist");
+      std::string SamplerArg{"_sampler"};
+      raw_string_ostream OS(SamplerArg);
+      OS << Search->SamplerIndex;
+      StringArg(OS.str());
+      ExprArg(C->getArg(0));
+      return true;
+    }
+    default:
+      return false;
+    }
+  }
+
+  bool overrideCXXOperatorCall(
+      CXXOperatorCallExpr *C, raw_ostream &OS,
+      const std::function<void(Expr *)> &ExprArg) const override {
+    if (C->getNumArgs() == 2 && C->getOperator() == OO_Star) {
+      if (HshBuiltins::isMatrixType(
+              Builtins.identifyBuiltinType(C->getArg(0)->getType())) ||
+          HshBuiltins::isMatrixType(
+              Builtins.identifyBuiltinType(C->getArg(1)->getType()))) {
+        OS << "mul(";
+        ExprArg(C->getArg(0));
+        OS << ", ";
+        ExprArg(C->getArg(1));
+        OS << ")";
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool overrideCXXTemporaryObjectExpr(
+      CXXTemporaryObjectExpr *C, raw_ostream &OS,
+      const std::function<void(Expr *)> &ExprArg) const override {
+    if (C->getNumArgs() == 1) {
+      auto DTp = Builtins.identifyBuiltinType(C->getType());
+      auto STp = Builtins.identifyBuiltinType(C->getArg(0)->getType());
+      switch (DTp) {
+      case HBT_float3x3:
+        switch (STp) {
+        case HBT_float4x4:
+          OS << "float4x4_to_float3x3(";
+          ExprArg(C->getArg(0));
+          OS << ")";
+          return true;
+        default:
+          break;
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    return false;
+  }
+
+  CompoundStmt *ThisStmts = nullptr;
+  std::string BeforeStatements;
+  void
+  printCompoundStatementBefore(const std::function<raw_ostream &()> &Indent,
+                               CompoundStmt *CS) const override {
+    if (CS == ThisStmts)
+      Indent() << BeforeStatements;
+  }
+
+  std::string AfterStatements;
+  void printCompoundStatementAfter(const std::function<raw_ostream &()> &Indent,
+                                   CompoundStmt *CS) const override {
+    if (CS == ThisStmts)
+      Indent() << AfterStatements;
+  }
+
+  static constexpr llvm::StringLiteral HLSLRuntimeSupport{
+      R"(static float3x3 float4x4_to_float3x3(float4x4 mtx) {
+  return float3x3(mtx[0].xyz, mtx[1].xyz, mtx[2].xyz);
+}
+)"};
+
+  void printStage(raw_ostream &OS, CXXRecordDecl *UniformRecord,
+                  CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
+                  ArrayRef<AttributeRecord> Attributes,
+                  ArrayRef<TextureRecord> Textures,
+                  ArrayRef<SamplerRecord> Samplers,
+                  ArrayRef<ColorTargetRecord> ColorTargets, CompoundStmt *Stmts,
+                  HshStage Stage, HshStage From, HshStage To,
+                  uint32_t UniformBinding,
+                  ArrayRef<SampleCall> SampleCalls) override {
+    OS << HLSLRuntimeSupport;
+    ThisStmts = Stmts;
+    ThisSampleCalls = SampleCalls;
+
+    if (UniformRecord) {
+      OS << "cbuffer host_to_" << HshStageToString(Stage) << " : register(b"
+         << UniformBinding << ") {\n";
+      for (auto *FD : UniformRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << ";\n";
+      }
+      OS << "};\n";
+    }
+
+    if (FromRecord) {
+      OS << "struct " << HshStageToString(From) << "_to_"
+         << HshStageToString(Stage) << " {\n";
+      uint32_t VarIdx = 0;
+      for (auto *FD : FromRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << " : VAR" << VarIdx++ << ";\n";
+      }
+      OS << "};\n";
+    }
+
+    if (ToRecord) {
+      OS << "struct " << HshStageToString(Stage) << "_to_"
+         << HshStageToString(To) << " {\n"
+         << "  float4 _position : SV_Position;\n";
+      uint32_t VarIdx = 0;
+      for (auto *FD : ToRecord->fields()) {
+        OS << "  ";
+        FD->print(OS, *this, 1);
+        OS << " : VAR" << VarIdx++ << ";\n";
+      }
+      OS << "};\n";
+    }
+
+    if (Stage == HshVertexStage) {
+      OS << "struct host_vert_data {\n";
+      uint32_t Location = 0;
+      for (const auto &Attribute : Attributes) {
+        for (const auto *FD : Attribute.Record->fields()) {
+          QualType Tp = FD->getType().getUnqualifiedType();
+          HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
+          if (HshBuiltins::isMatrixType(HBT)) {
+            switch (HBT) {
+            case HBT_float3x3:
+              if (Target == HT_VULKAN_SPIRV)
+                OS << "  [[vk::location(" << Location << ")]] ";
+              else
+                OS << "  ";
+              Tp.print(OS, *this);
+              OS << " " << Attribute.Name << "_" << FD->getName() << " : ATTR"
+                 << Location << ";\n";
+              Location += 3;
+              break;
+            case HBT_float4x4:
+              if (Target == HT_VULKAN_SPIRV)
+                OS << "  [[vk::location(" << Location << ")]] ";
+              else
+                OS << "  ";
+              Tp.print(OS, *this);
+              OS << " " << Attribute.Name << "_" << FD->getName() << " : ATTR"
+                 << Location << ";\n";
+              Location += 4;
+              break;
+            default:
+              llvm_unreachable("Unhandled matrix type");
+            }
+          } else {
+            if (Target == HT_VULKAN_SPIRV)
+              OS << "  [[vk::location(" << Location << ")]] ";
+            else
+              OS << "  ";
+            Tp.print(OS, *this);
+            OS << " " << Attribute.Name << "_" << FD->getName() << " : ATTR"
+               << Location << ";\n";
+            Location += 1;
+          }
+        }
+      }
+      OS << "};\n";
+    }
+
+    uint32_t TexBinding = 0;
+    for (const auto &Tex : Textures) {
+      if ((1u << Stage) & Tex.UseStages)
+        OS << HshBuiltins::getSpelling<SourceTarget>(
+                  BuiltinTypeOfTexture(Tex.Kind))
+           << " " << Tex.Name << " : register(t" << TexBinding << ");\n";
+      ++TexBinding;
+    }
+
+    uint32_t SamplerBinding = 0;
+    for (const auto &Samp : Samplers) {
+      if ((1u << Stage) & Samp.UseStages)
+        OS << "SamplerState _sampler" << SamplerBinding << " : register(s"
+           << SamplerBinding << ");\n";
+      ++SamplerBinding;
+    }
+
+    if (Stage == HshFragmentStage) {
+      OS << "struct color_targets_out {\n";
+      for (const auto &CT : ColorTargets)
+        OS << "  float4 " << CT.Name << " : SV_Target" << CT.Index << ";\n";
+      OS << "};\n";
+    }
+
+    if (Stage == HshFragmentStage) {
+      OS << "color_targets_out main(";
+      BeforeStatements = "color_targets_out _targets_out;\n";
+      AfterStatements = "return _targets_out;\n";
+    } else if (ToRecord) {
+      VertexPositionIdentifier.clear();
+      raw_string_ostream PIO(VertexPositionIdentifier);
+      PIO << "_to_" << HshStageToString(To) << "._position";
+      OS << HshStageToString(Stage) << "_to_" << HshStageToString(To)
+         << " main(";
+      BeforeStatements.clear();
+      raw_string_ostream BO(BeforeStatements);
+      BO << HshStageToString(Stage) << "_to_" << HshStageToString(To) << " _to_"
+         << HshStageToString(To) << ";\n";
+      AfterStatements.clear();
+      raw_string_ostream AO(AfterStatements);
+      AO << "return _to_" << HshStageToString(To) << ";\n";
+    }
+    if (Stage == HshVertexStage)
+      OS << "in host_vert_data _vert_data";
+    else if (FromRecord)
+      OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
+         << " _from_" << HshStageToString(From);
+    OS << ") ";
+    Stmts->printPretty(OS, nullptr, *this);
+  }
+
+  using ShaderPrintingPolicy<HLSLPrintingPolicy>::ShaderPrintingPolicy;
+};
+
 static std::unique_ptr<ShaderPrintingPolicyBase>
 MakePrintingPolicy(HshBuiltins &Builtins, HshTarget Target) {
   switch (Target) {
   case HT_GLSL:
+    return std::make_unique<GLSLPrintingPolicy>(Builtins, Target);
   case HT_HLSL:
   case HT_DXBC:
+  case HT_DXIL:
+  case HT_VULKAN_SPIRV:
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
   case HT_METAL_BIN_TVOS:
-  case HT_SPIRV:
-  case HT_DXIL:
-    return std::make_unique<GLSLPrintingPolicy>(Builtins, Target);
+    return std::make_unique<HLSLPrintingPolicy>(Builtins, Target);
   }
 }
 
@@ -1045,14 +1881,14 @@ class StagesBuilder
   static IdentifierInfo &getToIdent(ASTContext &Context, HshStage Stage) {
     std::string VarName;
     raw_string_ostream VNS(VarName);
-    VNS << "to_" << HshStageToString(Stage);
+    VNS << "_to_" << HshStageToString(Stage);
     return Context.Idents.get(VNS.str());
   }
 
   static IdentifierInfo &getFromIdent(ASTContext &Context, HshStage Stage) {
     std::string VarName;
     raw_string_ostream VNS(VarName);
-    VNS << "from_" << HshStageToString(Stage);
+    VNS << "_from_" << HshStageToString(Stage);
     return Context.Idents.get(VNS.str());
   }
 
@@ -1157,15 +1993,19 @@ class StagesBuilder
     SmallVector<std::pair<unsigned, VarDecl *>, 16> StmtDeclRefCount;
   };
   std::array<StageStmtList, HshMaxStage> StageStmts;
-  struct SampleCall {
-    CXXMemberCallExpr *Expr;
-    unsigned Index;
-    SamplerConfig Config;
-  };
   std::array<SmallVector<SampleCall, 4>, HshMaxStage> SampleCalls;
   SmallVector<ParmVarDecl *, 4> UsedCaptures;
+  SmallVector<AttributeRecord, 4> AttributeRecords;
+  SmallVector<TextureRecord, 8> Textures;
+  SmallVector<SamplerRecord, 8> Samplers;
+  SmallVector<ColorTargetRecord, 2> ColorTargets;
+  unsigned FinalStageCount = 0;
+  SmallVector<VertexBinding, 4> VertexBindings;
+  SmallVector<VertexAttribute, 4> VertexAttributes;
 
   AssignmentFinderInfo AssignFindInfo;
+  VarDecl *OrigVarDecl = nullptr;
+  std::unordered_map<Stmt *, std::array<Stmt *, HshMaxStage>> ReplacedAssigns;
 
   template <typename T>
   SmallVector<Expr *, 4> DoVisitExprRange(T Range, HshStage From, HshStage To) {
@@ -1301,6 +2141,25 @@ public:
     return NCE;
   }
 
+  void registerReplacedAssign(Stmt *OldAssign, Stmt *NewAssign, HshStage From) {
+    auto &Assigns = ReplacedAssigns[OldAssign];
+    Assigns[From] = NewAssign;
+  }
+
+  std::tuple<Stmt *, Stmt *> findLastAssignment(VarDecl *&VD,
+                                                HshStage From) const {
+    auto Ret = LastAssignmentFinder(Context).Find(
+        VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
+    auto Search = ReplacedAssigns.find(std::get<0>(Ret));
+    if (Search != ReplacedAssigns.end()) {
+      if (auto *NewAssign = Search->second[From]) {
+        VD = cast<VarDecl>(cast<DeclStmt>(NewAssign)->getSingleDecl());
+        return std::make_tuple(NewAssign, std::get<1>(Ret));
+      }
+    }
+    return Ret;
+  }
+
   /*
    * DeclRef expressions may connect directly to a construction expression and
    * should therefore be lifted to the target stage.
@@ -1309,8 +2168,8 @@ public:
     if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl()))
         return VisitExpr(DeclRef, From, To);
-      auto [Assign, NextCompoundChild] = LastAssignmentFinder(Context).Find(
-          VD, AssignFindInfo.Body, AssignFindInfo.LastCompoundChild);
+      OrigVarDecl = VD;
+      auto [Assign, NextCompoundChild] = findLastAssignment(VD, From);
       if (Assign) {
         SaveAndRestore<Stmt *> SavedCompoundChild(
             AssignFindInfo.LastCompoundChild, NextCompoundChild);
@@ -1333,7 +2192,8 @@ public:
           auto *NDS = new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {});
           if (Expr *Init = VD->getInit())
             NVD->setInit(Visit(Init, From, To));
-          liftDeclStmt(NDS, From, To, VD);
+          registerReplacedAssign(DeclStmt, NDS, To);
+          liftDeclStmt(NDS, From, To, OrigVarDecl);
           return DeclRefExpr::Create(
               Context, {}, {}, NVD, true, SourceLocation{},
               VD->getType().getNonReferenceType(), VK_RValue);
@@ -1439,8 +2299,22 @@ public:
           ReportBadSamplerStructFormat(SamplerArg, Context);
           return;
         }
-        StageCalls.push_back(
-            {C, unsigned(TexIdx.getZExtValue()), SamplerConfig{Res}});
+        SamplerConfig Sampler(Res);
+        auto Search =
+            std::find_if(Samplers.begin(), Samplers.end(),
+                         [&](const auto &S) { return S.Config == Sampler; });
+        if (Search == Samplers.end()) {
+          if (Samplers.size() == HSH_MAX_SAMPLERS) {
+            ReportSamplerOverflow(SamplerArg, Context);
+            return;
+          }
+          Search = Samplers.insert(Samplers.end(),
+                                   SamplerRecord{Sampler, 1u << TexStage});
+        } else {
+          Search->UseStages |= 1u << TexStage;
+        }
+        StageCalls.push_back({C, unsigned(TexIdx.getZExtValue()),
+                              unsigned(Search - Samplers.begin())});
       }
     }
   }
@@ -1456,17 +2330,47 @@ public:
     return llvm::iterator_range(UsedCaptures.begin(), UsedCaptures.end());
   }
 
+  void registerAttributeRecord(AttributeRecord Attribute) {
+    auto Search =
+        std::find_if(AttributeRecords.begin(), AttributeRecords.end(),
+                     [&](const auto &A) { return A.Name == Attribute.Name; });
+    if (Search != AttributeRecords.end())
+      return;
+    AttributeRecords.push_back(Attribute);
+  }
+
+  void registerTexture(StringRef Name, HshTextureKind Kind, HshStage Stage) {
+    auto Search = std::find_if(Textures.begin(), Textures.end(),
+                               [&](const auto &T) { return T.Name == Name; });
+    if (Search != Textures.end()) {
+      Search->UseStages |= 1u << Stage;
+      return;
+    }
+    Textures.push_back(TextureRecord{Name, Kind, 1u << Stage});
+  }
+
+  void registerColorTarget(ColorTargetRecord Record) {
+    auto Search =
+        std::find_if(ColorTargets.begin(), ColorTargets.end(),
+                     [&](const auto &T) { return T.Name == Record.Name; });
+    if (Search != ColorTargets.end())
+      return;
+    ColorTargets.push_back(Record);
+  }
+
   ArrayRef<Stmt *> hostStatements() const {
     return StageStmts[HshHostStage].Stmts;
   }
 
   void finalizeResults(ASTContext &Context, HshBuiltins &Builtins,
                        CXXRecordDecl *SpecRecord) {
+    FinalStageCount = 0;
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
         auto &RecDecl = HostToStageRecords[D];
         RecDecl.finalizeRecord();
         SpecRecord->addDecl(RecDecl.getRecord());
+        ++FinalStageCount;
       }
     }
 
@@ -1528,39 +2432,30 @@ public:
   StageSources printResults(ShaderPrintingPolicyBase &Policy) {
     StageSources Sources(Policy.Target);
 
+    uint32_t UniformBinding = 0;
     for (int S = HshVertexStage; S < HshMaxStage; ++S) {
       if (UseStages & (1u << unsigned(S))) {
         raw_string_ostream OS(Sources.Sources[S]);
+        HshStage NextStage = nextUsedStage(HshStage(S));
         Policy.printStage(
             OS, HostToStageRecords[S].getRecord(),
             InterStageRecords[S].getRecord(),
-            S + 1 != HshMaxStage ? InterStageRecords[S + 1].getRecord()
-                                 : nullptr,
-            {}, {}, {}, StageStmts[S].CStmts, HshStage(S),
-            previousUsedStage(HshStage(S)), nextUsedStage(HshStage(S)));
-        HostToStageRecords[S].getRecord()->print(llvm::outs(), Policy);
-        llvm::outs() << '\n' << OS.str() << '\n';
-      }
-    }
-
-    for (int D = HshControlStage; D < HshMaxStage; ++D) {
-      if (UseStages & (1u << unsigned(D))) {
-        InterStageRecords[D].getRecord()->print(llvm::outs(), Policy);
-        llvm::outs() << '\n';
-      }
-    }
-
-    for (int S = HshHostStage; S < HshMaxStage; ++S) {
-      if (UseStages & (1u << unsigned(S))) {
-        llvm::outs() << HshStageToString(HshStage(S)) << " statements:\n";
-        auto *Stmts =
-            CompoundStmt::Create(Context, StageStmts[S].Stmts, {}, {});
-        Stmts->printPretty(llvm::outs(), nullptr, Policy);
+            NextStage != HshNoStage ? InterStageRecords[NextStage].getRecord()
+                                    : nullptr,
+            AttributeRecords, Textures, Samplers, ColorTargets,
+            StageStmts[S].CStmts, HshStage(S), previousUsedStage(HshStage(S)),
+            NextStage, UniformBinding++, SampleCalls[S]);
       }
     }
 
     return Sources;
   }
+
+  unsigned getNumStages() const { return FinalStageCount; }
+  unsigned getNumBindings() const { return VertexBindings.size(); }
+  unsigned getNumAttributes() const { return VertexAttributes.size(); }
+  ArrayRef<VertexBinding> getBindings() const { return VertexBindings; }
+  ArrayRef<VertexAttribute> getAttributes() const { return VertexAttributes; }
 };
 
 using StmtResult = std::pair<Stmt *, HshStage>;
@@ -1674,8 +2569,9 @@ public:
             NVD->setInit(cast<Expr>(InitStmt));
             Stage = InitStage;
           }
-          return {new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {}),
-                  Stage};
+          auto *NDS = new (Context) class DeclStmt(DeclGroupRef(NVD), {}, {});
+          Builder.registerReplacedAssign(DeclStmt, NDS, Stage);
+          return {NDS, Stage};
         }
       }
     }
@@ -1766,13 +2662,20 @@ public:
 
   StmtResult VisitCXXMemberCallExpr(CXXMemberCallExpr *CallExpr) {
     CXXMethodDecl *MD = CallExpr->getMethodDecl();
+    Expr *ObjArg = CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts();
     HshBuiltinCXXMethod Method = Builtins.identifyBuiltinMethod(MD);
+    if (HshBuiltins::isSwizzleMethod(Method)) {
+      auto [BaseStmt, BaseStage] = Visit(ObjArg);
+      auto *ME = MemberExpr::CreateImplicit(Context, cast<Expr>(BaseStmt),
+                                            false, MD, MD->getReturnType(),
+                                            VK_XValue, OK_Ordinary);
+      return {ME, BaseStage};
+    }
     switch (Method) {
     case HBM_sample_texture2d: {
       HshStage Stage = HshNoStage;
       ParmVarDecl *PVD = nullptr;
-      if (auto *TexRef = dyn_cast<DeclRefExpr>(
-              CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts()))
+      if (auto *TexRef = dyn_cast<DeclRefExpr>(ObjArg))
         PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
       if (PVD) {
         if (PVD->hasAttr<HshVertexTextureAttr>())
@@ -1787,13 +2690,13 @@ public:
       auto [UVStmt, UVStage] = Visit(CallExpr->getArg(0));
       if (!UVStmt)
         return ErrorResult;
-      Builder.registerSampleCall(Method, CallExpr);
       UVStmt = Builder.createInterStageReferenceExpr(
           cast<Expr>(UVStmt), UVStage, Stage, AssignFindInfo);
       std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
       auto *NMCE =
           CXXMemberCallExpr::Create(Context, CallExpr->getCallee(), NewArgs,
                                     CallExpr->getType(), VK_XValue, {});
+      Builder.registerSampleCall(Method, NMCE);
       return {NMCE, Stage};
     }
     default:
@@ -1878,8 +2781,11 @@ public:
       }
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl())) {
         HshStage Stage = DetermineParmVarStage(PVD);
-        if (Stage == HshHostStage)
+        if (Stage == HshHostStage) {
+          if (!CheckHshFieldTypeCompatibility(Builtins, Context, PVD))
+            return ErrorResult;
           Builder.registerUsedCapture(PVD);
+        }
         return {DeclRef, Stage};
       }
       auto [Assign, NextCompoundChild] = LastAssignmentFinder(Context).Find(
@@ -1934,7 +2840,7 @@ public:
     AssignFindInfo.LastCompoundChild = LCC;
     Target = T;
     auto [AssignStmt, AssignStage] = Visit(Assign);
-    if (!AssignStage)
+    if (!AssignStmt)
       return;
     AssignStmt = Builder.createInterStageReferenceExpr(
         cast<Expr>(AssignStmt), AssignStage, T, AssignFindInfo);
@@ -1987,18 +2893,98 @@ public:
   explicit StagesCompilerText(const StageSources &Sources) : Sources(Sources) {}
 };
 
+class StagesCompilerDXIL : public StagesCompilerBase {
+  const StageSources &Sources;
+  DiagnosticsEngine &Diags;
+
+  static constexpr std::array<LPCWSTR, 6> ShaderProfiles{
+      nullptr, L"vs_6_0", L"hs_6_0", L"ds_6_0", L"gs_6_0", L"ps_6_0"};
+
+protected:
+  StageBinaries doCompile() const override {
+    CComPtr<IDxcCompiler3> Compiler =
+        DxcLibrary::SharedInstance->MakeCompiler();
+    StageBinaries Binaries(Sources.Target);
+    auto OutIt = Binaries.Binaries.begin();
+    auto ProfileIt = ShaderProfiles.begin();
+    int StageIt = 0;
+    for (const auto &Stage : Sources.Sources) {
+      auto &Out = OutIt++->first;
+      const LPCWSTR Profile = *ProfileIt++;
+      const auto HStage = HshStage(StageIt++);
+      if (Stage.empty())
+        continue;
+      DxcText SourceBuf{Stage.data(), Stage.size(), 0};
+      LPCWSTR DxArgs[] = {L"-T", Profile};
+      LPCWSTR VkArgs[] = {L"-T", Profile, L"-spirv"};
+      LPCWSTR *Args = Sources.Target == HT_VULKAN_SPIRV ? VkArgs : DxArgs;
+      UINT32 ArgCount = Sources.Target == HT_VULKAN_SPIRV
+                            ? std::extent_v<decltype(VkArgs)>
+                            : std::extent_v<decltype(DxArgs)>;
+      CComPtr<IDxcResult> Result;
+      HRESULT HResult = Compiler->Compile(&SourceBuf, Args, ArgCount, nullptr,
+                                          HSH_IID_PPV_ARGS(&Result));
+      if (!Result) {
+        Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                           "no result from dxcompiler"));
+        continue;
+      }
+      bool HasObj = Result->HasOutput(DXC_OUT_OBJECT);
+      if (HasObj) {
+        CComPtr<IDxcBlob> ObjBlob;
+        Result->GetOutput(DXC_OUT_OBJECT, HSH_IID_PPV_ARGS(&ObjBlob), nullptr);
+        if (auto Size = ObjBlob->GetBufferSize()) {
+          Out.resize(Size);
+          std::memcpy(&Out[0], ObjBlob->GetBufferPointer(), Size);
+        } else {
+          HasObj = false;
+        }
+      }
+      if (Result->HasOutput(DXC_OUT_ERRORS)) {
+        CComPtr<IDxcBlobUtf8> ErrBlob;
+        Result->GetOutput(DXC_OUT_ERRORS, HSH_IID_PPV_ARGS(&ErrBlob), nullptr);
+        if (ErrBlob->GetBufferSize()) {
+          if (!HasObj)
+            llvm::errs() << Stage << '\n';
+          Diags.Report(Diags.getCustomDiagID(HasObj ? DiagnosticsEngine::Warning
+                                                    : DiagnosticsEngine::Error,
+                                             "%0 problem from dxcompiler: %1"))
+              << HshStageToString(HStage)
+              << (char *)ErrBlob->GetBufferPointer();
+        }
+      }
+      if (HResult != ERROR_SUCCESS) {
+        Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                           "%0 problem from dxcompiler: %1"))
+            << HshStageToString(HStage) << HResult;
+      }
+    }
+    return Binaries;
+  }
+
+public:
+  explicit StagesCompilerDXIL(const StageSources &Sources, StringRef ProgramDir,
+                              DiagnosticsEngine &Diags)
+      : Sources(Sources), Diags(Diags) {
+    DxcLibrary::EnsureSharedInstance(ProgramDir, Diags);
+  }
+};
+
 static std::unique_ptr<StagesCompilerBase>
-MakeCompiler(const StageSources &Sources) {
+MakeCompiler(const StageSources &Sources, StringRef ProgramDir,
+             DiagnosticsEngine &Diags) {
   switch (Sources.Target) {
   case HT_GLSL:
   case HT_HLSL:
+    return std::make_unique<StagesCompilerText>(Sources);
   case HT_DXBC:
+  case HT_DXIL:
+  case HT_VULKAN_SPIRV:
+    return std::make_unique<StagesCompilerDXIL>(Sources, ProgramDir, Diags);
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
   case HT_METAL_BIN_TVOS:
-  case HT_SPIRV:
-  case HT_DXIL:
     return std::make_unique<StagesCompilerText>(Sources);
   }
 }
@@ -2034,6 +3020,7 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   CompilerInstance &CI;
   ASTContext &Context;
   Preprocessor &PP;
+  StringRef ProgramDir;
   ArrayRef<HshTarget> Targets;
   std::unique_ptr<raw_pwrite_stream> OS;
   std::unordered_set<uint64_t> SeenHashes;
@@ -2043,14 +3030,11 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   std::map<SourceLocation, std::pair<SourceRange, std::string>>
       SeenHshExpansions;
 
-  static std::string SymbolForHshHash(uint64_t Hash) {
-    return "_hsh_"s + llvm::utohexstr(Hash);
-  }
-
 public:
-  explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
+  explicit GenerateConsumer(CompilerInstance &CI, StringRef ProgramDir,
+                            ArrayRef<HshTarget> Targets)
       : CI(CI), Context(CI.getASTContext()), PP(CI.getPreprocessor()),
-        Targets(Targets) {}
+        ProgramDir(ProgramDir), Targets(Targets) {}
 
   void run(const MatchFinder::MatchResult &Result) override {
     auto *LambdaAttr = Result.Nodes.getNodeAs<AttributedStmt>("attrid");
@@ -2063,26 +3047,145 @@ public:
       Stmt *Body = CallOperator->getBody();
 
       unsigned UseStages = 1;
+
+      std::array<ParmVarDecl *, HSH_MAX_VERTEX_BUFFERS> VertexBufferParms{};
+      auto CheckVertexBufferParm = [&](ParmVarDecl *PVD, auto *Attr) {
+        bool Ret = true;
+        auto NonRefType = PVD->getType().getNonReferenceType();
+        if (!NonRefType->isStructureOrClassType()) {
+          ReportBadVertexBufferType(PVD, Context);
+          Ret = false;
+        } else if (!CheckHshRecordCompatibility(
+                       Builtins, Context, NonRefType->getAsCXXRecordDecl())) {
+          Ret = false;
+        }
+        llvm::APSInt Res;
+        Attr->getIndex()->isIntegerConstantExpr(Res, Context);
+        if (Res < 0 || Res >= HSH_MAX_VERTEX_BUFFERS) {
+          ReportVertexBufferOutOfRange(PVD, Context);
+          Ret = false;
+        }
+        if (auto *OtherPVD = VertexBufferParms[Res.getExtValue()]) {
+          ReportVertexBufferDuplicate(PVD, OtherPVD, Context);
+          Ret = false;
+        }
+        if (!Ret)
+          return false;
+        VertexBufferParms[Res.getExtValue()] = PVD;
+        return true;
+      };
+
+      std::array<std::array<ParmVarDecl *, HSH_MAX_TEXTURES>, HshMaxStage>
+          TextureParms{};
+      auto CheckTextureParm = [&](ParmVarDecl *PVD, auto *Attr,
+                                  HshStage Stage) {
+        auto &StageTextureParms = TextureParms[Stage];
+        bool Ret = true;
+        if (!HshBuiltins::isTextureType(
+                Builtins.identifyBuiltinType(PVD->getType()))) {
+          ReportBadTextureType(PVD, Context);
+          Ret = false;
+        }
+        llvm::APSInt Res;
+        Attr->getIndex()->isIntegerConstantExpr(Res, Context);
+        if (Res < 0 || Res >= HSH_MAX_TEXTURES) {
+          ReportTextureOutOfRange(PVD, Context);
+          Ret = false;
+        }
+        if (auto *OtherPVD = StageTextureParms[Res.getExtValue()]) {
+          ReportTextureDuplicate(PVD, OtherPVD, Context);
+          Ret = false;
+        }
+        if (!Ret)
+          return false;
+        StageTextureParms[Res.getExtValue()] = PVD;
+        return true;
+      };
+
+      std::array<ParmVarDecl *, HSH_MAX_COLOR_TARGETS> ColorTargetParms{};
+      auto CheckColorTargetParm = [&](ParmVarDecl *PVD,
+                                      HshColorTargetAttr *Attr) {
+        bool Ret = true;
+        if (Builtins.identifyBuiltinType(PVD->getType()) != HBT_float4) {
+          ReportBadColorTargetType(PVD, Context);
+          Ret = false;
+        }
+        llvm::APSInt Res;
+        Attr->getIndex()->isIntegerConstantExpr(Res, Context);
+        if (Res < 0 || Res >= HSH_MAX_COLOR_TARGETS) {
+          ReportColorTargetOutOfRange(PVD, Context);
+          Ret = false;
+        }
+        if (!Ret)
+          return false;
+        ColorTargetParms[Res.getExtValue()] = PVD;
+        return true;
+      };
+
       for (ParmVarDecl *Param : CallOperator->parameters()) {
-        if (DetermineParmVarDirection(Param) != HshInput) {
+        HshInterfaceDirection Direction = DetermineParmVarDirection(Param);
+        if (Direction != HshInput) {
           if (Param->hasAttr<HshPositionAttr>()) {
             if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
               ReportBadVertexPositionType(Param, Context);
               return;
             }
-          } else if (Param->hasAttr<HshColorTargetAttr>()) {
-            if (Builtins.identifyBuiltinType(Param->getType()) != HBT_float4) {
-              ReportBadColorTargetType(Param, Context);
+          } else if (auto *CA = Param->getAttr<HshColorTargetAttr>()) {
+            if (!CheckColorTargetParm(Param, CA))
               return;
-            }
           }
           UseStages |= (1u << unsigned(DetermineParmVarStage(Param)));
+        } else {
+          if (auto *VB = Param->getAttr<HshVertexBufferAttr>()) {
+            if (!CheckVertexBufferParm(Param, VB))
+              return;
+          } else if (auto *IB = Param->getAttr<HshInstanceBufferAttr>()) {
+            if (!CheckVertexBufferParm(Param, IB))
+              return;
+          } else if (auto *VTA = Param->getAttr<HshVertexTextureAttr>()) {
+            if (!CheckTextureParm(Param, VTA, HshVertexStage))
+              return;
+          } else if (auto *FTA = Param->getAttr<HshFragmentTextureAttr>()) {
+            if (!CheckTextureParm(Param, FTA, HshFragmentStage))
+              return;
+          }
         }
       }
 
       CXXRecordDecl *SpecRecord =
           Builtins.getHshBaseSpecialization(Context, ExpName);
       StagesBuilder Builder(Context, SpecRecord, UseStages);
+
+      for (uint8_t i = 0; i < HSH_MAX_VERTEX_BUFFERS; ++i) {
+        if (ParmVarDecl *VertexBufferParm = VertexBufferParms[i]) {
+          Builder.registerAttributeRecord(
+              {VertexBufferParm->getName(),
+               VertexBufferParm->getType()
+                   .getNonReferenceType()
+                   ->getAsCXXRecordDecl(),
+               VertexBufferParm->hasAttr<HshVertexBufferAttr>() ? PerVertex
+                                                                : PerInstance,
+               i});
+        }
+      }
+
+      for (int s = HshVertexStage; s < HshMaxStage; ++s) {
+        for (uint8_t i = 0; i < HSH_MAX_TEXTURES; ++i) {
+          if (ParmVarDecl *TextureParm = TextureParms[s][i]) {
+            Builder.registerTexture(
+                TextureParm->getName(),
+                KindOfTextureType(
+                    Builtins.identifyBuiltinType(TextureParm->getType())),
+                HshStage(s));
+          }
+        }
+      }
+
+      for (uint8_t i = 0; i < HSH_MAX_COLOR_TARGETS; ++i) {
+        if (ParmVarDecl *CTParm = ColorTargetParms[i]) {
+          Builder.registerColorTarget(ColorTargetRecord{CTParm->getName(), i});
+        }
+      }
 
       for (int i = HshVertexStage; i < HshMaxStage; ++i) {
         for (ParmVarDecl *Param : CallOperator->parameters()) {
@@ -2126,8 +3229,9 @@ public:
       CXXConstructorDecl *CD = CXXConstructorDecl::Create(
           Context, SpecRecord, {},
           {Context.DeclarationNames.getCXXConstructorName(CDType), {}},
-          Context.getFunctionType(CDType, ConstructorArgs, {}), {}, {}, false,
-          false, CSK_unspecified);
+          Context.getFunctionType(CDType, ConstructorArgs, {}), {},
+          {nullptr, ExplicitSpecKind::ResolvedTrue}, false, false,
+          CSK_unspecified);
       CD->setParams(ConstructorParms);
       CD->setAccess(AS_public);
       CD->setBody(
@@ -2135,7 +3239,9 @@ public:
       SpecRecord->addDecl(CD);
 
       // Add shader data var template
-      SpecRecord->addDecl(Builtins.getDataVarTemplate(Context, SpecRecord));
+      SpecRecord->addDecl(Builtins.getDataVarTemplate(
+          Context, SpecRecord, Builder.getNumStages(), Builder.getNumBindings(),
+          Builder.getNumAttributes()));
 
       SpecRecord->completeDefinition();
 
@@ -2148,15 +3254,31 @@ public:
       for (auto Target : Targets) {
         auto Policy = MakePrintingPolicy(Builtins, Target);
         auto Sources = Builder.printResults(*Policy);
-        auto Compiler = MakeCompiler(Sources);
+        auto Compiler =
+            MakeCompiler(Sources, ProgramDir, Context.getDiagnostics());
+        if (Context.getDiagnostics().hasErrorOccurred())
+          return;
         auto Binaries = Compiler->compile();
         auto SourceIt = Sources.Sources.begin();
         int StageIt = HshHostStage;
+
+        AnonOS << "template <> hsh::_HshShaderData<";
+        Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
+                                       Target);
+        AnonOS << ", " << Builder.getNumStages() << ", "
+               << Builder.getNumBindings() << ", " << Builder.getNumAttributes()
+               << "> " << ExpName << "::data<";
+        Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
+                                       Target);
+        AnonOS << ">{\n";
+
         for (auto &[Data, Hash] : Binaries.Binaries) {
           auto &Source = *SourceIt++;
           auto Stage = HshStage(StageIt++);
           if (Data.empty())
             continue;
+          auto HashStr = llvm::utohexstr(Hash);
+          AnonOS << "  _hsho_" << HashStr << ",\n";
           if (SeenHashes.find(Hash) != SeenHashes.end())
             continue;
           SeenHashes.insert(Hash);
@@ -2168,11 +3290,34 @@ public:
           }
           *OS << "inline ";
           {
-            raw_carray_ostream DataOut(*OS, SymbolForHshHash(Hash));
+            raw_carray_ostream DataOut(*OS, "_hshs_"s + llvm::utohexstr(Hash));
             DataOut.write((const char *)Data.data(), Data.size());
           }
-          *OS << "\n\n";
+          *OS << "\ninline hsh::_HshShaderObject<";
+          Builtins.printTargetEnumString(*OS, Context.getPrintingPolicy(),
+                                         Target);
+          *OS << "> _hsho_" << HashStr << "{";
+          Builtins.printStageEnumString(*OS, Context.getPrintingPolicy(),
+                                        Stage);
+          *OS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}};\n\n";
         }
+
+        for (const auto &Binding : Builder.getBindings()) {
+          AnonOS << "  hsh::_HshVertexBinding{" << Binding.Binding << ", "
+                 << Binding.Stride << ", ";
+          Builtins.printInputRateEnumString(AnonOS, Context.getPrintingPolicy(),
+                                            Binding.InputRate);
+          AnonOS << "},\n";
+        }
+
+        for (const auto &Attribute : Builder.getAttributes()) {
+          AnonOS << "  hsh::_HshVertexAttribute{" << Attribute.Binding << ", ";
+          Builtins.printFormatEnumString(AnonOS, Context.getPrintingPolicy(),
+                                         Attribute.Format);
+          AnonOS << ", " << Attribute.Offset << "},\n";
+        }
+
+        AnonOS << "};\n";
       }
 
       // Emit define macro for capturing args
@@ -2207,9 +3352,9 @@ public:
     if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
             HeadInclude->first)) {
       Diags.Report(HeadInclude->first, IncludeDiagID);
-      unsigned NoteDiagID = Diags.getCustomDiagID(DiagnosticsEngine::Note,
-                                                  "included in namespace");
-      Diags.Report(NS->getLocation(), NoteDiagID);
+      Diags.Report(NS->getLocation(),
+                   Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                         "included in namespace"));
       return;
     }
 
@@ -2241,6 +3386,8 @@ public:
     AnonOS << "}\n";
 
     *OS << AnonOS.str();
+
+    DxcLibrary::SharedInstance.reset();
   }
 
   StringRef
@@ -2260,18 +3407,32 @@ public:
     return {};
   }
 
-  void registerHshHeadInclude(SourceLocation HashLoc, StringRef RelativePath) {
+  void registerHshHeadInclude(SourceLocation HashLoc,
+                              CharSourceRange FilenameRange,
+                              StringRef RelativePath) {
     if (Context.getSourceManager().isWrittenInMainFile(HashLoc)) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
       if (HeadInclude) {
-        DiagnosticsEngine &Diags = Context.getDiagnostics();
-        unsigned DiagID = Diags.getCustomDiagID(
-            DiagnosticsEngine::Error, "multiple hshhead includes in one file");
-        Diags.Report(HashLoc, DiagID);
-        unsigned DiagID2 = Diags.getCustomDiagID(DiagnosticsEngine::Note,
-                                                 "previous include was here");
-        Diags.Report(HeadInclude->first, DiagID2);
+        Diags.Report(HashLoc, Diags.getCustomDiagID(
+                                  DiagnosticsEngine::Error,
+                                  "multiple hshhead includes in one file"));
+        Diags.Report(HeadInclude->first,
+                     Diags.getCustomDiagID(DiagnosticsEngine::Note,
+                                           "previous include was here"));
         return;
       } else {
+        std::string ExpectedName =
+            sys::path::filename(CI.getFrontendOpts().OutputFile);
+        if (ExpectedName != RelativePath) {
+          std::string Replacement = "\""s + ExpectedName + '\"';
+          Diags.Report(
+              FilenameRange.getBegin(),
+              Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                    "hshhead include must match the output "
+                                    "filename"))
+              << FixItHint::CreateReplacement(FilenameRange, Replacement);
+          return;
+        }
         HeadInclude.emplace(HashLoc, RelativePath);
       }
     }
@@ -2282,14 +3443,15 @@ public:
       for (auto &Exps : SeenHshExpansions) {
         if (Exps.second.second == Name) {
           DiagnosticsEngine &Diags = Context.getDiagnostics();
-          unsigned DiagID = Diags.getCustomDiagID(
-              DiagnosticsEngine::Error, "hsh_* macro must be suffixed with "
-                                        "identifier unique to the file");
-          Diags.Report(Range.getBegin(), DiagID)
+          Diags.Report(
+              Range.getBegin(),
+              Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                    "hsh_* macro must be suffixed with "
+                                    "identifier unique to the file"))
               << CharSourceRange(Range, false);
-          unsigned NoteDiagId = Diags.getCustomDiagID(
-              DiagnosticsEngine::Note, "previous identifier usage is here");
-          Diags.Report(Exps.first, NoteDiagId)
+          Diags.Report(Exps.first, Diags.getCustomDiagID(
+                                       DiagnosticsEngine::Note,
+                                       "previous identifier usage is here"))
               << CharSourceRange(Exps.second.first, false);
           return;
         }
@@ -2328,7 +3490,7 @@ public:
       if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
         assert(File && "File must exist at this point");
         SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(""));
-        Consumer.registerHshHeadInclude(HashLoc, RelativePath);
+        Consumer.registerHshHeadInclude(HashLoc, FilenameRange, RelativePath);
       }
     }
     void MacroExpands(const Token &MacroNameTok, const MacroDefinition &MD,
@@ -2348,7 +3510,7 @@ GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   Policy.Indentation = 1;
   Policy.SuppressImplicitBase = true;
   CI.getASTContext().setPrintingPolicy(Policy);
-  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
+  auto Consumer = std::make_unique<GenerateConsumer>(CI, ProgramDir, Targets);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(
           *Consumer, CI.getFileManager(), CI.getSourceManager()));

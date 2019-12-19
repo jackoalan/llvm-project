@@ -35,7 +35,8 @@ class raw_carray_ostream : public raw_ostream {
       const size_t ThisLineSize = std::min(Size, LineRem);
       for (size_t i = 0; i < ThisLineSize; ++i) {
         OS << ' ';
-        llvm::write_hex(OS, *Ptr++, HexPrintStyle::PrefixLower, {2});
+        llvm::write_hex(OS, *(const unsigned char *)Ptr++,
+                        HexPrintStyle::PrefixLower, {2});
         OS << ',';
       }
       Size -= ThisLineSize;

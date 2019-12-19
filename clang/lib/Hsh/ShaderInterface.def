@@ -3,6 +3,7 @@
 #endif
 
 INTERFACE_VARIABLE(HshVertexBufferAttr, HshVertexStage, HshInput, true)
+INTERFACE_VARIABLE(HshInstanceBufferAttr, HshVertexStage, HshInput, true)
 INTERFACE_VARIABLE(HshPositionAttr, HshVertexStage, HshOutput, false)
 INTERFACE_VARIABLE(HshColorTargetAttr, HshFragmentStage, HshOutput, true)
 

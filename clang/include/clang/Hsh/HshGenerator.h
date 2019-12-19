@@ -17,7 +17,7 @@ enum HshTarget {
   HT_HLSL,
   HT_DXBC,
   HT_DXIL,
-  HT_SPIRV,
+  HT_VULKAN_SPIRV,
   HT_METAL,
   HT_METAL_BIN_MAC,
   HT_METAL_BIN_IOS,
@@ -34,8 +34,8 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
     return llvm::StringLiteral("dxbc");
   case HT_DXIL:
     return llvm::StringLiteral("dxil");
-  case HT_SPIRV:
-    return llvm::StringLiteral("spirv");
+  case HT_VULKAN_SPIRV:
+    return llvm::StringLiteral("vulkan-spirv");
   case HT_METAL:
     return llvm::StringLiteral("metal");
   case HT_METAL_BIN_MAC:
@@ -48,10 +48,12 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
 }
 
 class GenerateAction : public ASTFrontendAction {
+  std::string ProgramDir;
   OwningArrayRef<HshTarget> Targets;
 
 public:
-  explicit GenerateAction(ArrayRef<HshTarget> Targets) : Targets(Targets) {}
+  explicit GenerateAction(StringRef ProgramDir, ArrayRef<HshTarget> Targets)
+      : ProgramDir(ProgramDir), Targets(Targets) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
 };

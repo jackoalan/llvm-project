@@ -1,7 +1,8 @@
 #ifndef BUILTIN_CXX_METHOD
-#  define BUILTIN_CXX_METHOD(Name, Record, ...)
+#  define BUILTIN_CXX_METHOD(Name, IsSwizzle, Record, ...)
 #endif
 
-BUILTIN_CXX_METHOD(sample, texture2d, struct hsh::float2, struct hsh::sampler)
+BUILTIN_CXX_METHOD(sample, false, texture2d, struct hsh::float2, struct hsh::sampler)
+BUILTIN_CXX_METHOD(xyz, true, float4, void)
 
 #undef BUILTIN_CXX_METHOD

@@ -4978,20 +4978,27 @@ static void handleHshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL) 
   }
 
   switch (AL.getKind()) {
-    default:
-      llvm_unreachable("invalid hsh parameter attribute");
-    case ParsedAttr::AT_HshVertexBuffer:
-      D->addAttr(::new (S.Context) HshVertexBufferAttr(S.Context, AL, IndexExpr));
-      return;
-    case ParsedAttr::AT_HshColorTarget:
-      D->addAttr(::new (S.Context) HshColorTargetAttr(S.Context, AL, IndexExpr));
-      return;
-    case ParsedAttr::AT_HshVertexTexture:
-      D->addAttr(::new (S.Context) HshVertexTextureAttr(S.Context, AL, IndexExpr));
-      return;
-    case ParsedAttr::AT_HshFragmentTexture:
-      D->addAttr(::new (S.Context) HshFragmentTextureAttr(S.Context, AL, IndexExpr));
-      return;
+  default:
+    llvm_unreachable("invalid hsh parameter attribute");
+    return;
+  case ParsedAttr::AT_HshVertexBuffer:
+    D->addAttr(::new (S.Context) HshVertexBufferAttr(S.Context, AL, IndexExpr));
+    return;
+  case ParsedAttr::AT_HshInstanceBuffer:
+    D->addAttr(::new (S.Context)
+                   HshInstanceBufferAttr(S.Context, AL, IndexExpr));
+    return;
+  case ParsedAttr::AT_HshColorTarget:
+    D->addAttr(::new (S.Context) HshColorTargetAttr(S.Context, AL, IndexExpr));
+    return;
+  case ParsedAttr::AT_HshVertexTexture:
+    D->addAttr(::new (S.Context)
+                   HshVertexTextureAttr(S.Context, AL, IndexExpr));
+    return;
+  case ParsedAttr::AT_HshFragmentTexture:
+    D->addAttr(::new (S.Context)
+                   HshFragmentTextureAttr(S.Context, AL, IndexExpr));
+    return;
   };
 }
 
@@ -7492,6 +7499,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
 
   case ParsedAttr::AT_HshVertexBuffer:
+  case ParsedAttr::AT_HshInstanceBuffer:
   case ParsedAttr::AT_HshColorTarget:
   case ParsedAttr::AT_HshVertexTexture:
   case ParsedAttr::AT_HshFragmentTexture:

@@ -352,7 +352,13 @@ void TypePrinter::printAfter(const Type *T, Qualifiers Quals, raw_ostream &OS) {
 }
 
 void TypePrinter::printBuiltinBefore(const BuiltinType *T, raw_ostream &OS) {
-  OS << T->getName(Policy);
+  StringRef OverrideName;
+  if (Policy.Callbacks)
+    OverrideName = Policy.Callbacks->overrideBuiltinTypeName(T);
+  if (!OverrideName.empty())
+    OS << OverrideName;
+  else
+    OS << T->getName(Policy);
   spaceBeforePlaceHolder(OS);
 }
 

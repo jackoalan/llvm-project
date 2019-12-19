@@ -44,7 +44,8 @@ int main(int argc, const char **argv) {
       {hshgen::HT_HLSL, "HLSL Source Target"},
       {hshgen::HT_DXBC, "DXBC Binary Target (requires d3dcompiler.dll)"},
       {hshgen::HT_DXIL, "DXIL Binary Target (requires dxcompiler.dll)"},
-      {hshgen::HT_SPIRV, "SPIR-V Binary Target (requires dxcompiler.dll)"},
+      {hshgen::HT_VULKAN_SPIRV,
+       "Vulkan SPIR-V Binary Target (requires dxcompiler.dll)"},
       {hshgen::HT_METAL, "Metal Source Target"},
       {hshgen::HT_METAL_BIN_MAC, "Metal Binary macOS Target (requires Xcode)"},
       {hshgen::HT_METAL_BIN_IOS, "Metal Binary iOS Target (requires Xcode)"},
@@ -54,7 +55,8 @@ int main(int argc, const char **argv) {
   if (!cl::ParseCommandLineOptions(argc, argv, "Hsh Codegen Tool"))
     return 1;
 
-  const std::string ProgramName = sys::path::filename(StringRef(argv[0]));
+  const std::string ProgramDir = sys::path::parent_path(argv[0]);
+  const std::string ProgramName = sys::path::filename(argv[0]);
   const bool Colors = WithColor(llvm::errs()).colorsEnabled();
 
   std::vector<std::string> args = {argv[0],
@@ -86,9 +88,10 @@ int main(int argc, const char **argv) {
 
   llvm::IntrusiveRefCntPtr<FileManager> fman(
       new FileManager(FileSystemOptions()));
-  tooling::ToolInvocation TI(std::move(args),
-                             std::make_unique<hshgen::GenerateAction>(Targets),
-                             fman.get());
+  tooling::ToolInvocation TI(
+      std::move(args),
+      std::make_unique<hshgen::GenerateAction>(ProgramDir, Targets),
+      fman.get());
   if (!TI.run())
     return 1;
 

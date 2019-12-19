@@ -1332,6 +1332,12 @@ def HshVertexBuffer : InheritableParamAttr {
   let Documentation = [Undocumented];
 }
 
+def HshInstanceBuffer : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "instance_buffer">];
+  let Args = [ExprArgument<"Index">];
+  let Documentation = [Undocumented];
+}
+
 def HshPosition : InheritableParamAttr {
   let Spellings = [CXX11<"hsh", "position">];
   let Documentation = [Undocumented];

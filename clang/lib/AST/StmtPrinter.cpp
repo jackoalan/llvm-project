@@ -174,8 +174,20 @@ namespace {
 /// with no newline after the }.
 void StmtPrinter::PrintRawCompoundStmt(CompoundStmt *Node) {
   OS << "{" << NL;
+  if (Policy.Callbacks) {
+    IndentLevel += Policy.Indentation;
+    Policy.Callbacks->printCompoundStatementBefore(
+        [this]() -> raw_ostream & { return Indent(); }, Node);
+    IndentLevel -= Policy.Indentation;
+  }
   for (auto *I : Node->body())
     PrintStmt(I);
+  if (Policy.Callbacks) {
+    IndentLevel += Policy.Indentation;
+    Policy.Callbacks->printCompoundStatementAfter(
+        [this]() -> raw_ostream & { return Indent(); }, Node);
+    IndentLevel -= Policy.Indentation;
+  }
 
   Indent() << "}";
 }
@@ -1360,17 +1372,30 @@ void StmtPrinter::PrintCallArgs(CallExpr *Call) {
 
 void StmtPrinter::VisitCallExpr(CallExpr *Call) {
   if (Policy.Callbacks) {
-    StringRef OverrideIdentifier = Policy.Callbacks->overrideBuiltinFunctionIdentifier(Call);
+    StringRef OverrideIdentifier =
+        Policy.Callbacks->overrideBuiltinFunctionIdentifier(Call);
     if (!OverrideIdentifier.empty())
       OS << OverrideIdentifier;
     else
       PrintExpr(Call->getCallee());
     OS << "(";
     bool NeedComma = false;
-    auto PrintComma = [&]() { if (NeedComma) OS << ", "; else NeedComma = true; };
-    if (!Policy.Callbacks->overrideCallArguments(Call,
-        [&](StringRef Arg) { PrintComma(); OS << Arg; },
-        [&](Expr *E) { PrintComma(); PrintExpr(E); }))
+    auto PrintComma = [&]() {
+      if (NeedComma)
+        OS << ", ";
+      else
+        NeedComma = true;
+    };
+    if (!Policy.Callbacks->overrideCallArguments(
+            Call,
+            [&](StringRef Arg) {
+              PrintComma();
+              OS << Arg;
+            },
+            [&](Expr *E) {
+              PrintComma();
+              PrintExpr(E);
+            }))
       PrintCallArgs(Call);
     OS << ")";
     return;
@@ -1389,15 +1414,27 @@ static bool isImplicitThis(const Expr *E) {
 
 void StmtPrinter::VisitMemberExpr(MemberExpr *Node) {
   if (!Policy.SuppressImplicitBase || !isImplicitThis(Node->getBase())) {
-    PrintExpr(Node->getBase());
+    StringRef PrependBase;
+    bool ReplaceBase = false;
+    if (Policy.Callbacks)
+      PrependBase = Policy.Callbacks->prependMemberExprBase(Node, ReplaceBase);
+    if (!PrependBase.empty())
+      OS << PrependBase;
+    if (!ReplaceBase)
+      PrintExpr(Node->getBase());
 
     auto *ParentMember = dyn_cast<MemberExpr>(Node->getBase());
     FieldDecl *ParentDecl =
         ParentMember ? dyn_cast<FieldDecl>(ParentMember->getMemberDecl())
                      : nullptr;
 
-    if (!ParentDecl || !ParentDecl->isAnonymousStructOrUnion())
-      OS << (Node->isArrow() ? "->" : ".");
+    if (!ParentDecl || !ParentDecl->isAnonymousStructOrUnion()) {
+      if (Policy.Callbacks &&
+          Policy.Callbacks->shouldPrintMemberExprUnderscore(Node))
+        OS << "_";
+      else if (!ReplaceBase || !PrependBase.empty())
+        OS << (Node->isArrow() ? "->" : ".");
+    }
   }
 
   if (auto *FD = dyn_cast<FieldDecl>(Node->getMemberDecl()))
@@ -1673,6 +1710,9 @@ void StmtPrinter::VisitAtomicExpr(AtomicExpr *Node) {
 
 // C++
 void StmtPrinter::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *Node) {
+  if (Policy.Callbacks && Policy.Callbacks->overrideCXXOperatorCall(
+                              Node, OS, [&](Expr *E) { PrintExpr(E); }))
+    return;
   OverloadedOperatorKind Kind = Node->getOperator();
   if (Kind == OO_PlusPlus || Kind == OO_MinusMinus) {
     if (Node->getNumArgs() == 1) {
@@ -1900,6 +1940,9 @@ void StmtPrinter::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *Node) {
 }
 
 void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
+  if (Policy.Callbacks && Policy.Callbacks->overrideCXXTemporaryObjectExpr(
+                              Node, OS, [&](Expr *E) { PrintExpr(E); }))
+    return;
   Node->getType().print(OS, Policy);
   if (Node->isStdInitListInitialization())
     /* Nothing to do; braces are part of creating the std::initializer_list. */;
