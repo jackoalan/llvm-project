@@ -20,14 +20,51 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::driver;
 
-int main(int argc, const char **argv) {
-  static cl::opt<std::string> Input(
-      cl::Positional, cl::desc("<input>"), cl::Required,
-      cl::cat(llvm::cl::GeneralCategory), cl::sub(*cl::AllSubCommands));
+namespace llvm::cl {
+class dir_parser : public parser<std::string> {
+public:
+  using parser::parser;
 
-  static cl::opt<std::string> Output(
-      cl::Positional, cl::desc("<output>"), cl::Required,
-      cl::cat(llvm::cl::GeneralCategory), cl::sub(*cl::AllSubCommands));
+  // getValueName - Overload in subclass to provide a better default value.
+  StringRef getValueName() const override { return "dir"; }
+
+  void printOptionInfo(const Option &O, size_t GlobalWidth) const {
+    outs() << "  -" << O.ArgStr << " <dir>";
+    Option::printHelpStr(O.HelpStr, GlobalWidth, getOptionWidth(O));
+  }
+};
+class def_parser : public parser<std::string> {
+public:
+  using parser::parser;
+
+  // getValueName - Overload in subclass to provide a better default value.
+  StringRef getValueName() const override { return "macro>=<value"; }
+
+  void printOptionInfo(const Option &O, size_t GlobalWidth) const {
+    outs() << "  -" << O.ArgStr << " <macro>=<value>";
+    Option::printHelpStr(O.HelpStr, GlobalWidth, getOptionWidth(O));
+  }
+};
+} // namespace llvm::cl
+
+int main(int argc, const char **argv) {
+  static cl::list<std::string, bool, cl::dir_parser> IncludeDirs(
+      "I", cl::ZeroOrMore, cl::Prefix,
+      cl::desc("Add directory to include search path"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::list<std::string, bool, cl::def_parser> CompileDefs(
+      "D", cl::ZeroOrMore, cl::Prefix,
+      cl::desc("Define <macro> to <value> (or 1 if <value> omitted)"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<std::string> Input(cl::Positional, cl::desc("<input>"),
+                                    cl::Required,
+                                    cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<std::string> Output(cl::Positional, cl::desc("<output>"),
+                                     cl::Required,
+                                     cl::cat(llvm::cl::GeneralCategory));
 
   static cl::OptionCategory HshCategory("Hsh Generator Options");
 
@@ -69,10 +106,18 @@ int main(int argc, const char **argv) {
                                    "-Wno-expansion-to-defined",
                                    "-Wno-nullability-completeness",
                                    "-Wno-unused-value",
-                                   Colors ? "-fcolor-diagnostics" : "",
-                                   "-o",
-                                   Output,
-                                   Input};
+                                   Colors ? "-fcolor-diagnostics" : ""};
+  for (const auto &Dir : IncludeDirs) {
+    args.emplace_back("-I");
+    args.push_back(Dir);
+  }
+  for (const auto &Def : CompileDefs) {
+    args.emplace_back("-D");
+    args.push_back(Def);
+  }
+  args.emplace_back("-o");
+  args.push_back(Output);
+  args.push_back(Input);
 
   llvm::SmallVector<hshgen::HshTarget, 4> Targets;
   for (const auto &T : HshTargets) {

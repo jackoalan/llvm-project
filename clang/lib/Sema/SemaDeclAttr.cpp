@@ -7498,6 +7498,18 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleSimpleAttribute<HshPositionAttr>(S, D, AL);
     break;
 
+  case ParsedAttr::AT_HshTopology:
+    handleSimpleAttribute<HshTopologyAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_HshSourceBlend:
+    handleSimpleAttribute<HshSourceBlendAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_HshDestinationBlend:
+    handleSimpleAttribute<HshDestinationBlendAttr>(S, D, AL);
+    break;
+
   case ParsedAttr::AT_HshVertexBuffer:
   case ParsedAttr::AT_HshInstanceBuffer:
   case ParsedAttr::AT_HshColorTarget:

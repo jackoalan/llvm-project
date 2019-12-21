@@ -36,7 +36,7 @@ class raw_carray_ostream : public raw_ostream {
       for (size_t i = 0; i < ThisLineSize; ++i) {
         OS << ' ';
         llvm::write_hex(OS, *(const unsigned char *)Ptr++,
-                        HexPrintStyle::PrefixLower, {2});
+                        HexPrintStyle::PrefixLower, {4});
         OS << ',';
       }
       Size -= ThisLineSize;
@@ -53,6 +53,42 @@ public:
   ~raw_carray_ostream() override {
     flush();
     OS << "\n};";
+  }
+};
+
+/// A raw_ostream adapter that builds a C uint32_t array declaration of the
+/// bytes in.
+class raw_carray32_ostream {
+  raw_ostream &OS;
+  static constexpr size_t LineSize = 6;
+  size_t LineRem = 0;
+
+  void write_impl(const uint32_t *Ptr, size_t Size) {
+    while (Size) {
+      if (LineRem == 0) {
+        OS << "\n ";
+        LineRem = LineSize;
+      }
+      const size_t ThisLineSize = std::min(Size, LineRem);
+      for (size_t i = 0; i < ThisLineSize; ++i) {
+        OS << ' ';
+        llvm::write_hex(OS, *Ptr++, HexPrintStyle::PrefixLower, {10});
+        OS << ',';
+      }
+      Size -= ThisLineSize;
+      LineRem -= ThisLineSize;
+    }
+  }
+
+public:
+  explicit raw_carray32_ostream(raw_ostream &OS, StringRef Name) : OS(OS) {
+    OS << "const uint32_t " << Name << "[] = {";
+  }
+  ~raw_carray32_ostream() {
+    OS << "\n};";
+  }
+  void write(const uint32_t *Ptr, size_t Size) {
+    write_impl(Ptr, Size);
   }
 };
 

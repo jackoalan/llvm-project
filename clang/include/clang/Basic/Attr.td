@@ -1349,6 +1349,21 @@ def HshColorTarget : InheritableParamAttr {
   let Documentation = [Undocumented];
 }
 
+def HshTopology : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "topology">];
+  let Documentation = [Undocumented];
+}
+
+def HshSourceBlend : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "source_blend">];
+  let Documentation = [Undocumented];
+}
+
+def HshDestinationBlend : InheritableParamAttr {
+  let Spellings = [CXX11<"hsh", "destination_blend">];
+  let Documentation = [Undocumented];
+}
+
 def HshVertexTexture : InheritableParamAttr {
   let Spellings = [CXX11<"hsh", "vertex_texture">];
   let Args = [ExprArgument<"Index">];

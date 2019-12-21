@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/hshTargets.cmake")
+check_required_components(hsh)
+
+set(HSH_INCLUDE_DIR "${PACKAGE_PREFIX_DIR}/include")
+include("${CMAKE_CURRENT_LIST_DIR}/hshHelpers.cmake")

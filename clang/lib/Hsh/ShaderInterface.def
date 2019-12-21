@@ -6,7 +6,9 @@ INTERFACE_VARIABLE(HshVertexBufferAttr, HshVertexStage, HshInput, true)
 INTERFACE_VARIABLE(HshInstanceBufferAttr, HshVertexStage, HshInput, true)
 INTERFACE_VARIABLE(HshPositionAttr, HshVertexStage, HshOutput, false)
 INTERFACE_VARIABLE(HshColorTargetAttr, HshFragmentStage, HshOutput, true)
-
+INTERFACE_VARIABLE(HshTopologyAttr, HshHostStage, HshOutput, false)
+INTERFACE_VARIABLE(HshSourceBlendAttr, HshHostStage, HshOutput, false)
+INTERFACE_VARIABLE(HshDestinationBlendAttr, HshHostStage, HshOutput, false)
 INTERFACE_VARIABLE(HshVertexTextureAttr, HshVertexStage, HshInput, true)
 INTERFACE_VARIABLE(HshFragmentTextureAttr, HshFragmentStage, HshInput, true)
 

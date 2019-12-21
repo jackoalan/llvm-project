@@ -11,6 +11,10 @@
                              Metalf, Metali, Metalu)
 #endif
 
+#ifndef BUILTIN_ENUM_TYPE
+#define BUILTIN_ENUM_TYPE(Name)
+#endif
+
 BUILTIN_VECTOR_TYPE(float2, vec2, float2, float2)
 BUILTIN_VECTOR_TYPE(float3, vec3, float3, float3)
 BUILTIN_VECTOR_TYPE(float4, vec4, float4, float4)
@@ -47,7 +51,10 @@ BUILTIN_TEXTURE_TYPE(texturecube_array, samplerCubeArray, isamplerCubeArray,
                      usamplerCubeArray, TextureCubeArray, TextureCubeArray,
                      TextureCubeArray, texturecube_array<float>,
                      texturecube_array<int>, texturecube_array<uint>)
+BUILTIN_ENUM_TYPE(Topology)
+BUILTIN_ENUM_TYPE(BlendFactor)
 
 #undef BUILTIN_VECTOR_TYPE
 #undef BUILTIN_MATRIX_TYPE
 #undef BUILTIN_TEXTURE_TYPE
+#undef BUILTIN_ENUM_TYPE

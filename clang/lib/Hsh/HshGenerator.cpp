@@ -22,14 +22,14 @@
 #include "clang/AST/StmtVisitor.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Analysis/AnalysisDeclContext.h"
+#include "clang/Config/config.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Hsh/HshGenerator.h"
 #include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/PreprocessorOptions.h"
 
 #include "dxc/dxcapi.h"
-
-#include <unordered_set>
 
 #define XSTR(X) #X
 #define STR(X) XSTR(X)
@@ -40,6 +40,10 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 using namespace std::literals;
+
+constexpr StringRef operator""_ll(const char *__str, size_t __len) noexcept {
+  return StringRef{__str, __len};
+}
 
 #ifdef __EMULATE_UUID
 #define HSH_IID_PPV_ARGS(ppType)                                               \
@@ -84,8 +88,14 @@ public:
 #endif
 
   explicit DxcLibrary(StringRef ProgramDir, DiagnosticsEngine &Diags) {
-    SmallString<64> LibPath(ProgramDir);
+#ifdef LLVM_ON_UNIX
+    SmallString<128> LibPath(sys::path::parent_path(ProgramDir));
+    sys::path::append(LibPath, Twine("lib") + CLANG_LIBDIR_SUFFIX,
+                      "libdxcompiler" LTDL_SHLIB_EXT);
+#else
+    SmallString<128> LibPath(ProgramDir);
     sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
+#endif
     std::string Err;
     Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);
     if (!Library.isValid()) {
@@ -150,22 +160,22 @@ enum HshStage : int {
   HshMaxStage
 };
 
-static StringRef HshStageToString(HshStage Stage) {
+constexpr StringRef HshStageToString(HshStage Stage) {
   switch (Stage) {
   case HshHostStage:
-    return llvm::StringLiteral("host");
+    return "host"_ll;
   case HshVertexStage:
-    return llvm::StringLiteral("vertex");
+    return "vertex"_ll;
   case HshControlStage:
-    return llvm::StringLiteral("control");
+    return "control"_ll;
   case HshEvaluationStage:
-    return llvm::StringLiteral("evaluation");
+    return "evaluation"_ll;
   case HshGeometryStage:
-    return llvm::StringLiteral("geometry");
+    return "geometry"_ll;
   case HshFragmentStage:
-    return llvm::StringLiteral("fragment");
+    return "fragment"_ll;
   default:
-    return llvm::StringLiteral("none");
+    return "none"_ll;
   }
 }
 
@@ -180,6 +190,10 @@ enum HshFormat : uint8_t {
   RG16_UNORM,
   RGB16_UNORM,
   RGBA16_UNORM,
+  R32_UINT,
+  RG32_UINT,
+  RGB32_UINT,
+  RGBA32_UINT,
   R8_SNORM,
   RG8_SNORM,
   RGB8_SNORM,
@@ -188,6 +202,10 @@ enum HshFormat : uint8_t {
   RG16_SNORM,
   RGB16_SNORM,
   RGBA16_SNORM,
+  R32_SINT,
+  RG32_SINT,
+  RGB32_SINT,
+  RGBA32_SINT,
   R32_SFLOAT,
   RG32_SFLOAT,
   RGB32_SFLOAT,
@@ -201,6 +219,7 @@ enum HshBuiltinType {
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
   HBT_##Name##_float, HBT_##Name##_int, HBT_##Name##_uint,
+#define BUILTIN_ENUM_TYPE(Name) HBT_##Name,
 #include "BuiltinTypes.def"
   HBT_Max
 };
@@ -232,6 +251,7 @@ private:
   EnumDecl *EnumStage = nullptr;
   EnumDecl *EnumInputRate = nullptr;
   EnumDecl *EnumFormat = nullptr;
+  ClassTemplateDecl *ShaderConstDataTemplateType = nullptr;
   ClassTemplateDecl *ShaderDataTemplateType = nullptr;
   CXXRecordDecl *GlobalListNodeRecordType = nullptr;
   std::array<const TagDecl *, HBT_Max> Types{};
@@ -252,19 +272,15 @@ private:
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
-  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
-   llvm::StringLiteral(#Metal)},
+  {#GLSL##_ll, #HLSL##_ll, #Metal##_ll},
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal)                           \
-  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
-   llvm::StringLiteral(#Metal)},
+  {#GLSL##_ll, #HLSL##_ll, #Metal##_ll},
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  {llvm::StringLiteral(#GLSLf), llvm::StringLiteral(#HLSLf),                   \
-   llvm::StringLiteral(#Metalf)},                                              \
-      {llvm::StringLiteral(#GLSLi), llvm::StringLiteral(#HLSLi),               \
-       llvm::StringLiteral(#Metali)},                                          \
-      {llvm::StringLiteral(#GLSLu), llvm::StringLiteral(#HLSLu),               \
-       llvm::StringLiteral(#Metalu)},
+  {#GLSLf##_ll, #HLSLf##_ll, #Metalf##_ll},                                    \
+      {#GLSLi##_ll, #HLSLi##_ll, #Metali##_ll},                                \
+      {#GLSLu##_ll, #HLSLu##_ll, #Metalu##_ll},
+#define BUILTIN_ENUM_TYPE(Name) {{}, {}, {}},
 #include "BuiltinTypes.def"
   };
 
@@ -275,6 +291,7 @@ private:
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
   false, false, false,
+#define BUILTIN_ENUM_TYPE(Name) false,
 #include "BuiltinTypes.def"
   };
 
@@ -285,6 +302,7 @@ private:
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
   false, false, false,
+#define BUILTIN_ENUM_TYPE(Name) false,
 #include "BuiltinTypes.def"
   };
 
@@ -295,6 +313,18 @@ private:
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
   true, true, true,
+#define BUILTIN_ENUM_TYPE(Name) false,
+#include "BuiltinTypes.def"
+  };
+
+  static constexpr bool BuiltinTypeEnum[] = {
+      false,
+#define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal) false,
+#define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
+                             Metalf, Metali, Metalu)                           \
+  false, false, false,
+#define BUILTIN_ENUM_TYPE(Name) true,
 #include "BuiltinTypes.def"
   };
 
@@ -307,8 +337,7 @@ private:
   static constexpr Spellings BuiltinFunctionSpellings[] = {
       {{}, {}, {}},
 #define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)                  \
-  {llvm::StringLiteral(#GLSL), llvm::StringLiteral(#HLSL),                     \
-   llvm::StringLiteral(#Metal)},
+  {#GLSL##_ll, #HLSL##_ll, #Metal##_ll},
 #include "BuiltinFunctions.def"
   };
 
@@ -326,8 +355,14 @@ private:
     StringRef Name;
     Decl *Found = nullptr;
     bool InHshNS = false;
+    bool UseDetail = false;
+    bool InDetailNS = false;
+
+    bool inCorrectNS() const { return UseDetail ? InDetailNS : InHshNS; }
 
   public:
+    explicit DeclFinder(bool UseDetail) : UseDetail(UseDetail) {}
+
     bool VisitDecl(Decl *D) {
       if (auto *DC = dyn_cast<DeclContext>(D))
         for (Decl *Child : DC->decls())
@@ -337,15 +372,22 @@ private:
     }
 
     bool VisitNamespaceDecl(NamespaceDecl *Namespace) {
-      if (InHshNS)
+      if (InHshNS) {
+        if (!UseDetail)
+          return true;
+        if (Namespace->getDeclName().isIdentifier() &&
+            Namespace->getName() == "detail"_ll) {
+          SaveAndRestore<bool> SavedInDetailNS(InDetailNS, true);
+          return VisitDecl(Namespace);
+        }
         return true;
-      bool Ret = true;
-      if (Namespace->getDeclName().isIdentifier() &&
-          Namespace->getName() == llvm::StringLiteral("hsh")) {
-        SaveAndRestore<bool> SavedInHshNS(InHshNS, true);
-        Ret = VisitDecl(Namespace);
       }
-      return Ret;
+      if (Namespace->getDeclName().isIdentifier() &&
+          Namespace->getName() == "hsh"_ll) {
+        SaveAndRestore<bool> SavedInHshNS(InHshNS, true);
+        return VisitDecl(Namespace);
+      }
+      return true;
     }
 
     Decl *Find(StringRef N, TranslationUnitDecl *TU) {
@@ -359,37 +401,40 @@ private:
   class TypeFinder : public DeclFinder<TypeFinder> {
   public:
     bool VisitTagDecl(TagDecl *Type) {
-      if (InHshNS && Type->getDeclName().isIdentifier() &&
+      if (inCorrectNS() && Type->getDeclName().isIdentifier() &&
           Type->getName() == Name) {
         Found = Type;
         return false;
       }
       return true;
     }
+    using DeclFinder<TypeFinder>::DeclFinder;
   };
 
   class FuncFinder : public DeclFinder<FuncFinder> {
   public:
     bool VisitFunctionDecl(FunctionDecl *Func) {
-      if (InHshNS && Func->getDeclName().isIdentifier() &&
+      if (inCorrectNS() && Func->getDeclName().isIdentifier() &&
           Func->getName() == Name) {
         Found = Func;
         return false;
       }
       return true;
     }
+    using DeclFinder<FuncFinder>::DeclFinder;
   };
 
   class ClassTemplateFinder : public DeclFinder<ClassTemplateFinder> {
   public:
     bool VisitClassTemplateDecl(ClassTemplateDecl *Type) {
-      if (InHshNS && Type->getDeclName().isIdentifier() &&
+      if (inCorrectNS() && Type->getDeclName().isIdentifier() &&
           Type->getName() == Name) {
         Found = Type;
         return false;
       }
       return true;
     }
+    using DeclFinder<ClassTemplateFinder>::DeclFinder;
   };
 
   class MethodFinder : public DeclFinder<MethodFinder> {
@@ -402,7 +447,7 @@ private:
     }
 
     bool VisitCXXMethodDecl(CXXMethodDecl *Method) {
-      if (InHshNS && Method->getDeclName().isIdentifier() &&
+      if (inCorrectNS() && Method->getDeclName().isIdentifier() &&
           Method->getName() == Name &&
           Method->getParent()->getName() == Record &&
           Method->getNumParams() == Params.size()) {
@@ -429,14 +474,16 @@ private:
       Visit(TU);
       return Found;
     }
+
+    using DeclFinder<MethodFinder>::DeclFinder;
   };
 
-  void addType(SourceManager &SM, HshBuiltinType TypeKind, StringRef Name,
+  void addType(ASTContext &Context, HshBuiltinType TypeKind, StringRef Name,
                Decl *D) {
     if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
       Types[TypeKind] = T->getFirstDecl();
     } else {
-      DiagnosticsEngine &Diags = SM.getDiagnostics();
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "type %0; is hsh.h included?"))
@@ -444,9 +491,9 @@ private:
     }
   }
 
-  void addTextureType(SourceManager &SM, HshBuiltinType FirstEnum,
+  void addTextureType(ASTContext &Context, HshBuiltinType FirstEnum,
                       StringRef Name, Decl *D) {
-    DiagnosticsEngine &Diags = SM.getDiagnostics();
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
     if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(D)) {
       for (const auto *Spec : T->specializations()) {
         QualType Tp = Spec->getTemplateArgs()[0].getAsType();
@@ -472,12 +519,25 @@ private:
     }
   }
 
-  void addFunction(SourceManager &SM, HshBuiltinFunction FuncKind,
+  void addEnumType(ASTContext &Context, HshBuiltinType TypeKind, StringRef Name,
+                   Decl *D) {
+    if (auto *T = dyn_cast_or_null<EnumDecl>(D)) {
+      Types[TypeKind] = T->getFirstDecl();
+    } else {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "enum %0; is hsh.h included?"))
+          << Name;
+    }
+  }
+
+  void addFunction(ASTContext &Context, HshBuiltinFunction FuncKind,
                    StringRef Name, Decl *D) {
     if (auto *F = dyn_cast_or_null<FunctionDecl>(D)) {
       Functions[FuncKind] = F->getFirstDecl();
     } else {
-      DiagnosticsEngine &Diags = SM.getDiagnostics();
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "function %0; is hsh.h included?"))
@@ -485,12 +545,12 @@ private:
     }
   }
 
-  void addCXXMethod(SourceManager &SM, HshBuiltinCXXMethod MethodKind,
+  void addCXXMethod(ASTContext &Context, HshBuiltinCXXMethod MethodKind,
                     StringRef Name, Decl *D) {
     if (auto *M = dyn_cast_or_null<CXXMethodDecl>(D)) {
       Methods[MethodKind] = dyn_cast<CXXMethodDecl>(M->getFirstDecl());
     } else {
-      DiagnosticsEngine &Diags = SM.getDiagnostics();
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "method %0; is hsh.h included?"))
@@ -498,116 +558,111 @@ private:
     }
   }
 
+  EnumDecl *findEnum(StringRef Name, bool InDetail, ASTContext &Context) const {
+    if (auto *Ret = dyn_cast_or_null<EnumDecl>(
+            TypeFinder(InDetail).Find(Name, Context.getTranslationUnitDecl())))
+      return Ret;
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error, "unable to locate declaration of enum %0%1; "
+                                  "is hsh.h included?"))
+        << (InDetail ? "detail::" : "") << Name;
+    return nullptr;
+  }
+
+  CXXRecordDecl *findCXXRecord(StringRef Name, bool InDetail,
+                               ASTContext &Context) const {
+    if (auto *Ret = dyn_cast_or_null<CXXRecordDecl>(
+            TypeFinder(InDetail).Find(Name, Context.getTranslationUnitDecl())))
+      return Ret;
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(
+        Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                              "unable to locate declaration of record %0%1; "
+                              "is hsh.h included?"))
+        << (InDetail ? "detail::" : "") << Name;
+    return nullptr;
+  }
+
+  ClassTemplateDecl *findClassTemplate(StringRef Name, bool InDetail,
+                                       ASTContext &Context) const {
+    if (auto *Ret = dyn_cast_or_null<ClassTemplateDecl>(
+            ClassTemplateFinder(InDetail).Find(
+                Name, Context.getTranslationUnitDecl())))
+      return Ret;
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "unable to locate declaration of class template %0%1; "
+        "is hsh.h included?"))
+        << (InDetail ? "detail::" : "") << Name;
+    return nullptr;
+  }
+
+  FunctionTemplateDecl *findMethodTemplate(ClassTemplateDecl *Class,
+                                           StringRef Name,
+                                           ASTContext &Context) const {
+    auto *TemplDecl = Class->getTemplatedDecl();
+    using FuncTemplIt =
+        CXXRecordDecl::specific_decl_iterator<FunctionTemplateDecl>;
+    FunctionTemplateDecl *Ret = nullptr;
+    for (FuncTemplIt TI(TemplDecl->decls_begin()), TE(TemplDecl->decls_end());
+         TI != TE; ++TI) {
+      if (TI->getName() == Name)
+        Ret = *TI;
+    }
+    if (Ret)
+      return Ret;
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error, "unable to locate declaration of "
+                                  "method template %0::%1; is hsh.h included?"))
+        << Class->getName() << Name;
+    return nullptr;
+  }
+
 public:
   void findBuiltinDecls(ASTContext &Context) {
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
-    SourceManager &SM = Context.getSourceManager();
-    if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(
-            ClassTemplateFinder().Find(llvm::StringLiteral("_HshBase"), TU))) {
+    if (auto *T = findClassTemplate("GenBase"_ll, true, Context)) {
       BaseRecordType = cast<ClassTemplateDecl>(T->getFirstDecl());
-      auto *TemplDecl = BaseRecordType->getTemplatedDecl();
-      using FuncTemplIt =
-          CXXRecordDecl::specific_decl_iterator<FunctionTemplateDecl>;
-      for (FuncTemplIt TI(TemplDecl->decls_begin()), TE(TemplDecl->decls_end());
-           TI != TE; ++TI) {
-        if (TI->getName() == llvm::StringLiteral("push_uniform"))
-          PushUniformMethod = *TI;
-      }
-      if (!PushUniformMethod) {
-        Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                           "unable to locate declaration of "
-                                           "_HshBase::push_uniform; "
-                                           "is hsh.h included?"));
-      }
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error, "unable to locate declaration of _HshBase; "
-                                    "is hsh.h included?"));
+      PushUniformMethod =
+          findMethodTemplate(BaseRecordType, "push_uniform"_ll, Context);
     }
 
-    if (auto *E = dyn_cast_or_null<EnumDecl>(
-            TypeFinder().Find(llvm::StringLiteral("Target"), TU))) {
-      EnumTarget = E;
-    } else {
-      Diags.Report(
-          Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                "unable to locate declaration of enum Target; "
-                                "is hsh.h included?"));
-    }
+    EnumTarget = findEnum("Target"_ll, false, Context);
+    EnumStage = findEnum("Stage"_ll, false, Context);
+    EnumInputRate = findEnum("InputRate"_ll, true, Context);
+    EnumFormat = findEnum("Format"_ll, true, Context);
+    ShaderConstDataTemplateType =
+        findClassTemplate("ShaderConstData"_ll, true, Context);
+    ShaderDataTemplateType = findClassTemplate("ShaderData"_ll, true, Context);
+    GlobalListNodeRecordType =
+        findCXXRecord("GlobalListNode"_ll, true, Context);
 
-    if (auto *E = dyn_cast_or_null<EnumDecl>(
-            TypeFinder().Find(llvm::StringLiteral("Stage"), TU))) {
-      EnumStage = E;
-    } else {
-      Diags.Report(
-          Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                "unable to locate declaration of enum Stage; "
-                                "is hsh.h included?"));
-    }
-
-    if (auto *E = dyn_cast_or_null<EnumDecl>(
-            TypeFinder().Find(llvm::StringLiteral("_HshInputRate"), TU))) {
-      EnumInputRate = E;
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "unable to locate declaration of enum _HshInputRate; "
-          "is hsh.h included?"));
-    }
-
-    if (auto *E = dyn_cast_or_null<EnumDecl>(
-            TypeFinder().Find(llvm::StringLiteral("_HshFormat"), TU))) {
-      EnumFormat = E;
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "unable to locate declaration of enum _HshFormat; "
-          "is hsh.h included?"));
-    }
-
-    if (auto *T =
-            dyn_cast_or_null<ClassTemplateDecl>(ClassTemplateFinder().Find(
-                llvm::StringLiteral("_HshShaderData"), TU))) {
-      ShaderDataTemplateType = T;
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "unable to locate declaration of _HshShaderData; "
-          "is hsh.h included?"));
-    }
-
-    if (auto *R = dyn_cast_or_null<CXXRecordDecl>(
-            TypeFinder().Find(llvm::StringLiteral("_HshGlobalListNode"), TU))) {
-      GlobalListNodeRecordType = R;
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "unable to locate declaration of _HshGlobalListNode; "
-          "is hsh.h included?"));
-    }
-
+    TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
-  addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
-          TypeFinder().Find(llvm::StringLiteral(#Name), TU));
+  addType(Context, HBT_##Name, #Name##_ll,                                     \
+          TypeFinder(false).Find(#Name##_ll, TU));
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal)                           \
-  addType(SM, HBT_##Name, llvm::StringLiteral(#Name),                          \
-          TypeFinder().Find(llvm::StringLiteral(#Name), TU));
+  addType(Context, HBT_##Name, #Name##_ll,                                     \
+          TypeFinder(false).Find(#Name##_ll, TU));
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  addTextureType(SM, HBT_##Name##_float, llvm::StringLiteral(#Name),           \
-                 ClassTemplateFinder().Find(llvm::StringLiteral(#Name), TU));
+  addTextureType(Context, HBT_##Name##_float, #Name##_ll,                      \
+                 ClassTemplateFinder(false).Find(#Name##_ll, TU));
+#define BUILTIN_ENUM_TYPE(Name)                                                \
+  addEnumType(Context, HBT_##Name, #Name##_ll,                                 \
+              TypeFinder(false).Find(#Name##_ll, TU));
 #include "BuiltinTypes.def"
 #define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)                  \
-  addFunction(SM, HBF_##Name, llvm::StringLiteral(#Name),                      \
-              FuncFinder().Find(llvm::StringLiteral(#Name), TU));
+  addFunction(Context, HBF_##Name, #Name##_ll,                                 \
+              FuncFinder(false).Find(#Name##_ll, TU));
 #include "BuiltinFunctions.def"
 #define BUILTIN_CXX_METHOD(Name, IsSwizzle, Record, ...)                       \
-  addCXXMethod(SM, HBM_##Name##_##Record,                                      \
-               llvm::StringLiteral(#Record "::" #Name "(" #__VA_ARGS__ ")"),   \
-               MethodFinder().Find(llvm::StringLiteral(#Name),                 \
-                                   llvm::StringLiteral(#Record),               \
-                                   llvm::StringLiteral(#__VA_ARGS__), TU));
+  addCXXMethod(Context, HBM_##Name##_##Record,                                 \
+               #Record "::" #Name "(" #__VA_ARGS__ ")"_ll,                     \
+               MethodFinder(false).Find(#Name##_ll, #Record##_ll,              \
+                                        #__VA_ARGS__##_ll, TU));
 #include "BuiltinCXXMethods.def"
   }
 
@@ -685,8 +740,23 @@ public:
     return BuiltinTypeMatrix[Tp];
   }
 
+  static constexpr unsigned getMatrixRowCount(HshBuiltinType Tp) {
+    switch (Tp) {
+    case HBT_float3x3:
+      return 3;
+    case HBT_float4x4:
+      return 4;
+    default:
+      return 0;
+    }
+  }
+
   static constexpr bool isTextureType(HshBuiltinType Tp) {
     return BuiltinTypeTexture[Tp];
+  }
+
+  static constexpr bool isEnumType(HshBuiltinType Tp) {
+    return BuiltinTypeEnum[Tp];
   }
 
   static constexpr bool isSwizzleMethod(HshBuiltinCXXMethod M) {
@@ -733,17 +803,6 @@ public:
     return Record;
   }
 
-  QualType getHshShaderDataSpecializationType(ASTContext &Context) const {
-    auto *NTTP = cast<NonTypeTemplateParmDecl>(
-        ShaderDataTemplateType->getTemplateParameters()->getParam(0));
-    TemplateArgumentListInfo TemplateArgs;
-    TemplateArgs.addArgument(TemplateArgumentLoc(
-        TemplateArgument{NTTP, NTTP->getType()}, (Expr *)nullptr));
-    TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
-        Context, ShaderDataTemplateType, TemplateArgs);
-    return TSI->getType();
-  }
-
   CXXMemberCallExpr *getPushUniformCall(ASTContext &Context, VarDecl *Decl,
                                         HshStage Stage) const {
     auto *NTTP = cast<NonTypeTemplateParmDecl>(
@@ -768,11 +827,12 @@ public:
                                      VK_XValue, {});
   }
 
-  VarTemplateDecl *getDataVarTemplate(ASTContext &Context, DeclContext *DC,
-                                      uint32_t NumStages, uint32_t NumBindings,
-                                      uint32_t NumAttributes) const {
+  VarTemplateDecl *getConstDataVarTemplate(ASTContext &Context, DeclContext *DC,
+                                           uint32_t NumStages,
+                                           uint32_t NumBindings,
+                                           uint32_t NumAttributes) const {
     NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
-        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"),
+        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"_ll),
         QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
     auto *TPL =
         TemplateParameterList::Create(Context, {}, {}, TargetParm, {}, nullptr);
@@ -795,10 +855,41 @@ public:
                          Context.UnsignedIntTy},
         (Expr *)nullptr));
     TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
+        Context, ShaderConstDataTemplateType, TemplateArgs);
+
+    auto *VD =
+        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("cdata"_ll),
+                        TSI->getType(), nullptr, SC_Static);
+    VD->setConstexpr(true);
+    VD->setInitStyle(VarDecl::ListInit);
+    VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
+    return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
+                                   VD);
+  }
+
+  VarTemplateDecl *getDataVarTemplate(ASTContext &Context, DeclContext *DC,
+                                      uint32_t NumStages) const {
+    NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
+        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"_ll),
+        QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
+    auto *TPL =
+        TemplateParameterList::Create(Context, {}, {}, TargetParm, {}, nullptr);
+    auto *PExpr =
+        DeclRefExpr::Create(Context, {}, {}, TargetParm, false,
+                            SourceLocation{}, TargetParm->getType(), VK_XValue);
+    TemplateArgumentListInfo TemplateArgs;
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument{PExpr}, PExpr));
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument{Context, APSInt::get(NumStages),
+                                             Context.UnsignedIntTy},
+                            (Expr *)nullptr));
+    TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
         Context, ShaderDataTemplateType, TemplateArgs);
 
-    auto *VD = VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"),
-                               TSI->getType(), nullptr, SC_Static);
+    auto *VD =
+        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"_ll),
+                        TSI->getType(), nullptr, SC_Static);
     VD->setInitStyle(VarDecl::ListInit);
     VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
     return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
@@ -807,7 +898,7 @@ public:
 
   VarDecl *getGlobalListNode(ASTContext &Context, DeclContext *DC) const {
     return VarDecl::Create(
-        Context, DC, {}, {}, &Context.Idents.get("global"),
+        Context, DC, {}, {}, &Context.Idents.get("global"_ll),
         QualType{GlobalListNodeRecordType->getTypeForDecl(), 0}, nullptr,
         SC_Static);
   }
@@ -830,6 +921,42 @@ public:
   void printFormatEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
                              HshFormat Format) const {
     printEnumeratorString(Out, Policy, EnumFormat, APSInt::get(Format));
+  }
+
+  HshFormat formatOfType(QualType Tp) const {
+    if (Tp->isSpecificBuiltinType(BuiltinType::Float)) {
+      return R32_SFLOAT;
+    } else if (Tp->isSpecificBuiltinType(BuiltinType::Int)) {
+      return R32_SINT;
+    } else if (Tp->isSpecificBuiltinType(BuiltinType::UInt)) {
+      return R32_UINT;
+    }
+    auto HBT = identifyBuiltinType(Tp);
+    switch (HBT) {
+    case HBT_float2:
+      return RG32_SFLOAT;
+    case HBT_float3:
+    case HBT_float3x3:
+      return RGB32_SFLOAT;
+    case HBT_float4:
+    case HBT_float4x4:
+      return RGBA32_SFLOAT;
+    case HBT_int2:
+      return RG32_SINT;
+    case HBT_int3:
+      return RGB32_SINT;
+    case HBT_int4:
+      return RGBA32_SINT;
+    case HBT_uint2:
+      return RG32_UINT;
+    case HBT_uint3:
+      return RGB32_UINT;
+    case HBT_uint4:
+      return RGBA32_UINT;
+    default:
+      break;
+    }
+    llvm_unreachable("Invalid type passed to formatOfType");
   }
 };
 
@@ -1297,14 +1424,14 @@ struct TextureRecord {
 };
 
 struct VertexBinding {
-  uint8_t Binding;
+  uint32_t Binding;
   uint32_t Stride;
   HshAttributeKind InputRate;
 };
 
 struct VertexAttribute {
   uint32_t Offset;
-  uint8_t Binding;
+  uint32_t Binding;
   HshFormat Format;
 };
 
@@ -1419,7 +1546,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
           DRE->getDecl()->hasAttr<HshInstanceBufferAttr>())
         return ImplClass::VertexBufferBase;
       if (ImplClass::NoUniformVarDecl &&
-          DRE->getDecl()->getName() == "_from_host")
+          DRE->getDecl()->getName() == "_from_host"_ll)
         ReplaceBase = true;
     }
     return {};
@@ -1444,7 +1571,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
   static constexpr llvm::StringLiteral VertexBufferBase{""};
 
   static constexpr StringRef identifierOfVertexPosition(ParmVarDecl *PVD) {
-    return llvm::StringLiteral("gl_Position");
+    return "gl_Position"_ll;
   }
 
   static constexpr StringRef identifierOfColorTarget(ParmVarDecl *PVD) {
@@ -1455,7 +1582,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
                                                    CXXMemberCallExpr *C) {
     switch (HBM) {
     case HBM_sample_texture2d:
-      return llvm::StringLiteral("texture");
+      return "texture"_ll;
     default:
       return {};
     }
@@ -1876,6 +2003,7 @@ struct StageSources {
 class StagesBuilder
     : public StmtVisitor<StagesBuilder, Expr *, HshStage, HshStage> {
   ASTContext &Context;
+  HshBuiltins &Builtins;
   unsigned UseStages;
 
   static IdentifierInfo &getToIdent(ASTContext &Context, HshStage Stage) {
@@ -2005,7 +2133,7 @@ class StagesBuilder
 
   AssignmentFinderInfo AssignFindInfo;
   VarDecl *OrigVarDecl = nullptr;
-  std::unordered_map<Stmt *, std::array<Stmt *, HshMaxStage>> ReplacedAssigns;
+  llvm::DenseMap<Stmt *, std::array<Stmt *, HshMaxStage>> ReplacedAssigns;
 
   template <typename T>
   SmallVector<Expr *, 4> DoVisitExprRange(T Range, HshStage From, HshStage To) {
@@ -2016,9 +2144,9 @@ class StagesBuilder
   }
 
 public:
-  StagesBuilder(ASTContext &Context, DeclContext *SpecDeclContext,
-                unsigned UseStages)
-      : Context(Context), UseStages(UseStages) {
+  StagesBuilder(ASTContext &Context, HshBuiltins &Builtins,
+                DeclContext *SpecDeclContext, unsigned UseStages)
+      : Context(Context), Builtins(Builtins), UseStages(UseStages) {
     for (int D = HshVertexStage; D < HshMaxStage; ++D) {
       if (UseStages & (1u << unsigned(D))) {
         HostToStageRecords[D].initializeRecord(Context, SpecDeclContext,
@@ -2337,6 +2465,37 @@ public:
     if (Search != AttributeRecords.end())
       return;
     AttributeRecords.push_back(Attribute);
+
+    auto *Type = Attribute.Record->getTypeForDecl();
+    auto Size = Context.getTypeSizeInChars(Type);
+    auto Align = Context.getTypeAlignInChars(Type);
+    auto SizeOf = Size.alignTo(Align).getQuantity();
+    VertexBindings.push_back(
+        VertexBinding{Attribute.Binding, SizeOf, Attribute.Kind});
+    CharUnits Offset;
+    for (const auto *Field : Attribute.Record->fields()) {
+      /*
+       * Shader packing rules do not apply for attributes.
+       * Just generate metadata according to C++ alignment.
+       */
+      auto FieldSize = Context.getTypeSizeInChars(Field->getType());
+      auto FieldAlign = Context.getTypeAlignInChars(Field->getType());
+      auto HBT = Builtins.identifyBuiltinType(Field->getType());
+      auto Format = Builtins.formatOfType(Field->getType());
+      auto ProcessField = [&]() {
+        Offset = Offset.alignTo(FieldAlign);
+        VertexAttributes.push_back(
+            VertexAttribute{Offset.getQuantity(), Attribute.Binding, Format});
+        Offset += FieldSize;
+      };
+      if (HshBuiltins::isMatrixType(HBT)) {
+        auto RowCount = HshBuiltins::getMatrixRowCount(HBT);
+        for (unsigned i = 0; i < RowCount; ++i)
+          ProcessField();
+      } else {
+        ProcessField();
+      }
+    }
   }
 
   void registerTexture(StringRef Name, HshTextureKind Kind, HshStage Stage) {
@@ -3023,7 +3182,7 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   StringRef ProgramDir;
   ArrayRef<HshTarget> Targets;
   std::unique_ptr<raw_pwrite_stream> OS;
-  std::unordered_set<uint64_t> SeenHashes;
+  llvm::DenseSet<uint64_t> SeenHashes;
   std::string AnonNSString;
   raw_string_ostream AnonOS{AnonNSString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
@@ -3037,14 +3196,31 @@ public:
         ProgramDir(ProgramDir), Targets(Targets) {}
 
   void run(const MatchFinder::MatchResult &Result) override {
-    auto *LambdaAttr = Result.Nodes.getNodeAs<AttributedStmt>("attrid");
-    auto *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id");
+    auto *LambdaAttr = Result.Nodes.getNodeAs<AttributedStmt>("attrid"_ll);
+    auto *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("id"_ll);
     if (Lambda && LambdaAttr) {
       auto ExpName = getExpansionNameBeforeLambda(LambdaAttr);
       assert(!ExpName.empty() && "Expansion name should exist");
 
       auto *CallOperator = Lambda->getCallOperator();
       Stmt *Body = CallOperator->getBody();
+
+      AnalysisDeclContextManager AnaMgr(Context);
+      auto *CallCtx = AnaMgr.getContext(CallOperator);
+      auto *CFG = CallCtx->getCFG();
+      ASTDumper Dumper(llvm::errs(), nullptr, &Context.getSourceManager());
+      for (auto *Block : *CFG) {
+        unsigned EId = 1;
+        for (auto &Elem : *Block) {
+          if (auto Stmt = Elem.getAs<CFGStmt>()) {
+            llvm::errs() << Block->getBlockID() << ' ' << EId << ' ';
+            Dumper.Visit(Stmt->getStmt());
+            llvm::errs() << '\n';
+          }
+          ++EId;
+        }
+      }
+      CallCtx->dumpCFG(true);
 
       unsigned UseStages = 1;
 
@@ -3154,7 +3330,7 @@ public:
 
       CXXRecordDecl *SpecRecord =
           Builtins.getHshBaseSpecialization(Context, ExpName);
-      StagesBuilder Builder(Context, SpecRecord, UseStages);
+      StagesBuilder Builder(Context, Builtins, SpecRecord, UseStages);
 
       for (uint8_t i = 0; i < HSH_MAX_VERTEX_BUFFERS; ++i) {
         if (ParmVarDecl *VertexBufferParm = VertexBufferParms[i]) {
@@ -3239,15 +3415,17 @@ public:
       SpecRecord->addDecl(CD);
 
       // Add shader data var template
-      SpecRecord->addDecl(Builtins.getDataVarTemplate(
+      SpecRecord->addDecl(Builtins.getConstDataVarTemplate(
           Context, SpecRecord, Builder.getNumStages(), Builder.getNumBindings(),
           Builder.getNumAttributes()));
+      SpecRecord->addDecl(Builtins.getDataVarTemplate(Context, SpecRecord,
+                                                      Builder.getNumStages()));
 
       SpecRecord->completeDefinition();
 
       // Emit shader record
       SpecRecord->print(AnonOS, Context.getPrintingPolicy());
-      AnonOS << ";\nhsh::_HshGlobalListNode " << ExpName << "::global{&"
+      AnonOS << ";\nhsh::detail::GlobalListNode " << ExpName << "::global{&"
              << ExpName << "::global_build};\n";
 
       // Emit shader data
@@ -3262,15 +3440,15 @@ public:
         auto SourceIt = Sources.Sources.begin();
         int StageIt = HshHostStage;
 
-        AnonOS << "template <> hsh::_HshShaderData<";
+        AnonOS << "template <> constexpr hsh::detail::ShaderConstData<";
         Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
                                        Target);
         AnonOS << ", " << Builder.getNumStages() << ", "
                << Builder.getNumBindings() << ", " << Builder.getNumAttributes()
-               << "> " << ExpName << "::data<";
+               << "> " << ExpName << "::cdata<";
         Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
                                        Target);
-        AnonOS << ">{\n";
+        AnonOS << ">{\n  {\n";
 
         for (auto &[Data, Hash] : Binaries.Binaries) {
           auto &Source = *SourceIt++;
@@ -3278,7 +3456,13 @@ public:
           if (Data.empty())
             continue;
           auto HashStr = llvm::utohexstr(Hash);
-          AnonOS << "  _hsho_" << HashStr << ",\n";
+          AnonOS << "    hsh::detail::ShaderCode<";
+          Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
+                                         Target);
+          AnonOS << ">{";
+          Builtins.printStageEnumString(AnonOS, Context.getPrintingPolicy(),
+                                        Stage);
+          AnonOS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}},\n";
           if (SeenHashes.find(Hash) != SeenHashes.end())
             continue;
           SeenHashes.insert(Hash);
@@ -3289,35 +3473,59 @@ public:
             CommentOut << Source;
           }
           *OS << "inline ";
-          {
+          if (Target != HT_VULKAN_SPIRV) {
             raw_carray_ostream DataOut(*OS, "_hshs_"s + llvm::utohexstr(Hash));
             DataOut.write((const char *)Data.data(), Data.size());
+          } else {
+            raw_carray32_ostream DataOut(*OS,
+                                         "_hshs_"s + llvm::utohexstr(Hash));
+            DataOut.write((const uint32_t *)Data.data(), Data.size() / 4);
           }
-          *OS << "\ninline hsh::_HshShaderObject<";
+          *OS << "\ninline hsh::detail::ShaderObject<";
           Builtins.printTargetEnumString(*OS, Context.getPrintingPolicy(),
                                          Target);
-          *OS << "> _hsho_" << HashStr << "{";
-          Builtins.printStageEnumString(*OS, Context.getPrintingPolicy(),
-                                        Stage);
-          *OS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}};\n\n";
+          *OS << "> _hsho_" << HashStr << ";\n\n";
         }
 
+        AnonOS << "  },\n  {\n";
+
         for (const auto &Binding : Builder.getBindings()) {
-          AnonOS << "  hsh::_HshVertexBinding{" << Binding.Binding << ", "
+          AnonOS << "    hsh::detail::VertexBinding{" << Binding.Binding << ", "
                  << Binding.Stride << ", ";
           Builtins.printInputRateEnumString(AnonOS, Context.getPrintingPolicy(),
                                             Binding.InputRate);
           AnonOS << "},\n";
         }
 
+        AnonOS << "  },\n  {\n";
+
         for (const auto &Attribute : Builder.getAttributes()) {
-          AnonOS << "  hsh::_HshVertexAttribute{" << Attribute.Binding << ", ";
+          AnonOS << "    hsh::detail::VertexAttribute{" << Attribute.Binding
+                 << ", ";
           Builtins.printFormatEnumString(AnonOS, Context.getPrintingPolicy(),
                                          Attribute.Format);
           AnonOS << ", " << Attribute.Offset << "},\n";
         }
 
-        AnonOS << "};\n";
+        AnonOS << "  }\n};\n";
+
+        AnonOS << "template <> hsh::detail::ShaderData<";
+        Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
+                                       Target);
+        AnonOS << ", " << Builder.getNumStages() << "> " << ExpName
+               << "::data<";
+        Builtins.printTargetEnumString(AnonOS, Context.getPrintingPolicy(),
+                                       Target);
+        AnonOS << ">{\n  {\n";
+
+        for (auto &[Data, Hash] : Binaries.Binaries) {
+          if (Data.empty())
+            continue;
+          auto HashStr = llvm::utohexstr(Hash);
+          AnonOS << "    _hsho_" << HashStr << ",\n";
+        }
+
+        AnonOS << "  }\n};\n";
       }
 
       // Emit define macro for capturing args
@@ -3332,8 +3540,8 @@ public:
       }
       AnonOS << "); (void)\n\n";
 
-      ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
-      P.Visit(Body);
+      // ASTDumper P(llvm::errs(), nullptr, &Context.getSourceManager());
+      // P.Visit(Body);
     }
   }
 
@@ -3346,7 +3554,13 @@ public:
         Diags.getCustomDiagID(DiagnosticsEngine::Error,
                               "hshhead include in must appear in global scope");
     if (!HeadInclude) {
-      Diags.Report(IncludeDiagID);
+      std::string ExpectedName =
+          sys::path::filename(CI.getFrontendOpts().OutputFile);
+      std::string Insertion = "#include \""s + ExpectedName + '\"';
+      Diags.Report(IncludeDiagID) << FixItHint::CreateInsertion(
+          Context.getSourceManager().getLocForStartOfFile(
+              Context.getSourceManager().getMainFileID()),
+          Insertion);
       return;
     }
     if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
@@ -3366,7 +3580,9 @@ public:
 
     SourceManager &SM = Context.getSourceManager();
     StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
-    *OS << "/* Auto-generated hshhead for " << MainName << " */\n\n";
+    *OS << "/* Auto-generated hshhead for " << MainName
+        << " */\n"
+           "#include <hsh.h>\n\n";
 
     AnonOS << "namespace {\n\n";
 
@@ -3376,10 +3592,11 @@ public:
      */
     MatchFinder Finder;
     Finder.addMatcher(
-        attributedStmt(stmt().bind("attrid"),
-                       allOf(hasStmtAttr(attr::HshGeneratorLambda),
-                             hasDescendant(lambdaExpr(
-                                 stmt().bind("id"), isExpansionInMainFile())))),
+        attributedStmt(
+            stmt().bind("attrid"_ll),
+            allOf(hasStmtAttr(attr::HshGeneratorLambda),
+                  hasDescendant(lambdaExpr(stmt().bind("id"_ll),
+                                           isExpansionInMainFile())))),
         this);
     Finder.matchAST(Context);
 
@@ -3464,6 +3681,7 @@ public:
     GenerateConsumer &Consumer;
     FileManager &FM;
     SourceManager &SM;
+    static constexpr llvm::StringLiteral DummyInclude{"#include <hsh.h>\n"};
 
   public:
     explicit PPCallbacks(GenerateConsumer &Consumer, FileManager &FM,
@@ -3471,10 +3689,11 @@ public:
         : Consumer(Consumer), FM(FM), SM(SM) {}
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
-        SmallString<1024> VirtualFilePath(llvm::StringLiteral("./"));
+      if (FileName.endswith_lower(".hshhead"_ll)) {
+        SmallString<1024> VirtualFilePath("./"_ll);
         VirtualFilePath += FileName;
-        FM.getVirtualFile(VirtualFilePath, 0, std::time(nullptr));
+        FM.getVirtualFile(VirtualFilePath, DummyInclude.size(),
+                          std::time(nullptr));
         RecoveryPath.push_back('.');
         return true;
       }
@@ -3487,9 +3706,10 @@ public:
                             StringRef RelativePath,
                             const clang::Module *Imported,
                             SrcMgr::CharacteristicKind FileType) override {
-      if (FileName.endswith_lower(llvm::StringLiteral(".hshhead"))) {
+      if (FileName.endswith_lower(".hshhead"_ll)) {
         assert(File && "File must exist at this point");
-        SM.overrideFileContents(File, llvm::MemoryBuffer::getMemBuffer(""));
+        SM.overrideFileContents(File,
+                                llvm::MemoryBuffer::getMemBuffer(DummyInclude));
         Consumer.registerHshHeadInclude(HashLoc, FilenameRange, RelativePath);
       }
     }
@@ -3497,7 +3717,7 @@ public:
                       SourceRange Range, const MacroArgs *Args) override {
       if (MacroNameTok.is(tok::identifier)) {
         StringRef Name = MacroNameTok.getIdentifierInfo()->getName();
-        if (Name.startswith("hsh_"))
+        if (Name.startswith("hsh_"_ll))
           Consumer.registerHshExpansion(Range, Name);
       }
     }

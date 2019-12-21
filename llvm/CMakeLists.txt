@@ -2,6 +2,23 @@
 
 cmake_minimum_required(VERSION 3.4.3)
 
+# Hsh distribution cache options
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
+set(LLVM_EXTERNAL_CLANG_SOURCE_DIR
+        "${CMAKE_CURRENT_LIST_DIR}/../clang" CACHE STRING "")
+set(LLVM_EXTERNAL_LIBHSH_SOURCE_DIR
+        "${CMAKE_CURRENT_LIST_DIR}/../libhsh" CACHE STRING "")
+set(LLVM_EXTERNAL_PROJECTS libhsh CACHE STRING "")
+set(LLVM_ENABLE_PROJECTS "clang;libhsh" CACHE STRING "")
+set(LLVM_TARGETS_TO_BUILD "" CACHE STRING "")
+set(LLVM_DISTRIBUTION_COMPONENTS
+        hshgen
+        clang-resource-headers
+        DirectXShaderCompiler-libs
+        libhsh-headers
+        libhsh-cmake-exports
+        CACHE STRING "")
+
 if(POLICY CMP0068)
   cmake_policy(SET CMP0068 NEW)
   set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
@@ -50,7 +67,7 @@ project(LLVM
   VERSION ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}
   LANGUAGES C CXX ASM)
 
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
+set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard to conform to")
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
