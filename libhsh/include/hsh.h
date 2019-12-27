@@ -20,6 +20,7 @@ struct float2;
 struct float4 {
   float x, y, z, w;
   float4() = default;
+  constexpr float4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
   constexpr explicit float4(const float3 &other, float w = 1.f);
   constexpr explicit float4(const float2 &other, float z = 0.f, float w = 1.f);
   void operator+=(const float4 &other) {}

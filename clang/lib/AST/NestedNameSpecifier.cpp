@@ -272,6 +272,9 @@ bool NestedNameSpecifier::containsUnexpandedParameterPack() const {
 /// stream.
 void NestedNameSpecifier::print(raw_ostream &OS, const PrintingPolicy &Policy,
                                 bool ResolveTemplateArguments) const {
+  if (Policy.SuppressNestedQualifiers)
+    return;
+
   if (getPrefix())
     getPrefix()->print(OS, Policy);
 

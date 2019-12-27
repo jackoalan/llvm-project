@@ -1334,8 +1334,7 @@ void TypePrinter::printElaboratedBefore(const ElaboratedType *T,
   }
 
   // The tag definition will take care of these.
-  if (!Policy.IncludeTagDefinition && !Policy.DisableTypeQualifiers)
-  {
+  if (!Policy.IncludeTagDefinition && !Policy.SuppressNestedQualifiers) {
     OS << TypeWithKeyword::getKeywordName(T->getKeyword());
     if (T->getKeyword() != ETK_None)
       OS << " ";

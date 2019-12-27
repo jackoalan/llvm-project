@@ -133,8 +133,9 @@ struct PrintingPolicy {
         MSWChar(LO.MicrosoftExt && !LO.WChar), IncludeNewlines(true),
         MSVCFormatting(false), ConstantsAsWritten(false),
         SuppressImplicitBase(false), FullyQualifiedName(false),
-        PrintCanonicalTypes(false), DisableTypeQualifiers(false),
-        DisableListInitialization(false) {}
+        PrintCanonicalTypes(false), SuppressNestedQualifiers(false),
+        SuppressListInitialization(false), SeparateConditionVarDecls(false),
+        ConstantExprsAsInt(false) {}
 
   /// Adjust this printing policy for cases where it's known that we're
   /// printing C++ code (for instance, if AST dumping reaches a C++-only
@@ -311,9 +312,13 @@ struct PrintingPolicy {
   /// Whether to print types as written or canonically.
   unsigned PrintCanonicalTypes : 1;
 
-  unsigned DisableTypeQualifiers : 1;
+  unsigned SuppressNestedQualifiers : 1;
 
-  unsigned DisableListInitialization : 1;
+  unsigned SuppressListInitialization : 1;
+
+  unsigned SeparateConditionVarDecls : 1;
+
+  unsigned ConstantExprsAsInt : 1;
 
   /// Callbacks to use to allow the behavior of printing to be customized.
   const PrintingCallbacks *Callbacks = nullptr;

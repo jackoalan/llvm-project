@@ -121,7 +121,7 @@ namespace {
     void PrintRawCompoundStmt(CompoundStmt *S);
     void PrintRawDecl(Decl *D);
     void PrintRawDeclStmt(const DeclStmt *S);
-    void PrintRawIfStmt(IfStmt *If);
+    void PrintRawIfStmt(IfStmt *If, bool SuppressCondSpecifiers = false);
     void PrintRawCXXCatchStmt(CXXCatchStmt *Catch);
     void PrintCallArgs(CallExpr *E);
     void PrintRawSEHExceptHandler(SEHExceptStmt *S);
@@ -135,6 +135,9 @@ namespace {
       else
         OS << "<null expr>";
     }
+
+    template <typename T, typename Func>
+    void PrintSeparateConditionVarDecl(T *Node, Func F);
 
     raw_ostream &Indent(int Delta = 0) {
       for (int i = 0, e = IndentLevel+Delta; i < e; ++i)
@@ -247,13 +250,17 @@ void StmtPrinter::VisitAttributedStmt(AttributedStmt *Node) {
   PrintStmt(Node->getSubStmt(), 0);
 }
 
-void StmtPrinter::PrintRawIfStmt(IfStmt *If) {
+void StmtPrinter::PrintRawIfStmt(IfStmt *If, bool SuppressCondSpecifiers) {
   OS << "if (";
   if (If->getInit())
     PrintInitStmt(If->getInit(), 4);
-  if (const DeclStmt *DS = If->getConditionVariableDeclStmt())
+  if (const DeclStmt *DS = If->getConditionVariableDeclStmt()) {
+    unsigned OldSSP = Policy.SuppressSpecifiers;
+    if (SuppressCondSpecifiers)
+      Policy.SuppressSpecifiers = true;
     PrintRawDeclStmt(DS);
-  else
+    Policy.SuppressSpecifiers = OldSSP;
+  } else
     PrintExpr(If->getCond());
   OS << ')';
 
@@ -285,30 +292,81 @@ void StmtPrinter::PrintRawIfStmt(IfStmt *If) {
 }
 
 void StmtPrinter::VisitIfStmt(IfStmt *If) {
-  Indent();
-  PrintRawIfStmt(If);
+  if (Policy.SeparateConditionVarDecls) {
+    bool StartedCompound = false;
+    unsigned OldSAR = Policy.SuppressInitializers;
+    for (auto *SubIf = If; SubIf; SubIf = dyn_cast_or_null<IfStmt>(SubIf->getElse())) {
+      if (DeclStmt *DS = If->getConditionVariableDeclStmt()) {
+        if (!StartedCompound) {
+          Indent() << "{" << NL;
+          IndentLevel += Policy.Indentation;
+          Policy.SuppressInitializers = true;
+          StartedCompound = true;
+        }
+        VisitDeclStmt(DS);
+      }
+    }
+    Policy.SuppressInitializers = OldSAR;
+    Indent();
+    PrintRawIfStmt(If, true);
+    if (StartedCompound) {
+      IndentLevel -= Policy.Indentation;
+      Indent() << "}" << NL;
+    }
+  } else {
+    Indent();
+    PrintRawIfStmt(If);
+  }
+}
+
+template <typename T, typename Func>
+void StmtPrinter::PrintSeparateConditionVarDecl(T *Node, Func F) {
+  DeclStmt *DS = Node->getConditionVariableDeclStmt();
+  if (Policy.SeparateConditionVarDecls && DS) {
+    Indent() << "{" << NL;
+    IndentLevel += Policy.Indentation;
+    {
+      unsigned OldSAR = Policy.SuppressInitializers;
+      Policy.SuppressInitializers = true;
+      VisitDeclStmt(DS);
+      Policy.SuppressInitializers = OldSAR;
+    }
+    F([&]() {
+      unsigned OldSSP = Policy.SuppressSpecifiers;
+      Policy.SuppressSpecifiers = true;
+      PrintRawDeclStmt(DS);
+      Policy.SuppressSpecifiers = OldSSP;
+    });
+    IndentLevel -= Policy.Indentation;
+    Indent() << "}" << NL;
+  } else {
+    F([&]() {
+      if (DS)
+        PrintRawDeclStmt(DS);
+      else
+        PrintExpr(Node->getCond());
+    });
+  }
 }
 
 void StmtPrinter::VisitSwitchStmt(SwitchStmt *Node) {
-  Indent() << "switch (";
-  if (Node->getInit())
-    PrintInitStmt(Node->getInit(), 8);
-  if (const DeclStmt *DS = Node->getConditionVariableDeclStmt())
-    PrintRawDeclStmt(DS);
-  else
-    PrintExpr(Node->getCond());
-  OS << ")";
-  PrintControlledStmt(Node->getBody());
+  PrintSeparateConditionVarDecl(Node, [&](auto PrintCondDecl) {
+    Indent() << "switch (";
+    if (Node->getInit())
+      PrintInitStmt(Node->getInit(), 8);
+    PrintCondDecl();
+    OS << ")";
+    PrintControlledStmt(Node->getBody());
+  });
 }
 
 void StmtPrinter::VisitWhileStmt(WhileStmt *Node) {
-  Indent() << "while (";
-  if (const DeclStmt *DS = Node->getConditionVariableDeclStmt())
-    PrintRawDeclStmt(DS);
-  else
-    PrintExpr(Node->getCond());
-  OS << ")" << NL;
-  PrintStmt(Node->getBody());
+  PrintSeparateConditionVarDecl(Node, [&](auto PrintCondDecl) {
+    Indent() << "while (";
+    PrintCondDecl();
+    OS << ")" << NL;
+    PrintStmt(Node->getBody());
+  });
 }
 
 void StmtPrinter::VisitDoStmt(DoStmt *Node) {
@@ -964,7 +1022,10 @@ void StmtPrinter::VisitSourceLocExpr(SourceLocExpr *Node) {
 }
 
 void StmtPrinter::VisitConstantExpr(ConstantExpr *Node) {
-  PrintExpr(Node->getSubExpr());
+  if (Policy.ConstantExprsAsInt && Node->getResultAPValueKind() == APValue::Int)
+    OS << Node->getResultAsAPSInt();
+  else
+    PrintExpr(Node->getSubExpr());
 }
 
 void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
@@ -1556,7 +1617,7 @@ void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
     return;
   }
 
-  if (!Policy.DisableListInitialization)
+  if (!Policy.SuppressListInitialization)
     OS << "{";
   for (unsigned i = 0, e = Node->getNumInits(); i != e; ++i) {
     if (i) OS << ", ";
@@ -1565,7 +1626,7 @@ void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
     else
       OS << "{}";
   }
-  if (!Policy.DisableListInitialization)
+  if (!Policy.SuppressListInitialization)
     OS << "}";
 }
 
@@ -1946,7 +2007,7 @@ void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
   Node->getType().print(OS, Policy);
   if (Node->isStdInitListInitialization())
     /* Nothing to do; braces are part of creating the std::initializer_list. */;
-  else if (Node->isListInitialization() && !Policy.DisableListInitialization)
+  else if (Node->isListInitialization() && !Policy.SuppressListInitialization)
     OS << "{";
   else
     OS << "(";
@@ -1961,7 +2022,7 @@ void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
   }
   if (Node->isStdInitListInitialization())
     /* See above. */;
-  else if (Node->isListInitialization() && !Policy.DisableListInitialization)
+  else if (Node->isListInitialization() && !Policy.SuppressListInitialization)
     OS << "}";
   else
     OS << ")";

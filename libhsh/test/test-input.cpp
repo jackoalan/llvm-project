@@ -12,6 +12,7 @@ struct MyFormat : hsh::vertex_format {
 enum class PostMode {
   Nothing,
   AddDynamicColor,
+  AddDynamicColor2,
   MultiplyDynamicColor
 };
 
@@ -104,8 +105,26 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                                                         trigger vertex left fetch,
                                                         trigger host right fetch*/}/*f*/, 1.f}/*f*/;
 #if 0
-    switch (postMode) {
+    bool SomeVar = true;
+
+    const int i = 1, j = 1, k = 0;
+    if (i && j && k)
+      fragColor = hsh::float4{0,0,0,0};
+    else
+      fragColor = hsh::float4{1,0,0,0};
+    //do { fragColor = hsh::float4{}; if (i) break;  } while (i && j && k);
+
+    for (int i = 0; i < 10; ++i) {
+      if (i == 5)
+        continue;
+      fragColor = hsh::float4{0,0,0,0};
+    }
+#endif
+
+#if 1
+    switch (PostMode postMode2 = PostMode::AddDynamicColor) {
     case PostMode::AddDynamicColor:
+    case PostMode::AddDynamicColor2:
       fragColor += dynColor;
       break;
     case PostMode::MultiplyDynamicColor:

@@ -526,15 +526,18 @@ private:
   static_assert((1 << KindBits) > NumKindsMinusOne,
                 "Not enough room for kind!");
   llvm::PointerIntPair<Stmt *, KindBits> Data;
+  class CFGBlock *OrigSucc;
 
 public:
   CFGTerminator() { assert(!isValid()); }
-  CFGTerminator(Stmt *S, Kind K = StmtBranch) : Data(S, K) {}
+  CFGTerminator(Stmt *S, Kind K = StmtBranch, CFGBlock *OrigSucc = nullptr)
+      : Data(S, K), OrigSucc(OrigSucc) {}
 
   bool isValid() const { return Data.getOpaqueValue() != nullptr; }
   Stmt *getStmt() { return Data.getPointer(); }
   const Stmt *getStmt() const { return Data.getPointer(); }
   Kind getKind() const { return static_cast<Kind>(Data.getInt()); }
+  CFGBlock *getOrigSucc() const { return OrigSucc; }
 
   bool isStmtBranch() const {
     return getKind() == StmtBranch;
@@ -778,6 +781,10 @@ public:
   /// from within the loop body. This Stmt* will be refer to the loop statement
   /// for such blocks (and be null otherwise).
   const Stmt *LoopTarget = nullptr;
+
+  /// Applied to the first body block of do-while loops and points to the block
+  /// containing the while condition
+  const CFGBlock *DoLoopTarget = nullptr;
 
   /// A numerical ID assigned to a CFGBlock during construction of the CFG.
   unsigned BlockID;
@@ -1039,6 +1046,7 @@ public:
   void setTerminator(CFGTerminator Term) { Terminator = Term; }
   void setLabel(Stmt *Statement) { Label = Statement; }
   void setLoopTarget(const Stmt *loopTarget) { LoopTarget = loopTarget; }
+  void setDoLoopTarget(const CFGBlock *target) { DoLoopTarget = target; }
   void setHasNoReturnElement() { HasNoReturnElement = true; }
 
   /// Returns true if the block would eventually end with a sink (a noreturn
@@ -1065,6 +1073,8 @@ public:
   }
 
   const Stmt *getLoopTarget() const { return LoopTarget; }
+
+  const CFGBlock *getDoLoopTarget() const { return DoLoopTarget; }
 
   Stmt *getLabel() { return Label; }
   const Stmt *getLabel() const { return Label; }
@@ -1252,6 +1262,7 @@ public:
     bool MarkElidedCXXConstructors = false;
     bool AddVirtualBaseBranches = false;
     bool OmitImplicitValueInitializers = false;
+    bool OmitLogicalBinaryOperators = false;
 
     BuildOptions() = default;
 

@@ -7510,6 +7510,10 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleSimpleAttribute<HshDestinationBlendAttr>(S, D, AL);
     break;
 
+  case ParsedAttr::AT_HshHostCondition:
+    handleSimpleAttribute<HshHostConditionAttr>(S, D, AL);
+    break;
+
   case ParsedAttr::AT_HshVertexBuffer:
   case ParsedAttr::AT_HshInstanceBuffer:
   case ParsedAttr::AT_HshColorTarget:

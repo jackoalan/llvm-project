@@ -2430,7 +2430,7 @@ CFGBuilder::VisitLogicalOperator(BinaryOperator *B,
 
   do {
     if (BinaryOperator *B_RHS = dyn_cast<BinaryOperator>(RHS))
-      if (B_RHS->isLogicalOp()) {
+      if (!BuildOpts.OmitLogicalBinaryOperators && B_RHS->isLogicalOp()) {
         std::tie(RHSBlock, ExitBlock) =
           VisitLogicalOperator(B_RHS, Term, TrueBlock, FalseBlock);
         break;
@@ -2513,7 +2513,7 @@ CFGBuilder::VisitLogicalOperator(BinaryOperator *B,
 CFGBlock *CFGBuilder::VisitBinaryOperator(BinaryOperator *B,
                                           AddStmtChoice asc) {
    // && or ||
-  if (B->isLogicalOp())
+  if (!BuildOpts.OmitLogicalBinaryOperators && B->isLogicalOp())
     return VisitLogicalOperator(B);
 
   if (B->getOpcode() == BO_Comma) { // ,
@@ -2777,7 +2777,7 @@ CFGBlock *CFGBuilder::VisitConditionalOperator(AbstractConditionalOperator *C,
   // If the condition is a logical '&&' or '||', build a more accurate CFG.
   if (BinaryOperator *Cond =
         dyn_cast<BinaryOperator>(C->getCond()->IgnoreParens()))
-    if (Cond->isLogicalOp())
+    if (!BuildOpts.OmitLogicalBinaryOperators && Cond->isLogicalOp())
       return VisitLogicalOperator(Cond, C, LHSBlock, RHSBlock).first;
 
   // Create the block that will contain the condition.
@@ -3025,14 +3025,14 @@ CFGBlock *CFGBuilder::VisitIfStmt(IfStmt *I) {
           ? nullptr
           : dyn_cast<BinaryOperator>(I->getCond()->IgnoreParens());
   CFGBlock *LastBlock;
-  if (Cond && Cond->isLogicalOp())
+  if (!BuildOpts.OmitLogicalBinaryOperators && Cond && Cond->isLogicalOp())
     LastBlock = VisitLogicalOperator(Cond, I, ThenBlock, ElseBlock).first;
   else {
     // Now create a new block containing the if statement.
     Block = createBlock(false);
 
     // Set the terminator of the new block to the If statement.
-    Block->setTerminator(I);
+    Block->setTerminator({I, CFGTerminator::StmtBranch, Succ});
 
     // See if this is a known constant.
     const TryResult &KnownVal = tryEvaluateBool(I->getCond());
@@ -3415,7 +3415,7 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
     // more optimal CFG representation.
     if (BinaryOperator *Cond =
             dyn_cast_or_null<BinaryOperator>(C ? C->IgnoreParens() : nullptr))
-      if (Cond->isLogicalOp()) {
+      if (!BuildOpts.OmitLogicalBinaryOperators && Cond->isLogicalOp()) {
         std::tie(EntryConditionBlock, ExitConditionBlock) =
           VisitLogicalOperator(Cond, F, BodyBlock, LoopSuccessor);
         break;
@@ -3423,7 +3423,8 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
 
     // The default case when not handling logical operators.
     EntryConditionBlock = ExitConditionBlock = createBlock(false);
-    ExitConditionBlock->setTerminator(F);
+    ExitConditionBlock->setTerminator(
+        {F, CFGTerminator::StmtBranch, LoopSuccessor});
 
     // See if this is a known constant.
     TryResult KnownVal(true);
@@ -3749,7 +3750,7 @@ CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
     // Specially handle logical operators, which have a slightly
     // more optimal CFG representation.
     if (BinaryOperator *Cond = dyn_cast<BinaryOperator>(C->IgnoreParens()))
-      if (Cond->isLogicalOp()) {
+      if (!BuildOpts.OmitLogicalBinaryOperators && Cond->isLogicalOp()) {
         std::tie(EntryConditionBlock, ExitConditionBlock) =
             VisitLogicalOperator(Cond, W, BodyBlock, LoopSuccessor);
         break;
@@ -3757,7 +3758,8 @@ CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
 
     // The default case when not handling logical operators.
     ExitConditionBlock = createBlock(false);
-    ExitConditionBlock->setTerminator(W);
+    ExitConditionBlock->setTerminator(
+        {W, CFGTerminator::StmtBranch, LoopSuccessor});
 
     // Now add the actual condition to the condition block.
     // Because the condition itself may contain control-flow, new blocks may
@@ -3938,6 +3940,8 @@ CFGBlock *CFGBuilder::VisitDoStmt(DoStmt *D) {
         return nullptr;
     }
 
+    BodyBlock->setDoLoopTarget(ExitConditionBlock);
+
     // Add an intermediate block between the BodyBlock and the
     // ExitConditionBlock to represent the "loop back" transition.  Create an
     // empty block to represent the transition block for looping back to the
@@ -4104,7 +4108,8 @@ CFGBlock *CFGBuilder::VisitSwitchStmt(SwitchStmt *Terminator) {
                !SwitchAlwaysHasSuccessor);
 
   // Add the terminator and condition in the switch block.
-  SwitchTerminatedBlock->setTerminator(Terminator);
+  SwitchTerminatedBlock->setTerminator(
+      {Terminator, CFGTerminator::StmtBranch, SwitchSuccessor});
   Block = SwitchTerminatedBlock;
   CFGBlock *LastBlock = addStmt(Terminator->getCond());
 
@@ -5321,6 +5326,8 @@ public:
       OS << "(See if most derived ctor has already initialized vbases)";
       break;
     }
+    if (auto *OrigSucc = T.getOrigSucc())
+      OS << " OrigSucc: B" << OrigSucc->getBlockID();
   }
 };
 
