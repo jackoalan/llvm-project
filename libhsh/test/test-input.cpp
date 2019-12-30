@@ -1,3 +1,12 @@
+namespace MyNS {
+enum class PostMode {
+  Nothing,
+  AddDynamicColor,
+  AddDynamicColor2,
+  MultiplyDynamicColor
+};
+}
+
 #include "test-input.cpp.hshhead"
 
 namespace MyNS {
@@ -8,14 +17,7 @@ struct MyFormat : hsh::vertex_format {
   constexpr MyFormat(hsh::float3 position, hsh::float3 normal)
   : position(std::move(position)), normal(std::move(normal)) {}
 };
-
-enum class PostMode {
-  Nothing,
-  AddDynamicColor,
-  AddDynamicColor2,
-  MultiplyDynamicColor
-};
-
+float SomeAlpha = 0.5f;
 void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                    const hsh::float4& dynColor, PostMode postMode [[hsh::host_condition]]) {
   constexpr MyFormat MyBuffer[] = {
@@ -35,7 +37,7 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                                                           // interpolated value (fragment shader)
       hsh::texture2d<float> tex0 [[hsh::fragment_texture(0)]], // texture sampler
       hsh::float4 vertPos [[hsh::position]],            // Output of vertex shader
-      hsh::float4 fragColor [[hsh::color_target(0)]],   // Output of fragment shader
+      hsh::float4 fragColor [[hsh::color_target(0)]] = {1.f, 1.f, 1.f, 1.f},   // Output of fragment shader
       auto topology [[hsh::topology]] = hsh::TriangleStrips,
       auto srcBlend [[hsh::source_blend]] = hsh::One,
       auto destBlend [[hsh::destination_blend]] = hsh::Zero) {
@@ -122,7 +124,12 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
 #endif
 
 #if 1
-    switch (PostMode postMode2 = PostMode::AddDynamicColor) {
+    PostMode postMode2 = PostMode::AddDynamicColor;
+
+    if (postMode2 == PostMode::MultiplyDynamicColor)
+      vertPos += dynColor;
+
+    switch (postMode2) {
     case PostMode::AddDynamicColor:
     case PostMode::AddDynamicColor2:
       fragColor += dynColor;
@@ -134,6 +141,9 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
       break;
     }
 #endif
+
+    hsh::float4 Blah(0,0,0,0);
+    fragColor += Blah;
   };
 
   // The hsh_binding object has handles of host-processed data buffers ready to draw with.

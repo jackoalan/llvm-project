@@ -21,33 +21,56 @@ using namespace clang;
 using namespace clang::driver;
 
 namespace llvm::cl {
-class dir_parser : public parser<std::string> {
+class driver_style_bool_parser : public parser<bool> {
 public:
   using parser::parser;
-
-  // getValueName - Overload in subclass to provide a better default value.
-  StringRef getValueName() const override { return "dir"; }
-
   void printOptionInfo(const Option &O, size_t GlobalWidth) const {
-    outs() << "  -" << O.ArgStr << " <dir>";
+    outs() << "  -" << O.ArgStr << " ";
     Option::printHelpStr(O.HelpStr, GlobalWidth, getOptionWidth(O));
   }
 };
-class def_parser : public parser<std::string> {
+template <class ImplClass>
+class driver_style_string_parser : public parser<std::string> {
 public:
   using parser::parser;
-
-  // getValueName - Overload in subclass to provide a better default value.
-  StringRef getValueName() const override { return "macro>=<value"; }
-
   void printOptionInfo(const Option &O, size_t GlobalWidth) const {
-    outs() << "  -" << O.ArgStr << " <macro>=<value>";
+    outs() << "  -" << O.ArgStr << " <" << getValueName() << ">";
+    for (size_t I = 0; I < ImplClass::Pad; ++I)
+      outs() << ' ';
     Option::printHelpStr(O.HelpStr, GlobalWidth, getOptionWidth(O));
   }
+};
+class dir_parser : public driver_style_string_parser<dir_parser> {
+public:
+  static constexpr size_t Pad = 0;
+  using driver_style_string_parser::driver_style_string_parser;
+  StringRef getValueName() const override { return "dir"; }
+};
+class def_parser : public driver_style_string_parser<def_parser> {
+public:
+  static constexpr size_t Pad = 0;
+  using driver_style_string_parser::driver_style_string_parser;
+  StringRef getValueName() const override { return "macro>=<value"; }
+};
+class file_parser : public driver_style_string_parser<file_parser> {
+public:
+  static constexpr size_t Pad = 1;
+  using driver_style_string_parser::driver_style_string_parser;
+  StringRef getValueName() const override { return "file"; }
+};
+class value_parser : public driver_style_string_parser<value_parser> {
+public:
+  static constexpr size_t Pad = 1;
+  using driver_style_string_parser::driver_style_string_parser;
+  StringRef getValueName() const override { return "value"; }
 };
 } // namespace llvm::cl
 
 int main(int argc, const char **argv) {
+  static cl::opt<bool> Verbose(
+      "v", cl::desc("Show commands to run and use verbose output"),
+      cl::cat(llvm::cl::GeneralCategory));
+
   static cl::list<std::string, bool, cl::dir_parser> IncludeDirs(
       "I", cl::ZeroOrMore, cl::Prefix,
       cl::desc("Add directory to include search path"),
@@ -56,6 +79,18 @@ int main(int argc, const char **argv) {
   static cl::list<std::string, bool, cl::def_parser> CompileDefs(
       "D", cl::ZeroOrMore, cl::Prefix,
       cl::desc("Define <macro> to <value> (or 1 if <value> omitted)"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<bool, false, cl::driver_style_bool_parser> MD(
+      "MD", cl::desc("Write a depfile containing user and system headers"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<std::string, false, cl::file_parser> MF(
+      "MF", cl::desc("Write depfile output from -MD to <file>"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<std::string, false, cl::value_parser> MT(
+      "MT", cl::desc("Specify name of main file output in depfile"),
       cl::cat(llvm::cl::GeneralCategory));
 
   static cl::opt<std::string> Input(cl::Positional, cl::desc("<input>"),
@@ -107,6 +142,8 @@ int main(int argc, const char **argv) {
                                    "-Wno-nullability-completeness",
                                    "-Wno-unused-value",
                                    Colors ? "-fcolor-diagnostics" : ""};
+  if (Verbose)
+    args.emplace_back("-v");
   for (const auto &Dir : IncludeDirs) {
     args.emplace_back("-I");
     args.push_back(Dir);
@@ -114,6 +151,17 @@ int main(int argc, const char **argv) {
   for (const auto &Def : CompileDefs) {
     args.emplace_back("-D");
     args.push_back(Def);
+  }
+  if (MD) {
+    args.emplace_back("-MD");
+    if (!MF.empty()) {
+      args.emplace_back("-MF");
+      args.push_back(MF);
+    }
+    if (!MT.empty()) {
+      args.emplace_back("-MT");
+      args.push_back(MT);
+    }
   }
   args.emplace_back("-o");
   args.push_back(Output);

@@ -319,7 +319,8 @@ void NestedNameSpecifier::print(raw_ostream &OS, const PrintingPolicy &Policy,
     const Type *T = getAsType();
 
     PrintingPolicy InnerPolicy(Policy);
-    InnerPolicy.SuppressScope = true;
+    if (!Policy.NeverSuppressScope)
+      InnerPolicy.SuppressScope = true;
 
     // Nested-name-specifiers are intended to contain minimally-qualified
     // types. An actual ElaboratedType will not occur, since we'll store

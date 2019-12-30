@@ -135,7 +135,8 @@ struct PrintingPolicy {
         SuppressImplicitBase(false), FullyQualifiedName(false),
         PrintCanonicalTypes(false), SuppressNestedQualifiers(false),
         SuppressListInitialization(false), SeparateConditionVarDecls(false),
-        ConstantExprsAsInt(false) {}
+        ConstantExprsAsInt(false), SilentNullStatement(false),
+        NeverSuppressScope(false) {}
 
   /// Adjust this printing policy for cases where it's known that we're
   /// printing C++ code (for instance, if AST dumping reaches a C++-only
@@ -319,6 +320,10 @@ struct PrintingPolicy {
   unsigned SeparateConditionVarDecls : 1;
 
   unsigned ConstantExprsAsInt : 1;
+
+  unsigned SilentNullStatement : 1;
+
+  unsigned NeverSuppressScope : 1;
 
   /// Callbacks to use to allow the behavior of printing to be customized.
   const PrintingCallbacks *Callbacks = nullptr;

@@ -90,7 +90,7 @@ namespace {
         OS << ";" << NL;
       } else if (S) {
         Visit(S);
-      } else {
+      } else if (!Policy.SilentNullStatement) {
         Indent() << "<<<NULL STATEMENT>>>" << NL;
       }
       IndentLevel -= SubIndent;

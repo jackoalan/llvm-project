@@ -153,6 +153,8 @@ bool DependencyCollector::addDependency(StringRef Filename) {
 }
 
 static bool isSpecialFilename(StringRef Filename) {
+  if (Filename.endswith_lower(".hshhead"))
+    return true;
   return llvm::StringSwitch<bool>(Filename)
       .Case("<built-in>", true)
       .Case("<stdin>", true)

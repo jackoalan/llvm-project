@@ -107,14 +107,19 @@ function(target_hsh target)
       set(rel_dir "${rel_dir}/")
     endif()
     string(REPLACE ".." "__" rel_dir "${rel_dir}")
-    get_filename_component(rel_file "${rel_path}" NAME_WE)
     set(out_dir "HshFiles/${rel_dir}")
-    set(out_path "${bin_dir}/${out_dir}hsh_${rel_file}.cpp")
+    set(out_path "${bin_dir}/${out_dir}${rel_path}.hshhead")
     file(MAKE_DIRECTORY "${bin_dir}/${out_dir}")
+    file(RELATIVE_PATH out_rel ${CMAKE_BINARY_DIR} "${out_path}")
+    unset(depfile_args)
+    if("${CMAKE_GENERATOR}" STREQUAL "Ninja")
+      list(APPEND depfile_args DEPFILE "${CMAKE_BINARY_DIR}/${out_rel}.d")
+    endif()
     add_custom_command(OUTPUT "${out_path}" COMMAND "$<TARGET_FILE:hshgen>"
-            ARGS ${_hsh_args} "${src_path}" "hsh_${rel_file}.cpp"
-            DEPENDS hshgen "${src_path}"
-            WORKING_DIRECTORY "${bin_dir}/${out_dir}")
+            ARGS ${_hsh_args} "${src_path}" "${out_rel}"
+            -MD -MT "${out_rel}" -MF "${out_rel}.d"
+            DEPENDS hshgen "${src_path}" IMPLICIT_DEPENDS CXX "${src_path}"
+            ${depfile_args} WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
     set_source_files_properties("${source}" PROPERTIES
             INCLUDE_DIRECTORIES "${bin_dir}/${out_dir}"
             OBJECT_DEPENDS "${out_path}"

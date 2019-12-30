@@ -1,12 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 
-//#define HSH_ENABLE_VULKAN 0
+#define HSH_ENABLE_VULKAN 1
 
-#ifdef HSH_ENABLE_VULKAN
+#if HSH_ENABLE_VULKAN
 #define VULKAN_HPP_NO_EXCEPTIONS
 #include <vulkan/vulkan.hpp>
 #endif
@@ -23,7 +24,7 @@ struct float4 {
   constexpr float4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
   constexpr explicit float4(const float3 &other, float w = 1.f);
   constexpr explicit float4(const float2 &other, float z = 0.f, float w = 1.f);
-  void operator+=(const float4 &other) {}
+  void operator+=(const float4 &other) { x += other.x; }
   void operator*=(const float4 &other) {}
   float3 xyz() const;
 };
@@ -325,7 +326,7 @@ template <Target T, std::uint32_t NStages> struct ShaderData {
   constexpr ShaderData() = default;
 };
 
-#ifdef HSH_ENABLE_VULKAN
+#if HSH_ENABLE_VULKAN
 constexpr vk::Format HshToVkFormat(Format Format) {
   switch (Format) {
   case R8_UNORM:
