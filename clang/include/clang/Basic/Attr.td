@@ -1326,53 +1326,120 @@ def GNUInline : InheritableAttr {
   let Documentation = [GnuInlineDocs];
 }
 
-def HshVertexBuffer : InheritableParamAttr {
+class HshParamAttr : InheritableParamAttr;
+
+class HshIndexParamAttr : HshParamAttr {
+  let Args = [ExprArgument<"Index">];
+}
+
+class HshVertexBufferParamAttr : HshIndexParamAttr;
+
+def HshVertexBuffer : HshVertexBufferParamAttr {
   let Spellings = [CXX11<"hsh", "vertex_buffer">];
-  let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HshInstanceBuffer : InheritableParamAttr {
+def HshInstanceBuffer : HshVertexBufferParamAttr {
   let Spellings = [CXX11<"hsh", "instance_buffer">];
-  let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HshPosition : InheritableParamAttr {
+def HshPosition : HshParamAttr {
   let Spellings = [CXX11<"hsh", "position">];
   let Documentation = [Undocumented];
 }
 
-def HshColorTarget : InheritableParamAttr {
-  let Spellings = [CXX11<"hsh", "color_target">];
-  let Args = [ExprArgument<"Index">];
+class HshColorAttachmentParamAttr : HshIndexParamAttr;
+
+def HshColorAttachment : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "color_attachment">];
   let Documentation = [Undocumented];
 }
 
-def HshTopology : InheritableParamAttr {
+def HshSrcColorBlendFactor : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "src_color_blend_factor">];
+  let Documentation = [Undocumented];
+}
+
+def HshDstColorBlendFactor : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "dst_color_blend_factor">];
+  let Documentation = [Undocumented];
+}
+
+def HshColorBlendOp : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "color_blend_op">];
+  let Documentation = [Undocumented];
+}
+
+def HshSrcAlphaBlendFactor : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "src_alpha_blend_factor">];
+  let Documentation = [Undocumented];
+}
+
+def HshDstAlphaBlendFactor : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "dst_alpha_blend_factor">];
+  let Documentation = [Undocumented];
+}
+
+def HshAlphaBlendOp : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "alpha_blend_op">];
+  let Documentation = [Undocumented];
+}
+
+def HshColorWriteComponents : HshColorAttachmentParamAttr {
+  let Spellings = [CXX11<"hsh", "color_write_components">];
+  let Documentation = [Undocumented];
+}
+
+def HshTopology : HshParamAttr {
   let Spellings = [CXX11<"hsh", "topology">];
   let Documentation = [Undocumented];
 }
 
-def HshSourceBlend : InheritableParamAttr {
-  let Spellings = [CXX11<"hsh", "source_blend">];
+def HshPatchControlPoints : HshParamAttr {
+  let Spellings = [CXX11<"hsh", "patch_control_points">];
   let Documentation = [Undocumented];
 }
 
-def HshDestinationBlend : InheritableParamAttr {
-  let Spellings = [CXX11<"hsh", "destination_blend">];
+def HshCullMode : HshParamAttr {
+  let Spellings = [CXX11<"hsh", "cull_mode">];
   let Documentation = [Undocumented];
 }
 
-def HshVertexTexture : InheritableParamAttr {
+def HshDepthCompare : HshParamAttr {
+  let Spellings = [CXX11<"hsh", "depth_compare">];
+  let Documentation = [Undocumented];
+}
+
+def HshDepthWrite : HshParamAttr {
+  let Spellings = [CXX11<"hsh", "depth_write">];
+  let Documentation = [Undocumented];
+}
+
+class HshTextureParamAttr : HshIndexParamAttr;
+
+def HshVertexTexture : HshTextureParamAttr {
   let Spellings = [CXX11<"hsh", "vertex_texture">];
-  let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 
-def HshFragmentTexture : InheritableParamAttr {
+def HshControlTexture : HshTextureParamAttr {
+  let Spellings = [CXX11<"hsh", "control_texture">];
+  let Documentation = [Undocumented];
+}
+
+def HshEvaluationTexture : HshTextureParamAttr {
+  let Spellings = [CXX11<"hsh", "evaluation_texture">];
+  let Documentation = [Undocumented];
+}
+
+def HshGeometryTexture : HshTextureParamAttr {
+  let Spellings = [CXX11<"hsh", "geometry_texture">];
+  let Documentation = [Undocumented];
+}
+
+def HshFragmentTexture : HshTextureParamAttr {
   let Spellings = [CXX11<"hsh", "fragment_texture">];
-  let Args = [ExprArgument<"Index">];
   let Documentation = [Undocumented];
 }
 

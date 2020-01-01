@@ -1,15 +1,57 @@
 #ifndef INTERFACE_VARIABLE
-#  define INTERFACE_VARIABLE(Attr, Stage, Direction, Array)
+#  define INTERFACE_VARIABLE(Name, Stage, Direction, MaxIndex)
 #endif
 
-INTERFACE_VARIABLE(HshVertexBufferAttr, HshVertexStage, HshInput, true)
-INTERFACE_VARIABLE(HshInstanceBufferAttr, HshVertexStage, HshInput, true)
-INTERFACE_VARIABLE(HshPositionAttr, HshVertexStage, HshOutput, false)
-INTERFACE_VARIABLE(HshColorTargetAttr, HshFragmentStage, HshOutput, true)
-INTERFACE_VARIABLE(HshTopologyAttr, HshHostStage, HshOutput, false)
-INTERFACE_VARIABLE(HshSourceBlendAttr, HshHostStage, HshOutput, false)
-INTERFACE_VARIABLE(HshDestinationBlendAttr, HshHostStage, HshOutput, false)
-INTERFACE_VARIABLE(HshVertexTextureAttr, HshVertexStage, HshInput, true)
-INTERFACE_VARIABLE(HshFragmentTextureAttr, HshFragmentStage, HshInput, true)
+#ifndef INTERFACE_RECORD_VARIABLE
+#  define INTERFACE_RECORD_VARIABLE(Name, Stage, Direction, MaxIndex) INTERFACE_VARIABLE(Name, Stage, Direction, MaxIndex)
+#endif
+
+#ifndef INTERFACE_HBT_VARIABLE
+#  define INTERFACE_HBT_VARIABLE(Name, Type, Stage, Direction, MaxIndex) INTERFACE_VARIABLE(Name, Stage, Direction, MaxIndex)
+#endif
+
+#ifndef INTERFACE_HBT_HOST_VARIABLE
+#  define INTERFACE_HBT_HOST_VARIABLE(Name, Type, Direction, MaxIndex) INTERFACE_HBT_VARIABLE(Name, Type, HshHostStage, Direction, MaxIndex)
+#endif
+
+#ifndef INTERFACE_INT_VARIABLE
+#  define INTERFACE_INT_VARIABLE(Name, Stage, Direction, MaxIndex) INTERFACE_VARIABLE(Name, Stage, Direction, MaxIndex)
+#endif
+
+#ifndef INTERFACE_INT_HOST_VARIABLE
+#  define INTERFACE_INT_HOST_VARIABLE(Name, Direction, MaxIndex) INTERFACE_INT_VARIABLE(Name, HshHostStage, Direction, MaxIndex)
+#endif
+
+#ifndef INTERFACE_TEXTURE_VARIABLE
+#  define INTERFACE_TEXTURE_VARIABLE(Name, Stage) INTERFACE_VARIABLE(Name, Stage, HshInput, HSH_MAX_TEXTURES)
+#endif
+
+INTERFACE_RECORD_VARIABLE(HshVertexBuffer, HshVertexStage, HshInput, HSH_MAX_VERTEX_BUFFERS)
+INTERFACE_RECORD_VARIABLE(HshInstanceBuffer, HshVertexStage, HshInput, HSH_MAX_VERTEX_BUFFERS)
+INTERFACE_HBT_VARIABLE(HshPosition, HBT_float4, HshVertexStage, HshOutput, 0)
+INTERFACE_HBT_VARIABLE(HshColorAttachment, HBT_float4, HshFragmentStage, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshSrcColorBlendFactor, HBT_BlendFactor, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshDstColorBlendFactor, HBT_BlendFactor, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshColorBlendOp, HBT_BlendOp, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshSrcAlphaBlendFactor, HBT_BlendFactor, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshDstAlphaBlendFactor, HBT_BlendFactor, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshAlphaBlendOp, HBT_BlendOp, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshColorWriteComponents, HBT_ColorComponentFlags, HshOutput, HSH_MAX_COLOR_ATTACHMENTS)
+INTERFACE_HBT_HOST_VARIABLE(HshTopology, HBT_Topology, HshOutput, 0)
+INTERFACE_INT_HOST_VARIABLE(HshPatchControlPoints, HshOutput, 0)
+INTERFACE_HBT_HOST_VARIABLE(HshCullMode, HBT_CullMode, HshOutput, 0)
+INTERFACE_HBT_HOST_VARIABLE(HshDepthCompare, HBT_Compare, HshOutput, 0)
+INTERFACE_INT_HOST_VARIABLE(HshDepthWrite, HshOutput, 0)
+INTERFACE_TEXTURE_VARIABLE(HshVertexTexture, HshVertexStage)
+INTERFACE_TEXTURE_VARIABLE(HshControlTexture, HshControlStage)
+INTERFACE_TEXTURE_VARIABLE(HshEvaluationTexture, HshEvaluationStage)
+INTERFACE_TEXTURE_VARIABLE(HshGeometryTexture, HshGeometryStage)
+INTERFACE_TEXTURE_VARIABLE(HshFragmentTexture, HshFragmentStage)
 
 #undef INTERFACE_VARIABLE
+#undef INTERFACE_RECORD_VARIABLE
+#undef INTERFACE_HBT_VARIABLE
+#undef INTERFACE_HBT_HOST_VARIABLE
+#undef INTERFACE_INT_VARIABLE
+#undef INTERFACE_INT_HOST_VARIABLE
+#undef INTERFACE_TEXTURE_VARIABLE

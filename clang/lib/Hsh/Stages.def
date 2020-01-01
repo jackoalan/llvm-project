@@ -1,0 +1,11 @@
+#ifndef STAGE
+#  define STAGE(Name, Enum)
+#endif
+
+STAGE(Vertex, HshVertexStage)
+STAGE(Control, HshControlStage)
+STAGE(Evaluation, HshEvaluationStage)
+STAGE(Geometry, HshGeometryStage)
+STAGE(Fragment, HshFragmentStage)
+
+#undef STAGE

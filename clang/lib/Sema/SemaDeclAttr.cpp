@@ -4962,44 +4962,23 @@ static void handleArmMveAliasAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) ArmMveAliasAttr(S.Context, AL, Ident));
 }
 
+template <class T>
 static void handleHshIndexParameterAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   if (!AL.isArgExpr(0)) {
     S.Diag(AL.getLoc(), diag::err_attribute_argument_n_type)
-      << AL << 1 << AANT_ArgumentIdentifier;
+      << AL << 1 << AANT_ArgumentIntegerConstant;
     return;
   }
 
   Expr *IndexExpr = AL.getArgAsExpr(0);
   if (!IndexExpr->isIntegerConstantExpr(S.Context)) {
     S.Diag(AL.getLoc(), diag::err_attribute_argument_type)
-      << AL << AANT_ArgumentIntegerConstant
+      << AL << 1 << AANT_ArgumentIntegerConstant
       << IndexExpr->getSourceRange();
     return;
   }
 
-  switch (AL.getKind()) {
-  default:
-    llvm_unreachable("invalid hsh parameter attribute");
-    return;
-  case ParsedAttr::AT_HshVertexBuffer:
-    D->addAttr(::new (S.Context) HshVertexBufferAttr(S.Context, AL, IndexExpr));
-    return;
-  case ParsedAttr::AT_HshInstanceBuffer:
-    D->addAttr(::new (S.Context)
-                   HshInstanceBufferAttr(S.Context, AL, IndexExpr));
-    return;
-  case ParsedAttr::AT_HshColorTarget:
-    D->addAttr(::new (S.Context) HshColorTargetAttr(S.Context, AL, IndexExpr));
-    return;
-  case ParsedAttr::AT_HshVertexTexture:
-    D->addAttr(::new (S.Context)
-                   HshVertexTextureAttr(S.Context, AL, IndexExpr));
-    return;
-  case ParsedAttr::AT_HshFragmentTexture:
-    D->addAttr(::new (S.Context)
-                   HshFragmentTextureAttr(S.Context, AL, IndexExpr));
-    return;
-  };
+  D->addAttr(::new (S.Context) T(S.Context, AL, IndexExpr));
 }
 
 //===----------------------------------------------------------------------===//
@@ -7495,33 +7474,16 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleHandleAttr<UseHandleAttr>(S, D, AL);
     break;
 
-  case ParsedAttr::AT_HshPosition:
-    handleSimpleAttribute<HshPositionAttr>(S, D, AL);
+#define ATTR(NAME)
+#define HSH_PARAM_ATTR(NAME)                                                   \
+  case ParsedAttr::AT_##NAME:                                                  \
+    handleSimpleAttribute<NAME##Attr>(S, D, AL);                               \
     break;
-
-  case ParsedAttr::AT_HshTopology:
-    handleSimpleAttribute<HshTopologyAttr>(S, D, AL);
+#define HSH_INDEX_PARAM_ATTR(NAME)                                             \
+  case ParsedAttr::AT_##NAME:                                                  \
+    handleHshIndexParameterAttr<NAME##Attr>(S, D, AL);                         \
     break;
-
-  case ParsedAttr::AT_HshSourceBlend:
-    handleSimpleAttribute<HshSourceBlendAttr>(S, D, AL);
-    break;
-
-  case ParsedAttr::AT_HshDestinationBlend:
-    handleSimpleAttribute<HshDestinationBlendAttr>(S, D, AL);
-    break;
-
-  case ParsedAttr::AT_HshHostCondition:
-    handleSimpleAttribute<HshHostConditionAttr>(S, D, AL);
-    break;
-
-  case ParsedAttr::AT_HshVertexBuffer:
-  case ParsedAttr::AT_HshInstanceBuffer:
-  case ParsedAttr::AT_HshColorTarget:
-  case ParsedAttr::AT_HshVertexTexture:
-  case ParsedAttr::AT_HshFragmentTexture:
-    handleHshIndexParameterAttr(S, D, AL);
-    break;
+#include "clang/Basic/AttrList.inc"
   }
 }
 

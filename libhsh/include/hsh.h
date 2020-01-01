@@ -1,11 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <type_traits>
 #include <utility>
 
-#define HSH_ENABLE_VULKAN 1
+#define HSH_ENABLE_VULKAN 0
 
 #if HSH_ENABLE_VULKAN
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -120,7 +122,8 @@ constexpr uint4::uint4(const hsh::uint2 &other, std::uint32_t z,
 struct float4x4 {
   float4 cols[4];
   float4x4() = default;
-  float4 &operator[](std::size_t idx) { return cols[idx]; }
+  float4 &operator[](std::size_t col) { return cols[col]; }
+  const float4 &operator[](std::size_t col) const { return cols[col]; }
   float4x4 operator*(const float4x4 &other) const { return float4x4{}; };
   float4 operator*(const float4 &other) const { return float4{}; };
 };
@@ -129,9 +132,32 @@ struct float3x3 {
   float3 cols[3];
   float3x3(const float4x4 &other)
       : cols{other.cols[0].xyz(), other.cols[1].xyz(), other.cols[2].xyz()} {}
+  float3 &operator[](std::size_t col) { return cols[col]; }
+  const float3 &operator[](std::size_t col) const { return cols[col]; }
   float3x3 operator*(const float3x3 &other) const { return float3x3{}; };
   float3 operator*(const float3 &other) const { return float3{}; };
 };
+namespace detail {
+struct aligned_float3x3 {
+  aligned_float3x3() = default;
+  struct col {
+    col() = default;
+    col(const float3 &c) : c(c) {}
+    float3 c; float p;
+  } cols[2];
+  float3 collast;
+  aligned_float3x3(const float3x3 &other)
+      : cols{other.cols[0], other.cols[1]},
+        collast(other.cols[2]) {}
+  aligned_float3x3(const float4x4 &other)
+      : cols{other.cols[0].xyz(), other.cols[1].xyz()},
+        collast(other.cols[2].xyz()) {}
+  float3 &operator[](std::size_t col) { return cols[col].c; }
+  const float3 &operator[](std::size_t col) const { return cols[col].c; }
+  float3x3 operator*(const float3x3 &other) const { return float3x3{}; };
+  float3 operator*(const float3 &other) const { return float3{}; };
+};
+}
 enum class filter { linear, nearest };
 enum class wrap { repeat, clamp_to_edge };
 struct sampler {
@@ -225,9 +251,20 @@ enum Target {
 
 enum Stage { Vertex, Control, Evaluation, Geometry, Fragment, MaxStage };
 
-enum Topology { Points, Lines, Triangles, TriangleStrips, MaxTopology };
+enum Topology { Points, Lines, LineStrip, Triangles, TriangleStrip, TriangleFan, Patches };
 
-enum BlendFactor { Zero, One, SrcAlpha, InvSrcAlpha, DstAlpha, InvDstAlpha };
+enum CullMode { CullNone, CullFront, CullBack, CullFrontAndBack };
+
+enum Compare { Never, Less, Equal, LEqual, Greater, NEqual, GEqual, Always };
+
+enum BlendFactor { Zero, One, SrcColor, InvSrcColor, DstColor, InvDstColor,
+    SrcAlpha, InvSrcAlpha, DstAlpha, InvDstAlpha, Src1Color, InvSrc1Color,
+    Src1Alpha, InvSrc1Alpha
+};
+
+enum BlendOp { Add, Subtract, ReverseSubtract };
+
+enum ColorComponentFlags : unsigned { Red = 1, Green = 2, Blue = 4, Alpha = 8 };
 
 namespace detail {
 
@@ -309,21 +346,76 @@ struct VertexAttribute {
       : Offset(Offset), Binding(Binding), Format(Format) {}
 };
 
+/* Holds constant color attachment information */
+struct ColorAttachment {
+  enum BlendFactor SrcColorBlendFactor = One;
+  enum BlendFactor DstColorBlendFactor = Zero;
+  enum BlendOp ColorBlendOp = Add;
+  enum BlendFactor SrcAlphaBlendFactor = One;
+  enum BlendFactor DstAlphaBlendFactor = Zero;
+  enum BlendOp AlphaBlendOp = Add;
+  enum ColorComponentFlags ColorWriteComponents = ColorComponentFlags(Red | Green | Blue | Alpha);
+  constexpr bool blendEnabled() const {
+    return SrcColorBlendFactor == One && DstColorBlendFactor == Zero &&
+           ColorBlendOp == Add && SrcAlphaBlendFactor == One &&
+        DstAlphaBlendFactor == Zero && AlphaBlendOp == Add;
+  }
+  constexpr ColorAttachment() = default;
+  constexpr ColorAttachment(
+      enum BlendFactor SrcColorBlendFactor,
+      enum BlendFactor DstColorBlendFactor,
+      enum BlendOp ColorBlendOp,
+      enum BlendFactor SrcAlphaBlendFactor,
+      enum BlendFactor DstAlphaBlendFactor,
+      enum BlendOp AlphaBlendOp,
+      std::underlying_type_t<ColorComponentFlags> ColorWriteComponents
+      ) : SrcColorBlendFactor(SrcColorBlendFactor),
+          DstColorBlendFactor(DstColorBlendFactor),
+          ColorBlendOp(ColorBlendOp),
+          SrcAlphaBlendFactor(SrcAlphaBlendFactor),
+          DstAlphaBlendFactor(DstAlphaBlendFactor),
+          AlphaBlendOp(AlphaBlendOp),
+          ColorWriteComponents(ColorComponentFlags(ColorWriteComponents)) {}
+};
+
+/* Holds constant pipeline information */
+struct PipelineInfo {
+  enum Topology Topology = Triangles;
+  unsigned PatchControlPoints = 0;
+  enum CullMode CullMode = CullNone;
+  enum Compare DepthCompare = Always;
+  bool DepthWrite = true;
+  constexpr PipelineInfo() = default;
+  constexpr PipelineInfo(enum Topology Topology,
+                         unsigned PatchControlPoints,
+                         enum CullMode CullMode,
+                         enum Compare DepthCompare,
+                         bool DepthWrite) noexcept
+      : Topology(Topology), PatchControlPoints(PatchControlPoints),
+        CullMode(CullMode), DepthCompare(DepthCompare), DepthWrite(DepthWrite) {}
+};
+
 template <Target T, std::uint32_t NStages, std::uint32_t NBindings,
-          std::uint32_t NAttributes>
+          std::uint32_t NAttributes, std::uint32_t NAttachments>
 struct ShaderConstData {
   std::array<ShaderCode<T>, NStages> StageCodes;
   std::array<VertexBinding, NBindings> Bindings;
   std::array<VertexAttribute, NAttributes> Attributes;
+  std::array<ColorAttachment, NAttachments> Attachments;
+  struct PipelineInfo PipelineInfo;
 
   constexpr ShaderConstData(std::array<ShaderCode<T>, NStages> S,
                             std::array<VertexBinding, NBindings> B,
-                            std::array<VertexAttribute, NAttributes> A)
-      : StageCodes(S), Bindings(B), Attributes(A) {}
+                            std::array<VertexAttribute, NAttributes> A,
+                            std::array<ColorAttachment, NAttachments> Atts,
+                            struct PipelineInfo PipelineInfo)
+      : StageCodes(S), Bindings(B), Attributes(A), Attachments(Atts), PipelineInfo(PipelineInfo) {}
 };
 
 template <Target T, std::uint32_t NStages> struct ShaderData {
-  constexpr ShaderData() = default;
+  using ObjectRef = std::reference_wrapper<ShaderObject<T>>;
+  std::array<ObjectRef, NStages> ShaderObjects;
+  constexpr ShaderData(std::array<ObjectRef, NStages> S) : ShaderObjects(S) {}
 };
 
 #if HSH_ENABLE_VULKAN
@@ -397,6 +489,111 @@ constexpr vk::VertexInputRate HshToVkInputRate(InputRate InputRate) {
   }
 }
 
+constexpr vk::PrimitiveTopology HshToVkTopology(enum Topology Topology) {
+  switch (Topology) {
+  case Points:
+    return vk::PrimitiveTopology::ePointList;
+  case Lines:
+    return vk::PrimitiveTopology::eLineList;
+  case LineStrip:
+    return vk::PrimitiveTopology::eLineStrip;
+  case Triangles:
+    return vk::PrimitiveTopology::eTriangleList;
+  case TriangleStrip:
+    return vk::PrimitiveTopology::eTriangleStrip;
+  case TriangleFan:
+    return vk::PrimitiveTopology::eTriangleFan;
+  case Patches:
+    return vk::PrimitiveTopology::ePatchList;
+  }
+}
+
+constexpr vk::CullModeFlagBits HshToVkCullMode(enum CullMode CullMode) {
+  switch (CullMode) {
+  case CullNone:
+    return vk::CullModeFlagBits::eNone;
+  case CullFront:
+    return vk::CullModeFlagBits::eFront;
+  case CullBack:
+    return vk::CullModeFlagBits::eBack;
+  case CullFrontAndBack:
+    return vk::CullModeFlagBits::eFrontAndBack;
+  }
+}
+
+constexpr vk::CompareOp HshToVkCompare(enum Compare Compare) {
+  switch (Compare) {
+  case Never:
+    return vk::CompareOp::eNever;
+  case Less:
+    return vk::CompareOp::eLess;
+  case Equal:
+    return vk::CompareOp::eEqual;
+  case LEqual:
+    return vk::CompareOp::eLessOrEqual;
+  case Greater:
+    return vk::CompareOp::eGreater;
+  case NEqual:
+    return vk::CompareOp::eNotEqual;
+  case GEqual:
+    return vk::CompareOp::eGreaterOrEqual;
+  case Always:
+    return vk::CompareOp::eAlways;
+  }
+}
+
+constexpr vk::BlendFactor HshToVkBlendFactor(enum BlendFactor BlendFactor) {
+  switch (BlendFactor) {
+  case Zero:
+    return vk::BlendFactor::eZero;
+  case One:
+    return vk::BlendFactor::eOne;
+  case SrcColor:
+    return vk::BlendFactor::eSrcColor;
+  case InvSrcColor:
+    return vk::BlendFactor::eOneMinusSrcColor;
+  case DstColor:
+    return vk::BlendFactor::eDstColor;
+  case InvDstColor:
+    return vk::BlendFactor::eOneMinusDstColor;
+  case SrcAlpha:
+    return vk::BlendFactor::eSrcAlpha;
+  case InvSrcAlpha:
+    return vk::BlendFactor::eOneMinusSrcAlpha;
+  case DstAlpha:
+    return vk::BlendFactor::eDstAlpha;
+  case InvDstAlpha:
+    return vk::BlendFactor::eOneMinusDstAlpha;
+  case Src1Color:
+    return vk::BlendFactor::eSrc1Color;
+  case InvSrc1Color:
+    return vk::BlendFactor::eOneMinusSrc1Color;
+  case Src1Alpha:
+    return vk::BlendFactor::eSrc1Alpha;
+  case InvSrc1Alpha:
+    return vk::BlendFactor::eOneMinusSrc1Alpha;
+  }
+}
+
+constexpr vk::BlendOp HshToVkBlendOp(enum BlendOp BlendOp) {
+  switch (BlendOp) {
+  case Add:
+    return vk::BlendOp::eAdd;
+  case Subtract:
+    return vk::BlendOp::eSubtract;
+  case ReverseSubtract:
+    return vk::BlendOp::eReverseSubtract;
+  }
+}
+
+constexpr vk::ColorComponentFlagBits HshToVkColorComponentFlags(enum ColorComponentFlags Comps) {
+  return vk::ColorComponentFlagBits(
+      (Comps & Red ? unsigned(vk::ColorComponentFlagBits::eR) : 0u) |
+      (Comps & Green ? unsigned(vk::ColorComponentFlagBits::eG) : 0u) |
+      (Comps & Blue ? unsigned(vk::ColorComponentFlagBits::eB) : 0u) |
+      (Comps & Alpha ? unsigned(vk::ColorComponentFlagBits::eA) : 0u));
+}
+
 template <> struct ShaderCode<VULKAN_SPIRV> {
   enum Stage Stage = Stage::Vertex;
   ShaderDataBlob<uint32_t> Blob;
@@ -411,13 +608,14 @@ template <> struct ShaderObject<VULKAN_SPIRV> {
 };
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
-          std::uint32_t NAttributes>
-struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes> {
+          std::uint32_t NAttributes, std::uint32_t NAttachments>
+struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NAttachments> {
   std::array<vk::ShaderModuleCreateInfo, NStages> StageCodes;
   std::array<vk::VertexInputBindingDescription, NBindings>
       VertexBindingDescriptions;
   std::array<vk::VertexInputAttributeDescription, NAttributes>
       VertexAttributeDescriptions;
+  std::array<vk::PipelineColorBlendAttachmentState, NAttachments> TargetAttachments;
   vk::PipelineVertexInputStateCreateInfo VertexInputState;
   vk::PipelineInputAssemblyStateCreateInfo InputAssemblyState;
   vk::PipelineTessellationStateCreateInfo TessellationState;
@@ -425,13 +623,16 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes> {
   vk::PipelineDepthStencilStateCreateInfo DepthStencilState;
   vk::PipelineColorBlendStateCreateInfo ColorBlendState;
 
-  template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq>
+  template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq, std::size_t... AttSeq>
   constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
                             std::array<VertexBinding, NBindings> B,
                             std::array<VertexAttribute, NAttributes> A,
+                            std::array<ColorAttachment, NAttachments> Atts,
+                            struct PipelineInfo PipelineInfo,
                             std::index_sequence<SSeq...>,
                             std::index_sequence<BSeq...>,
-                            std::index_sequence<ASeq...>)
+                            std::index_sequence<ASeq...>,
+                            std::index_sequence<AttSeq...>)
       : StageCodes{vk::ShaderModuleCreateInfo{
             {}, std::get<SSeq>(S).Blob.Size, std::get<SSeq>(S).Blob.Data}...},
         VertexBindingDescriptions{vk::VertexInputBindingDescription{
@@ -441,24 +642,36 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes> {
             ASeq, std::get<ASeq>(A).Binding,
             HshToVkFormat(std::get<ASeq>(A).Format),
             std::get<ASeq>(A).Offset}...},
+        TargetAttachments{vk::PipelineColorBlendAttachmentState{
+          std::get<AttSeq>(Atts).blendEnabled(),
+          HshToVkBlendFactor(std::get<AttSeq>(Atts).SrcColorBlendFactor),
+          HshToVkBlendFactor(std::get<AttSeq>(Atts).DstColorBlendFactor),
+          HshToVkBlendOp(std::get<AttSeq>(Atts).ColorBlendOp),
+          HshToVkBlendFactor(std::get<AttSeq>(Atts).SrcAlphaBlendFactor),
+          HshToVkBlendFactor(std::get<AttSeq>(Atts).DstAlphaBlendFactor),
+          HshToVkBlendOp(std::get<AttSeq>(Atts).AlphaBlendOp),
+          HshToVkColorComponentFlags(std::get<AttSeq>(Atts).ColorWriteFlags)}...},
         VertexInputState{{},
                          NBindings,
                          VertexBindingDescriptions.data(),
                          NAttributes,
-                         VertexAttributeDescriptions.data()} {}
+                         VertexAttributeDescriptions.data()},
+        InputAssemblyState{{}, HshToVkTopology(PipelineInfo.Topology), VK_TRUE},
+        TessellationState{{}, PipelineInfo.PatchControlPoints},
+        RasterizationState{{}, VK_FALSE, VK_FALSE, vk::PolygonMode::eFill, HshToVkCullMode(PipelineInfo.CullMode)},
+        DepthStencilState{{}, PipelineInfo.DepthCompare != Always, PipelineInfo.DepthWrite, HshToVkCompare(PipelineInfo.DepthCompare)},
+        ColorBlendState{{}, VK_FALSE, vk::LogicOp ::eClear, NAttachments, TargetAttachments.data()} {}
 
   constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
                             std::array<VertexBinding, NBindings> B,
-                            std::array<VertexAttribute, NAttributes> A)
-      : ShaderConstData(S, B, A, std::make_index_sequence<NStages>(),
+                            std::array<VertexAttribute, NAttributes> A,
+                            std::array<ColorAttachment, NAttachments> Atts,
+                            struct PipelineInfo PipelineInfo)
+      : ShaderConstData(S, B, A, Atts, PipelineInfo,
+                        std::make_index_sequence<NStages>(),
                         std::make_index_sequence<NBindings>(),
-                        std::make_index_sequence<NAttributes>()) {}
-};
-
-template <std::uint32_t NStages> struct ShaderData<VULKAN_SPIRV, NStages> {
-  using ObjectRef = std::reference_wrapper<ShaderObject<VULKAN_SPIRV>>;
-  std::array<ObjectRef, NStages> ShaderObjects;
-  constexpr ShaderData(std::array<ObjectRef, NStages> S) : ShaderObjects(S) {}
+                        std::make_index_sequence<NAttributes>(),
+                        std::make_index_sequence<NAttachments>()) {}
 };
 #endif
 

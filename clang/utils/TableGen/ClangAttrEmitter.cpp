@@ -2267,6 +2267,7 @@ void clang::EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
     assert(!Supers.empty() && "Forgot to specify a superclass for the attr");
     std::string SuperName;
     bool Inheritable = false;
+    bool HshIndex = false;
     for (const auto &Super : llvm::reverse(Supers)) {
       const Record *R = Super.first;
       if (R->getName() != "TargetSpecificAttr" &&
@@ -2274,6 +2275,8 @@ void clang::EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
         SuperName = std::string(R->getName());
       if (R->getName() == "InheritableAttr")
         Inheritable = true;
+      else if (R->getName() == "HshIndexParamAttr")
+        HshIndex = true;
     }
 
     OS << "class " << R.getName() << "Attr : public " << SuperName << " {\n";
@@ -2286,6 +2289,8 @@ void clang::EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
     bool HasFakeArg = false;
     for (const auto *ArgRecord : ArgRecords) {
       Args.emplace_back(createArgument(*ArgRecord, R.getName()));
+      if (HshIndex && Args.back()->getUpperName() == "Index")
+        continue;
       Args.back()->writeDeclarations(OS);
       OS << "\n\n";
 
@@ -2431,9 +2436,13 @@ void clang::EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
            << (R.getValueAsBit("InheritEvenIfAlreadyPresent") ? "true"
                                                               : "false");
       }
+      if (HshIndex)
+        OS << ", Index";
       OS << ")\n";
 
       for (auto const &ai : Args) {
+        if (HshIndex && ai->getUpperName() == "Index")
+          continue;
         OS << "              , ";
         if (!shouldEmitArg(ai)) {
           ai->writeCtorDefaultInitializers(OS);
@@ -2480,6 +2489,8 @@ void clang::EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
     writeAttrAccessorDefinition(R, OS);
 
     for (auto const &ai : Args) {
+      if (HshIndex && ai->getUpperName() == "Index")
+        continue;
       ai->writeAccessors(OS);
       OS << "\n\n";
 
@@ -2602,7 +2613,12 @@ static const AttrClassDescriptor AttrClassDescriptors[] = {
   { "INHERITABLE_ATTR", "InheritableAttr" },
   { "DECL_OR_TYPE_ATTR", "DeclOrTypeAttr" },
   { "INHERITABLE_PARAM_ATTR", "InheritableParamAttr" },
-  { "PARAMETER_ABI_ATTR", "ParameterABIAttr" }
+  { "PARAMETER_ABI_ATTR", "ParameterABIAttr" },
+  { "HSH_PARAM_ATTR", "HshParamAttr" },
+  { "HSH_INDEX_PARAM_ATTR", "HshIndexParamAttr" },
+  { "HSH_VERTEX_BUFFER_PARAM_ATTR", "HshVertexBufferParamAttr" },
+  { "HSH_COLOR_ATTACHMENT_PARAM_ATTR", "HshColorAttachmentParamAttr" },
+  { "HSH_TEXTURE_PARAM_ATTR", "HshTextureParamAttr" }
 };
 
 static void emitDefaultDefine(raw_ostream &OS, StringRef name,

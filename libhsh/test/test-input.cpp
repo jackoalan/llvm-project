@@ -17,7 +17,7 @@ struct MyFormat : hsh::vertex_format {
   constexpr MyFormat(hsh::float3 position, hsh::float3 normal)
   : position(std::move(position)), normal(std::move(normal)) {}
 };
-float SomeAlpha = 0.5f;
+
 void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                    const hsh::float4& dynColor, PostMode postMode [[hsh::host_condition]]) {
   constexpr MyFormat MyBuffer[] = {
@@ -37,10 +37,10 @@ void DrawSomething(const hsh::float4x4& xf, const hsh::float3& lightDir,
                                                           // interpolated value (fragment shader)
       hsh::texture2d<float> tex0 [[hsh::fragment_texture(0)]], // texture sampler
       hsh::float4 vertPos [[hsh::position]],            // Output of vertex shader
-      hsh::float4 fragColor [[hsh::color_target(0)]] = {1.f, 1.f, 1.f, 1.f},   // Output of fragment shader
-      auto topology [[hsh::topology]] = hsh::TriangleStrips,
-      auto srcBlend [[hsh::source_blend]] = hsh::One,
-      auto destBlend [[hsh::destination_blend]] = hsh::Zero) {
+      hsh::Topology topology [[hsh::topology]],
+      hsh::float4 fragColor [[hsh::color_attachment(0)]] = {1.f, 1.f, 1.f, 1.f},   // Output of fragment shader
+      auto srcBlend [[hsh::src_color_blend_factor(0)]] = hsh::One,
+      auto destBlend [[hsh::dst_color_blend_factor(0)]] = hsh::One) {
 
     /** Vertex Shader Pass
      * For final [[hsh::position]] assignment:

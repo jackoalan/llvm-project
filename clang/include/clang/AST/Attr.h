@@ -178,6 +178,76 @@ public:
   }
 };
 
+class HshParamAttr : public InheritableParamAttr {
+protected:
+  using InheritableParamAttr::InheritableParamAttr;
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstHshParamAttr &&
+           A->getKind() <= attr::LastHshParamAttr;
+  }
+};
+
+class HshIndexParamAttr : public HshParamAttr {
+protected:
+  Expr *index;
+  llvm::APSInt value;
+  HshIndexParamAttr(ASTContext &Context, const AttributeCommonInfo &CommonInfo,
+                    attr::Kind AK, bool IsLateParsed,
+                    bool InheritEvenIfAlreadyPresent, Expr *Index)
+      : HshParamAttr(Context, CommonInfo, AK, IsLateParsed,
+                     InheritEvenIfAlreadyPresent),
+        index(Index) {
+    Expr::EvalResult Result;
+    index->EvaluateAsInt(Result, Context);
+    value = Result.Val.getInt();
+  }
+
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstHshIndexParamAttr &&
+           A->getKind() <= attr::LastHshIndexParamAttr;
+  }
+
+  Expr *getIndex() const { return index; }
+  const llvm::APSInt &getIndexInt() const { return value; }
+};
+
+class HshVertexBufferParamAttr : public HshIndexParamAttr {
+protected:
+  using HshIndexParamAttr::HshIndexParamAttr;
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstHshVertexBufferParamAttr &&
+           A->getKind() <= attr::LastHshVertexBufferParamAttr;
+  }
+};
+
+class HshColorAttachmentParamAttr : public HshIndexParamAttr {
+protected:
+  using HshIndexParamAttr::HshIndexParamAttr;
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstHshColorAttachmentParamAttr &&
+           A->getKind() <= attr::LastHshColorAttachmentParamAttr;
+  }
+};
+
+class HshTextureParamAttr : public HshIndexParamAttr {
+protected:
+  using HshIndexParamAttr::HshIndexParamAttr;
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstHshTextureParamAttr &&
+           A->getKind() <= attr::LastHshTextureParamAttr;
+  }
+};
+
 /// A parameter attribute which changes the argument-passing ABI rule
 /// for the parameter.
 class ParameterABIAttr : public InheritableParamAttr {

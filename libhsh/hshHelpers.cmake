@@ -75,7 +75,7 @@ endfunction()
 #
 function(target_hsh target)
   cmake_parse_arguments(ARG
-          ""
+          "ALL_SOURCES"
           ""
           "HSH_TARGETS"
           ${ARGN})
@@ -100,10 +100,18 @@ function(target_hsh target)
     list(APPEND _hsh_args "-D${define}")
   endforeach()
   foreach(source ${source_list})
+    get_source_file_property(is_header "${source}" HEADER_FILE_ONLY)
+    if(is_header)
+      continue()
+    endif()
+    get_source_file_property(hsh_enabled "${source}" HSH_ENABLED)
+    if(NOT ARG_ALL_SOURCES AND NOT hsh_enabled)
+      continue()
+    endif()
     get_source_file_property(src_path "${source}" LOCATION)
     file(RELATIVE_PATH rel_path "${src_dir}" "${src_path}")
     get_filename_component(rel_dir "${rel_path}" DIRECTORY)
-    if (rel_dir)
+    if(rel_dir)
       set(rel_dir "${rel_dir}/")
     endif()
     string(REPLACE ".." "__" rel_dir "${rel_dir}")
@@ -126,4 +134,8 @@ function(target_hsh target)
             COMPILE_FLAGS -Wno-unknown-attributes)
     target_sources(${target} PUBLIC "${out_path}")
   endforeach()
+endfunction()
+
+function(hsh_sources)
+  set_source_files_properties(${ARGN} PROPERTIES HSH_ENABLED On)
 endfunction()

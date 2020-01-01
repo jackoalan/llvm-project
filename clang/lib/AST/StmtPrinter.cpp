@@ -1317,7 +1317,7 @@ void StmtPrinter::VisitUnaryOperator(UnaryOperator *Node) {
 }
 
 void StmtPrinter::VisitOffsetOfExpr(OffsetOfExpr *Node) {
-  OS << "__builtin_offsetof(";
+  OS << (Policy.UseStdOffsetOf ? "offsetof(" : "__builtin_offsetof(");
   Node->getTypeSourceInfo()->getType().print(OS, Policy);
   OS << ", ";
   bool PrintedSomething = false;
