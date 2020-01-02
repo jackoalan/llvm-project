@@ -1,15 +1,16 @@
 include(ExternalProject)
 
+set(lib_destination "${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}")
+set(lib_install_destination "lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}")
+
 if(CMAKE_HOST_UNIX)
-  set(LIBRARY_DESTINATION lib${LLVM_LIBDIR_SUFFIX})
   set(LINK_OR_COPY create_symlink
           libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7
-          "${CMAKE_BINARY_DIR}/${LIBRARY_DESTINATION}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
+          "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
 else()
-  set(LIBRARY_DESTINATION bin)
   set(LINK_OR_COPY copy
-          "${CMAKE_BINARY_DIR}/${LIBRARY_DESTINATION}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
-          "${CMAKE_BINARY_DIR}/${LIBRARY_DESTINATION}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
+          "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
+          "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 ExternalProject_Add(
@@ -28,7 +29,7 @@ ExternalProject_Add(
         "${CMAKE_COMMAND}" -E copy ../DirectXShaderCompiler/include/dxc/Support/WinAdapter.h
         "${CLANG_BINARY_DIR}/include/dxc/Support/WinAdapter.h"
         COMMAND
-        "${CMAKE_COMMAND}" -E copy lib/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7 "${CMAKE_BINARY_DIR}/${LIBRARY_DESTINATION}"
+        "${CMAKE_COMMAND}" -E copy lib/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7 "${lib_destination}"
         COMMAND
         "${CMAKE_COMMAND}" -E ${LINK_OR_COPY}
         CMAKE_CACHE_ARGS
@@ -59,17 +60,15 @@ ExternalProject_Add(
 # building clangHsh until after DXC is built.
 set(dxc_header "${CLANG_BINARY_DIR}/include/dxc/dxcapi.h")
 add_custom_command(OUTPUT "${dxc_header}"
-                   COMMAND ${CMAKE_COMMAND} ARGS
+                   COMMAND "${CMAKE_COMMAND}" ARGS
                    --build . --target DirectXShaderCompiler
-                   WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-                   )
+                   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_clang_library(clangHsh
         "${CLANG_BINARY_DIR}/include/dxc/dxcapi.h"
         HshGenerator.cpp
         LINK_LIBS
-        clangTooling
-        )
+        clangTooling)
 
 # Enable -fms-extensions for clang to use MS uuid extensions for COM.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -77,17 +76,16 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
           COMPILE_FLAGS "-fms-extensions -Wno-language-extension-token")
 endif()
 
-set(output_dir "${CMAKE_BINARY_DIR}/${LIBRARY_DESTINATION}")
 add_custom_target(DirectXShaderCompiler-libs ALL DEPENDS "${dxc_header}")
-set_target_properties(clang-resource-headers PROPERTIES
+set_target_properties(DirectXShaderCompiler-libs PROPERTIES
         FOLDER "Misc"
-        RUNTIME_OUTPUT_DIRECTORY "${output_dir}")
+        RUNTIME_OUTPUT_DIRECTORY "${lib_install_destination}")
 
 install(FILES
-        "${output_dir}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${output_dir}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
+        "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
         COMPONENT DirectXShaderCompiler-libs
-        DESTINATION ${LIBRARY_DESTINATION})
+        DESTINATION "${lib_install_destination}")
 
 if(NOT LLVM_ENABLE_IDE)
   add_llvm_install_targets(install-DirectXShaderCompiler-libs

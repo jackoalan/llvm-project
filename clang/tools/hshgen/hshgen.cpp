@@ -127,10 +127,6 @@ int main(int argc, const char **argv) {
   if (!cl::ParseCommandLineOptions(argc, argv, "Hsh Codegen Tool"))
     return 1;
 
-  const std::string ProgramDir = sys::path::parent_path(argv[0]);
-  const std::string ProgramName = sys::path::filename(argv[0]);
-  const bool Colors = WithColor(llvm::errs()).colorsEnabled();
-
   std::vector<std::string> args = {argv[0],
 #ifdef __linux__
                                    "--gcc-toolchain=/usr",
@@ -140,10 +136,11 @@ int main(int argc, const char **argv) {
                                    "-D__hsh__=1",
                                    "-Wno-expansion-to-defined",
                                    "-Wno-nullability-completeness",
-                                   "-Wno-unused-value",
-                                   Colors ? "-fcolor-diagnostics" : ""};
+                                   "-Wno-unused-value"};
   if (Verbose)
     args.emplace_back("-v");
+  if (WithColor(llvm::errs()).colorsEnabled())
+    args.emplace_back("-fcolor-diagnostics");
   for (const auto &Dir : IncludeDirs) {
     args.emplace_back("-I");
     args.push_back(Dir);
@@ -173,6 +170,7 @@ int main(int argc, const char **argv) {
       Targets.push_back(T.Target);
   }
   if (Targets.empty()) {
+    const std::string ProgramName = sys::path::filename(argv[0]);
     errs() << ProgramName << ": No hsh targets specified!\n"
            << "Must specify at least one of --glsl, --hlsl, --metal, etc...\n"
            << "See: " << argv[0] << " --help\n";
@@ -181,10 +179,9 @@ int main(int argc, const char **argv) {
 
   llvm::IntrusiveRefCntPtr<FileManager> fman(
       new FileManager(FileSystemOptions()));
-  tooling::ToolInvocation TI(
-      std::move(args),
-      std::make_unique<hshgen::GenerateAction>(ProgramDir, Targets),
-      fman.get());
+  tooling::ToolInvocation TI(std::move(args),
+                             std::make_unique<hshgen::GenerateAction>(Targets),
+                             fman.get());
   if (!TI.run())
     return 1;
 

@@ -84,10 +84,10 @@ class DxcLibrary {
 
 public:
   static llvm::Optional<DxcLibrary> SharedInstance;
-  static void EnsureSharedInstance(StringRef ProgramDir,
+  static void EnsureSharedInstance(StringRef ResourceDir,
                                    DiagnosticsEngine &Diags) {
     if (!SharedInstance)
-      SharedInstance.emplace(ProgramDir, Diags);
+      SharedInstance.emplace(ResourceDir, Diags);
   }
 
 #ifdef __EMULATE_UUID
@@ -111,17 +111,15 @@ public:
   } UUIDs;
 #endif
 
-  explicit DxcLibrary(StringRef ProgramDir, DiagnosticsEngine &Diags) {
-#ifdef LLVM_ON_UNIX
-    SmallString<128> LibPath(sys::path::parent_path(ProgramDir));
-    sys::path::append(LibPath, "lib" CLANG_LIBDIR_SUFFIX,
-                      "libdxcompiler" LTDL_SHLIB_EXT);
-#else
-    SmallString<128> LibPath(ProgramDir);
-    sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
-#endif
+  explicit DxcLibrary(StringRef ResourceDir, DiagnosticsEngine &Diags) {
     std::string Err;
+#if LLVM_ON_UNIX
+    SmallString<128> LibPath(ResourceDir);
+    sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
     Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);
+#else
+    Library = sys::DynamicLibrary::getPermanentLibrary("dxcompiler.dll", &Err);
+#endif
     if (!Library.isValid()) {
       Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                          "unable to load %0; %1"))
@@ -2272,7 +2270,7 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
   using ShaderPrintingPolicy<HLSLPrintingPolicy>::ShaderPrintingPolicy;
 };
 
-static std::unique_ptr<ShaderPrintingPolicyBase>
+std::unique_ptr<ShaderPrintingPolicyBase>
 MakePrintingPolicy(HshBuiltins &Builtins, HshTarget Target) {
   switch (Target) {
   case HT_GLSL:
@@ -3060,11 +3058,11 @@ protected:
         if (ErrBlob->GetBufferSize()) {
           if (!HasObj)
             llvm::errs() << Stage << '\n';
+          StringRef ErrStr((char *)ErrBlob->GetBufferPointer());
           Diags.Report(Diags.getCustomDiagID(HasObj ? DiagnosticsEngine::Warning
                                                     : DiagnosticsEngine::Error,
                                              "%0 problem from dxcompiler: %1"))
-              << HshStageToString(HStage)
-              << (char *)ErrBlob->GetBufferPointer();
+              << HshStageToString(HStage) << ErrStr.rtrim();
         }
       }
       if (HResult != ERROR_SUCCESS) {
@@ -3077,16 +3075,16 @@ protected:
   }
 
 public:
-  explicit StagesCompilerDxc(const StageSources &Sources, StringRef ProgramDir,
+  explicit StagesCompilerDxc(const StageSources &Sources, StringRef ResourceDir,
                              DiagnosticsEngine &Diags)
       : Sources(Sources), Diags(Diags) {
-    DxcLibrary::EnsureSharedInstance(ProgramDir, Diags);
+    DxcLibrary::EnsureSharedInstance(ResourceDir, Diags);
   }
 };
 
-static std::unique_ptr<StagesCompilerBase>
-MakeCompiler(const StageSources &Sources, StringRef ProgramDir,
-             DiagnosticsEngine &Diags) {
+std::unique_ptr<StagesCompilerBase> MakeCompiler(const StageSources &Sources,
+                                                 StringRef ResourceDir,
+                                                 DiagnosticsEngine &Diags) {
   switch (Sources.Target) {
   case HT_GLSL:
   case HT_HLSL:
@@ -3094,7 +3092,7 @@ MakeCompiler(const StageSources &Sources, StringRef ProgramDir,
   case HT_DXBC:
   case HT_DXIL:
   case HT_VULKAN_SPIRV:
-    return std::make_unique<StagesCompilerDxc>(Sources, ProgramDir, Diags);
+    return std::make_unique<StagesCompilerDxc>(Sources, ResourceDir, Diags);
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
@@ -4444,7 +4442,6 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   HostPrintingPolicy HostPolicy;
   AnalysisDeclContextManager AnalysisMgr;
   Preprocessor &PP;
-  StringRef ProgramDir;
   ArrayRef<HshTarget> Targets;
   std::unique_ptr<raw_pwrite_stream> OS;
   llvm::DenseSet<uint64_t> SeenHashes;
@@ -4463,11 +4460,10 @@ class GenerateConsumer : public ASTConsumer, MatchFinder::MatchCallback {
   }
 
 public:
-  explicit GenerateConsumer(CompilerInstance &CI, StringRef ProgramDir,
-                            ArrayRef<HshTarget> Targets)
+  explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
       : CI(CI), Context(CI.getASTContext()),
         HostPolicy(Context.getPrintingPolicy()), AnalysisMgr(Context),
-        PP(CI.getPreprocessor()), ProgramDir(ProgramDir), Targets(Targets) {
+        PP(CI.getPreprocessor()), Targets(Targets) {
     AnalysisMgr.getCFGBuildOptions().OmitLogicalBinaryOperators = true;
   }
 
@@ -4626,7 +4622,8 @@ public:
         auto Policy = MakePrintingPolicy(Builtins, Target);
         auto Sources = Builder.printResults(*Policy);
         auto Compiler =
-            MakeCompiler(Sources, ProgramDir, Context.getDiagnostics());
+            MakeCompiler(Sources, CI.getHeaderSearchOpts().ResourceDir,
+                         Context.getDiagnostics());
         if (Context.getDiagnostics().hasErrorOccurred())
           return;
         auto Binaries = Compiler->compile();
@@ -4955,7 +4952,7 @@ namespace clang::hshgen {
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   dumper().setPrintingPolicy(CI.getASTContext().getPrintingPolicy());
-  auto Consumer = std::make_unique<GenerateConsumer>(CI, ProgramDir, Targets);
+  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(
           *Consumer, CI.getFileManager(), CI.getSourceManager()));

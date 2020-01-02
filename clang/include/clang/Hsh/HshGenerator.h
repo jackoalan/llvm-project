@@ -48,12 +48,10 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
 }
 
 class GenerateAction : public ASTFrontendAction {
-  std::string ProgramDir;
   OwningArrayRef<HshTarget> Targets;
 
 public:
-  explicit GenerateAction(StringRef ProgramDir, ArrayRef<HshTarget> Targets)
-      : ProgramDir(ProgramDir), Targets(Targets) {}
+  explicit GenerateAction(ArrayRef<HshTarget> Targets) : Targets(Targets) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
 };

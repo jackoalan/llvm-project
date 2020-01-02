@@ -147,7 +147,7 @@ set(openmp_wrapper_files
   openmp_wrappers/new
 )
 
-set(output_dir ${LLVM_LIBRARY_OUTPUT_INTDIR}/clang/${CLANG_VERSION}/include)
+set(output_dir ${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}/include)
 set(out_files)
 set(generated_files)
 
@@ -192,7 +192,7 @@ set_target_properties(clang-resource-headers PROPERTIES
   FOLDER "Misc"
   RUNTIME_OUTPUT_DIRECTORY "${output_dir}")
 
-set(header_install_dir lib${LLVM_LIBDIR_SUFFIX}/clang/${CLANG_VERSION}/include)
+set(header_install_dir lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}/include)
 
 install(
   FILES ${files} ${generated_files}
