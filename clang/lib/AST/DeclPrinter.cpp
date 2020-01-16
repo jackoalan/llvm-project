@@ -817,8 +817,15 @@ void DeclPrinter::VisitFieldDecl(FieldDecl *D) {
   if (!Policy.SuppressSpecifiers && D->isModulePrivate())
     Out << "__module_private__ ";
 
+  StringRef Name = D->getName();
+  if (!Policy.FieldPrefix.empty()) {
+    static SmallString<32> PrefixedName;
+    PrefixedName = Policy.FieldPrefix;
+    PrefixedName += D->getName();
+    Name = PrefixedName;
+  }
   Out << D->getASTContext().getUnqualifiedObjCPointerType(D->getType()).
-         stream(Policy, D->getName(), Indentation);
+         stream(Policy, Name, Indentation);
 
   if (D->isBitField()) {
     Out << " : ";

@@ -1784,6 +1784,8 @@ public:
   static bool classofKind(Kind K) {
     return K >= firstCXXRecord && K <= lastCXXRecord;
   }
+
+  CXXRecordDecl *HshSourceRecord = nullptr;
 };
 
 /// Store information needed for an explicit specifier.

@@ -10439,6 +10439,4 @@ def warn_sycl_kernel_return_type : Warning<
   "function template with 'sycl_kernel' attribute must have a 'void' return type">,
   InGroup<IgnoredAttributes>;
 
-def err_hsh_include_bad_lambda : Error<
-  "hsh generator lambda parameters must contain a [[hsh::position]] out reference">;
 } // end of sema component.

@@ -189,63 +189,23 @@ public:
   }
 };
 
-class HshIndexParamAttr : public HshParamAttr {
+class HshStageAttr : public HshParamAttr {
+  unsigned StageIndex;
 protected:
-  Expr *index;
-  llvm::APSInt value;
-  HshIndexParamAttr(ASTContext &Context, const AttributeCommonInfo &CommonInfo,
-                    attr::Kind AK, bool IsLateParsed,
-                    bool InheritEvenIfAlreadyPresent, Expr *Index)
+  HshStageAttr(ASTContext &Context, const AttributeCommonInfo &CommonInfo,
+               attr::Kind AK, bool IsLateParsed,
+               bool InheritEvenIfAlreadyPresent, unsigned StageIndex)
       : HshParamAttr(Context, CommonInfo, AK, IsLateParsed,
-                     InheritEvenIfAlreadyPresent),
-        index(Index) {
-    Expr::EvalResult Result;
-    index->EvaluateAsInt(Result, Context);
-    value = Result.Val.getInt();
-  }
+                     InheritEvenIfAlreadyPresent), StageIndex(StageIndex) {}
 
 public:
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Attr *A) {
-    return A->getKind() >= attr::FirstHshIndexParamAttr &&
-           A->getKind() <= attr::LastHshIndexParamAttr;
+    return A->getKind() >= attr::FirstHshStageAttr &&
+           A->getKind() <= attr::LastHshStageAttr;
   }
 
-  Expr *getIndex() const { return index; }
-  const llvm::APSInt &getIndexInt() const { return value; }
-};
-
-class HshVertexBufferParamAttr : public HshIndexParamAttr {
-protected:
-  using HshIndexParamAttr::HshIndexParamAttr;
-public:
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Attr *A) {
-    return A->getKind() >= attr::FirstHshVertexBufferParamAttr &&
-           A->getKind() <= attr::LastHshVertexBufferParamAttr;
-  }
-};
-
-class HshColorAttachmentParamAttr : public HshIndexParamAttr {
-protected:
-  using HshIndexParamAttr::HshIndexParamAttr;
-public:
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Attr *A) {
-    return A->getKind() >= attr::FirstHshColorAttachmentParamAttr &&
-           A->getKind() <= attr::LastHshColorAttachmentParamAttr;
-  }
-};
-
-class HshTextureParamAttr : public HshIndexParamAttr {
-protected:
-  using HshIndexParamAttr::HshIndexParamAttr;
-public:
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Attr *A) {
-    return A->getKind() >= attr::FirstHshTextureParamAttr &&
-           A->getKind() <= attr::LastHshTextureParamAttr;
-  }
+  unsigned getStageIndex() const { return StageIndex; }
 };
 
 /// A parameter attribute which changes the argument-passing ABI rule

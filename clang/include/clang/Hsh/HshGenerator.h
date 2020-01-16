@@ -22,10 +22,12 @@ enum HshTarget {
   HT_METAL_BIN_MAC,
   HT_METAL_BIN_IOS,
   HT_METAL_BIN_TVOS,
+  HT_MAX
 };
 
 constexpr StringRef HshTargetToString(HshTarget Target) {
   switch (Target) {
+  default:
   case HT_GLSL:
     return llvm::StringLiteral("glsl");
   case HT_HLSL:

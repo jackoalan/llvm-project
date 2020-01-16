@@ -1474,6 +1474,14 @@ static bool isImplicitThis(const Expr *E) {
 }
 
 void StmtPrinter::VisitMemberExpr(MemberExpr *Node) {
+  StringRef OverrideExpr;
+  if (Policy.Callbacks)
+    OverrideExpr = Policy.Callbacks->overrideMemberExpr(Node);
+  if (!OverrideExpr.empty()) {
+    OS << OverrideExpr;
+    return;
+  }
+
   if (!Policy.SuppressImplicitBase || !isImplicitThis(Node->getBase())) {
     StringRef PrependBase;
     bool ReplaceBase = false;

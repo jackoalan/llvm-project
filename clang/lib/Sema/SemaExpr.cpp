@@ -15844,7 +15844,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
             // expression evaluator needing to call back into Sema if it sees a
             // call to such a function.
             InstantiateFunctionDefinition(PointOfInstantiation, Func);
-          else {
+          else if (!InHshBindingMacro) {
             Func->setInstantiationIsPending(true);
             PendingInstantiations.push_back(
                 std::make_pair(Func, PointOfInstantiation));

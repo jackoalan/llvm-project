@@ -5157,6 +5157,13 @@ bool Sema::CheckTemplateArgument(NamedDecl *Param,
       llvm_unreachable("Should never see a NULL template argument here");
 
     case TemplateArgument::Expression: {
+      // Hsh has a specialized parsing mode that permits non-constant non type
+      // template parameters. Simply pass the expression as-is.
+      if (InHshBindingMacro) {
+        Converted.push_back(Arg.getArgument());
+        break;
+      }
+
       TemplateArgument Result;
       unsigned CurSFINAEErrors = NumSFINAEErrors;
       ExprResult Res =

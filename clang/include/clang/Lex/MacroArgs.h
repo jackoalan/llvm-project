@@ -80,6 +80,10 @@ public:
   ///
   const Token *getUnexpArgument(unsigned Arg) const;
 
+  ArrayRef<Token> getUnexpArguments() const {
+    return ArrayRef<Token>(getTrailingObjects<Token>(), NumUnexpArgTokens);
+  }
+
   /// getArgLength - Given a pointer to an expanded or unexpanded argument,
   /// return the number of tokens, not counting the EOF, that make up the
   /// argument.

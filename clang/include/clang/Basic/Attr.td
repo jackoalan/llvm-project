@@ -1328,133 +1328,37 @@ def GNUInline : InheritableAttr {
 
 class HshParamAttr : InheritableParamAttr;
 
-class HshIndexParamAttr : HshParamAttr {
-  let Args = [ExprArgument<"Index">];
-}
-
-class HshVertexBufferParamAttr : HshIndexParamAttr;
-
-def HshVertexBuffer : HshVertexBufferParamAttr {
-  let Spellings = [CXX11<"hsh", "vertex_buffer">];
+def HshInstance : HshParamAttr {
+  let Spellings = [CXX11<"hsh", "instance">];
   let Documentation = [Undocumented];
 }
 
-def HshInstanceBuffer : HshVertexBufferParamAttr {
-  let Spellings = [CXX11<"hsh", "instance_buffer">];
+class HshStageAttr<int si> : HshParamAttr {
+  int StageIndex = si;
+}
+
+def HshVertex : HshStageAttr<0> {
+  let Spellings = [CXX11<"hsh", "vertex">];
   let Documentation = [Undocumented];
 }
 
-def HshPosition : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "position">];
+def HshControl : HshStageAttr<1> {
+  let Spellings = [CXX11<"hsh", "control">];
   let Documentation = [Undocumented];
 }
 
-class HshColorAttachmentParamAttr : HshIndexParamAttr;
-
-def HshColorAttachment : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "color_attachment">];
+def HshEvaluation : HshStageAttr<2> {
+  let Spellings = [CXX11<"hsh", "evaluation">];
   let Documentation = [Undocumented];
 }
 
-def HshSrcColorBlendFactor : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "src_color_blend_factor">];
+def HshGeometry : HshStageAttr<3> {
+  let Spellings = [CXX11<"hsh", "geometry">];
   let Documentation = [Undocumented];
 }
 
-def HshDstColorBlendFactor : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "dst_color_blend_factor">];
-  let Documentation = [Undocumented];
-}
-
-def HshColorBlendOp : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "color_blend_op">];
-  let Documentation = [Undocumented];
-}
-
-def HshSrcAlphaBlendFactor : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "src_alpha_blend_factor">];
-  let Documentation = [Undocumented];
-}
-
-def HshDstAlphaBlendFactor : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "dst_alpha_blend_factor">];
-  let Documentation = [Undocumented];
-}
-
-def HshAlphaBlendOp : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "alpha_blend_op">];
-  let Documentation = [Undocumented];
-}
-
-def HshColorWriteComponents : HshColorAttachmentParamAttr {
-  let Spellings = [CXX11<"hsh", "color_write_components">];
-  let Documentation = [Undocumented];
-}
-
-def HshTopology : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "topology">];
-  let Documentation = [Undocumented];
-}
-
-def HshPatchControlPoints : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "patch_control_points">];
-  let Documentation = [Undocumented];
-}
-
-def HshCullMode : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "cull_mode">];
-  let Documentation = [Undocumented];
-}
-
-def HshDepthCompare : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "depth_compare">];
-  let Documentation = [Undocumented];
-}
-
-def HshDepthWrite : HshParamAttr {
-  let Spellings = [CXX11<"hsh", "depth_write">];
-  let Documentation = [Undocumented];
-}
-
-class HshTextureParamAttr : HshIndexParamAttr;
-
-def HshVertexTexture : HshTextureParamAttr {
-  let Spellings = [CXX11<"hsh", "vertex_texture">];
-  let Documentation = [Undocumented];
-}
-
-def HshControlTexture : HshTextureParamAttr {
-  let Spellings = [CXX11<"hsh", "control_texture">];
-  let Documentation = [Undocumented];
-}
-
-def HshEvaluationTexture : HshTextureParamAttr {
-  let Spellings = [CXX11<"hsh", "evaluation_texture">];
-  let Documentation = [Undocumented];
-}
-
-def HshGeometryTexture : HshTextureParamAttr {
-  let Spellings = [CXX11<"hsh", "geometry_texture">];
-  let Documentation = [Undocumented];
-}
-
-def HshFragmentTexture : HshTextureParamAttr {
-  let Spellings = [CXX11<"hsh", "fragment_texture">];
-  let Documentation = [Undocumented];
-}
-
-def HshHostCondition : DeclOrTypeAttr {
-  let Spellings = [CXX11<"hsh", "host_condition">];
-  let Documentation = [Undocumented];
-}
-
-def HshFragment : StmtAttr {
+def HshFragment : HshStageAttr<4> {
   let Spellings = [CXX11<"hsh", "fragment">];
-  let Documentation = [Undocumented];
-}
-
-def HshGeneratorLambda : StmtAttr {
-  let Spellings = [CXX11<"hsh", "generator_lambda">];
   let Documentation = [Undocumented];
 }
 

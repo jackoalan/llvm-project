@@ -89,6 +89,9 @@ public:
     return {};
   }
 
+  /// Override spelling of MemberExpr.
+  virtual StringRef overrideMemberExpr(MemberExpr *ME) const { return {}; }
+
   /// Prepend string to member expr base, optionally replacing it entirely.
   virtual StringRef prependMemberExprBase(MemberExpr *ME,
                                           bool &ReplaceBase) const {
@@ -326,6 +329,8 @@ struct PrintingPolicy {
   unsigned NeverSuppressScope : 1;
 
   unsigned UseStdOffsetOf : 1;
+
+  StringRef FieldPrefix;
 
   /// Callbacks to use to allow the behavior of printing to be customized.
   const PrintingCallbacks *Callbacks = nullptr;

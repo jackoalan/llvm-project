@@ -136,7 +136,8 @@ int main(int argc, const char **argv) {
                                    "-D__hsh__=1",
                                    "-Wno-expansion-to-defined",
                                    "-Wno-nullability-completeness",
-                                   "-Wno-unused-value"};
+                                   "-Wno-unused-value",
+                                   "-Wno-undefined-inline"};
   if (Verbose)
     args.emplace_back("-v");
   if (WithColor(llvm::errs()).colorsEnabled())
@@ -146,6 +147,10 @@ int main(int argc, const char **argv) {
     args.push_back(Dir);
   }
   for (const auto &Def : CompileDefs) {
+    constexpr llvm::StringLiteral TestLiteral{"HSH_PROFILE_MODE"};
+    if (StringRef(Def).startswith(TestLiteral) &&
+        (Def.size() == TestLiteral.size() || Def[TestLiteral.size()] == '='))
+      continue;
     args.emplace_back("-D");
     args.push_back(Def);
   }

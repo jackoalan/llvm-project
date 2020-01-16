@@ -889,6 +889,7 @@ private:
   /// Get the TemplateIdAnnotation from the token.
   TemplateIdAnnotation *takeTemplateIdAnnotation(const Token &tok);
 
+public:
   /// TentativeParsingAction - An object that is used as a kind of "tentative
   /// parsing transaction". It gets instantiated to mark the token position and
   /// after the token consumption is done, Commit() or Revert() is called to
@@ -906,10 +907,10 @@ private:
     Token PrevTok;
     size_t PrevTentativelyDeclaredIdentifierCount;
     unsigned short PrevParenCount, PrevBracketCount, PrevBraceCount;
-    bool isActive;
+    bool isActive, NoBacktrack;
 
   public:
-    explicit TentativeParsingAction(Parser& p) : P(p) {
+    explicit TentativeParsingAction(Parser& p, bool NoBacktrack = false) : P(p), NoBacktrack(NoBacktrack) {
       PrevPreferredType = P.PreferredType;
       PrevTok = P.Tok;
       PrevTentativelyDeclaredIdentifierCount =
@@ -917,19 +918,22 @@ private:
       PrevParenCount = P.ParenCount;
       PrevBracketCount = P.BracketCount;
       PrevBraceCount = P.BraceCount;
-      P.PP.EnableBacktrackAtThisPos();
+      if (!NoBacktrack)
+        P.PP.EnableBacktrackAtThisPos();
       isActive = true;
     }
     void Commit() {
       assert(isActive && "Parsing action was finished!");
       P.TentativelyDeclaredIdentifiers.resize(
           PrevTentativelyDeclaredIdentifierCount);
-      P.PP.CommitBacktrackedTokens();
+      if (!NoBacktrack)
+        P.PP.CommitBacktrackedTokens();
       isActive = false;
     }
     void Revert() {
       assert(isActive && "Parsing action was finished!");
-      P.PP.Backtrack();
+      if (!NoBacktrack)
+        P.PP.Backtrack();
       P.PreferredType = PrevPreferredType;
       P.Tok = PrevTok;
       P.TentativelyDeclaredIdentifiers.resize(
@@ -948,13 +952,14 @@ private:
   class RevertingTentativeParsingAction
       : private Parser::TentativeParsingAction {
   public:
-    RevertingTentativeParsingAction(Parser &P)
-        : Parser::TentativeParsingAction(P) {}
+    RevertingTentativeParsingAction(Parser &P, bool NoBacktrack = false)
+        : Parser::TentativeParsingAction(P, NoBacktrack) {}
     ~RevertingTentativeParsingAction() { Revert(); }
   };
 
   class UnannotatedTentativeParsingAction;
 
+private:
   /// ObjCDeclContextSwitch - An object used to switch context from
   /// an objective-c decl context to its enclosing decl context and
   /// back.

@@ -1,7 +1,8 @@
 #ifndef BUILTIN_FUNCTION
-#  define BUILTIN_FUNCTION(Name, GLSL, HLSL, Metal, InterpDist)
+#  define BUILTIN_FUNCTION(Name, Spelling, GLSL, HLSL, Metal, InterpDist, ...)
 #endif
 
-BUILTIN_FUNCTION(dot, dot, dot, dot, false)
+BUILTIN_FUNCTION(dot2, dot, dot, dot, dot, false, const struct hsh::float2 &, const struct hsh::float2 &)
+BUILTIN_FUNCTION(dot3, dot, dot, dot, dot, false, const struct hsh::float3 &, const struct hsh::float3 &)
 
 #undef BUILTIN_FUNCTION

@@ -12093,6 +12093,8 @@ public:
     ConstructorDestructor,
     BuiltinFunction
   };
+
+  bool InHshBindingMacro = false;
 };
 
 /// RAII object that enters a new expression evaluation context.
