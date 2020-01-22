@@ -12,7 +12,7 @@ struct MyFormat {
   hsh::float3 position;
   hsh::float3 normal;
   constexpr MyFormat(hsh::float3 position, hsh::float3 normal)
-      : position(std::move(position)), normal(std::move(normal)) {}
+      : position(position), normal(normal) {}
 };
 
 struct UniformData {
@@ -25,12 +25,7 @@ struct UniformData {
 }
 
 #include "test-input.cpp.hshhead"
-namespace MyNS {
-template <bool ZeroAlpha> struct DrawSomethingTemplated;
-}
-#if __has_include("test-input.cpp.hshprof")
-#include "test-input.cpp.hshprof"
-#else
+#if 0
 namespace hshprof_DrawSomethingTemplated_specializations {
 using s0 = MyNS::DrawSomethingTemplated<true>;
 using s1 = MyNS::DrawSomethingTemplated<false>;
@@ -38,6 +33,7 @@ using s2 = MyNS::DrawSomethingTemplated<false>;
 using s3 = MyNS::DrawSomethingTemplated<false>;
 using s4 = MyNS::DrawSomethingTemplated<false>;
 }
+#endif
 #if 0
 #define hshprof_DrawSomethingTemplated \
 switch (ZeroAlpha) { \
@@ -46,7 +42,6 @@ return ::hshbinding_DrawSomethingTemplated<1>(Resources...); \
 case 0: \
 return ::hshbinding_DrawSomethingTemplated<0>(Resources...); \
 }
-#endif
 #endif
 
 #if 0
@@ -89,7 +84,7 @@ using namespace hsh::pipeline;
 
 constexpr hsh::sampler TestSampler(hsh::Nearest, hsh::Nearest, hsh::Linear);
 
-#if 0
+#if 1
 struct DrawSomething : pipeline<color_attachment<>> {
   DrawSomething(hsh::dynamic_uniform_buffer<UniformData> u,
                 hsh::vertex_buffer<MyFormat> v,
@@ -104,6 +99,7 @@ struct DrawSomething : pipeline<color_attachment<>> {
 };
 #endif
 
+#if 1
 template <bool ZeroAlpha>
 struct DrawSomethingTemplated : pipeline<color_attachment<>> {
   DrawSomethingTemplated(hsh::dynamic_uniform_buffer<UniformData> u,
@@ -123,24 +119,23 @@ struct DrawSomethingTemplated : pipeline<color_attachment<>> {
     }
   }
 };
+template struct DrawSomethingTemplated<false>;
+template struct DrawSomethingTemplated<true>;
+#endif
 
-#if 0
+#if 1
 hsh::binding_typeless BindDrawSomething(hsh::dynamic_uniform_buffer_typeless u,
                                         hsh::vertex_buffer_typeless v,
                                         hsh::texture2d<float> tex0) {
   return hsh_DrawSomething(DrawSomething(u, v, tex0));
 }
+#endif
 
+#if 1
 hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typeless u,
                                         hsh::vertex_buffer_typeless v,
                                         hsh::texture2d<float> tex0,
                                         bool ZeroAlpha) {
-
-  return [=]() {
-    using s0 = DrawSomethingTemplated<true>;
-    using s1 = DrawSomethingTemplated<false>;
-    return hsh::binding_typeless{};
-  }();
   return hsh_DrawSomethingTemplated(DrawSomethingTemplated<ZeroAlpha>(u, v, tex0));
 }
 #endif

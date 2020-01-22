@@ -286,11 +286,16 @@ struct MySwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
   }
 };
 
+template <uint32_t MaxSets, uint32_t MaxUniforms, uint32_t MaxImages, uint32_t MaxSamplers>
 struct MyDescriptorPoolCreateInfo : vk::DescriptorPoolCreateInfo {
-  MyDescriptorPoolCreateInfo() : vk::DescriptorPoolCreateInfo({}, ) {
-
-  }
+  std::array<vk::DescriptorPoolSize, 3> PoolSizes_{
+    vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, MaxUniforms},
+    vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, MaxImages},
+    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, MaxSamplers}};
+  constexpr MyDescriptorPoolCreateInfo()
+  : vk::DescriptorPoolCreateInfo({}, MaxSets, PoolSizes_.size(), PoolSizes_.data()) {}
 };
+using UseDescriptorPoolCreateInfo = MyDescriptorPoolCreateInfo<8192, 8, 8, 8>;
 
 struct MyPresentInfo : vk::PresentInfoKHR {
   vk::Semaphore Semaphore_;
@@ -324,9 +329,9 @@ int main(int argc, char** argv) {
 
     auto Surface = Instance->createXcbSurfaceKHR(MyXcbSurfaceCreateInfo(Window)).value;
     auto Swapchain = Device->createSwapchainKHRUnique(MySwapchainCreateInfo(PD, Surface)).value;
-    auto SwapchainImages = Device->getSwapchainImagesKHR(*Swapchain);
+    auto SwapchainImages = Device->getSwapchainImagesKHR(*Swapchain).value;
     auto Queue = Device->getQueue(QFIdx, 0);
-    Device->createDescriptorPool()
+    auto DescriptorPool = Device->createDescriptorPoolUnique(UseDescriptorPoolCreateInfo()).value;
     auto PresentCompleteSem = Device->createSemaphoreUnique({}).value;
 
     uint32_t Frame = 0;

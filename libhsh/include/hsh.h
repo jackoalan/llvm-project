@@ -14,7 +14,7 @@
 #include <sstream>
 
 #define HSH_ENABLE_LOG 1
-#define HSH_ENABLE_VULKAN 0
+#define HSH_ENABLE_VULKAN 1
 
 #if HSH_ENABLE_VULKAN
 inline void hshVkAssert(const char* pred) {
@@ -1109,13 +1109,14 @@ constexpr vk::ColorComponentFlagBits HshToVkColorComponentFlags(enum ColorCompon
 template <> struct ShaderCode<VULKAN_SPIRV> {
   enum Stage Stage = Stage::Vertex;
   ShaderDataBlob<uint32_t> Blob;
-  constexpr ShaderCode() = default;
+  constexpr ShaderCode() noexcept = default;
   constexpr ShaderCode(enum Stage Stage, ShaderDataBlob<uint32_t> Blob) noexcept
       : Stage(Stage), Blob(Blob) {}
 };
 
 template <> struct ShaderObject<VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
+  ShaderObject() noexcept = default;
   vk::ShaderModule get(const vk::ShaderModuleCreateInfo &Info) {
     if (!ShaderModule)
       ShaderModule = VulkanGlobals.Device.createShaderModuleUnique(Info).value;
@@ -1125,6 +1126,7 @@ template <> struct ShaderObject<VULKAN_SPIRV> {
 
 template <> struct SamplerObject<VULKAN_SPIRV> {
   std::array<std::array<vk::UniqueSampler, MaxMipCount - 1>, 2> Samplers;
+  SamplerObject() noexcept = default;
   vk::Sampler get(const vk::SamplerCreateInfo &Info, bool Int, unsigned MipCount) {
     assert(MipCount && MipCount < MaxMipCount);
     vk::UniqueSampler &Samp = Samplers[Int][MipCount - 1];
@@ -1355,7 +1357,7 @@ struct PipelineCoordinator {
 #define _hsh_dummy(...) ::hsh::binding_typeless{};
 } // namespace detail
 
-#define HSH_PROFILE_MODE 1
+#define HSH_PROFILE_MODE 0
 
 class binding_typeless {
 protected:

@@ -36,6 +36,45 @@
 
 #define ENABLE_DUMP 1
 
+namespace llvm {
+
+template <> struct DenseMapInfo<APSInt> {
+  static APSInt getEmptyKey() {
+    return APSInt::get(DenseMapInfo<int64_t>::getEmptyKey());
+  }
+
+  static APSInt getTombstoneKey() {
+    return APSInt::get(DenseMapInfo<int64_t>::getTombstoneKey());
+  }
+
+  static unsigned getHashValue(const APSInt &Val) {
+    return DenseMapInfo<int64_t>::getHashValue(Val.getSExtValue());
+  }
+
+  static bool isEqual(const APSInt &LHS, const APSInt &RHS) {
+    return APSInt::compareValues(LHS, RHS) == 0;
+  }
+};
+
+template <> struct DenseMapInfo<clang::SourceLocation> {
+  static clang::SourceLocation getEmptyKey() { return {}; }
+
+  static clang::SourceLocation getTombstoneKey() {
+    return clang::SourceLocation::getFromRawEncoding(~(0u));
+  }
+
+  static unsigned getHashValue(const clang::SourceLocation &Val) {
+    return DenseMapInfo<unsigned>::getHashValue(Val.getRawEncoding());
+  }
+
+  static bool isEqual(const clang::SourceLocation &LHS,
+                      const clang::SourceLocation &RHS) {
+    return LHS == RHS;
+  }
+};
+
+} // end namespace llvm
+
 namespace {
 
 using namespace llvm;
@@ -460,6 +499,147 @@ enum HshBuiltinPipelineField {
 #include "ShaderInterface.def"
   HPF_Max
 };
+
+class NonConstExpr {
+public:
+  enum Kind { NonTypeParm, TypePush, TypePop };
+
+private:
+  enum Kind Kind;
+  PointerUnion<Expr *, ClassTemplateSpecializationDecl *> ExprOrType;
+  unsigned Position;
+
+public:
+  explicit NonConstExpr(Expr *E, unsigned Position)
+      : Kind(NonTypeParm), ExprOrType(E), Position(Position) {}
+  explicit NonConstExpr(ClassTemplateSpecializationDecl *D, unsigned Position)
+      : Kind(TypePush), ExprOrType(D), Position(Position) {}
+  struct Pop {};
+  explicit NonConstExpr(Pop)
+      : Kind(TypePop), ExprOrType(nullptr), Position(0) {}
+
+  enum Kind getKind() const { return Kind; }
+  Expr *getExpr() const {
+    assert(Kind == NonTypeParm);
+    return ExprOrType.get<Expr *>();
+  }
+  unsigned getPosition() const {
+    assert(Kind == NonTypeParm || Kind == TypePush);
+    return Position;
+  }
+  ClassTemplateSpecializationDecl *getType() const {
+    assert(Kind == TypePush);
+    return ExprOrType.get<ClassTemplateSpecializationDecl *>();
+  }
+};
+
+bool CheckConstexprTemplateSpecialization(
+    ASTContext &Context, QualType Tp,
+    SmallVectorImpl<NonConstExpr> *NonConstExprs = nullptr,
+    unsigned Position = 0);
+
+bool CheckConstexprTemplateSpecialization(
+    ASTContext &Context, ClassTemplateSpecializationDecl *Spec,
+    SmallVectorImpl<NonConstExpr> *NonConstExprs = nullptr) {
+  bool Ret = true;
+  unsigned Position = 0;
+  for (auto &Arg : Spec->getTemplateArgs().asArray()) {
+    switch (Arg.getKind()) {
+    case TemplateArgument::Type:
+      Ret &= CheckConstexprTemplateSpecialization(Context, Arg.getAsType(),
+                                                  NonConstExprs, Position);
+      break;
+    case TemplateArgument::Expression:
+      if (!Arg.getAsExpr()->isIntegerConstantExpr(Context)) {
+        Ret = false;
+        if (NonConstExprs)
+          NonConstExprs->emplace_back(Arg.getAsExpr(), Position);
+      }
+      break;
+    default:
+      break;
+    }
+    ++Position;
+  }
+  return Ret;
+}
+
+bool CheckConstexprTemplateSpecialization(
+    ASTContext &Context, QualType Tp,
+    SmallVectorImpl<NonConstExpr> *NonConstExprs, unsigned Position) {
+  if (auto *ExpDecl = Tp->getAsCXXRecordDecl()) {
+    if (auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(ExpDecl)) {
+      if (NonConstExprs)
+        NonConstExprs->emplace_back(Spec, Position);
+      bool Ret =
+          CheckConstexprTemplateSpecialization(Context, Spec, NonConstExprs);
+      if (NonConstExprs)
+        NonConstExprs->emplace_back(NonConstExpr::Pop{});
+      return Ret;
+    }
+  }
+  return true;
+}
+
+template <typename Func>
+void TraverseNonConstExprs(ArrayRef<NonConstExpr> NCEs, Func F) {
+  std::stack<ClassTemplateSpecializationDecl *,
+             SmallVector<ClassTemplateSpecializationDecl *, 4>>
+      TypeStack;
+  for (auto &Expr : NCEs) {
+    switch (Expr.getKind()) {
+    case NonConstExpr::NonTypeParm:
+      F(cast<NonTypeTemplateParmDecl>(TypeStack.top()
+                                          ->getSpecializedTemplateOrPartial()
+                                          .get<ClassTemplateDecl *>()
+                                          ->getTemplateParameters()
+                                          ->getParam(Expr.getPosition())));
+      break;
+    case NonConstExpr::TypePush:
+      TypeStack.push(Expr.getType());
+      break;
+    case NonConstExpr::TypePop:
+      TypeStack.pop();
+      break;
+    }
+  }
+}
+
+template <typename Func>
+void TraverseNonConstExprs(ArrayRef<NonConstExpr> NCEs,
+                           ClassTemplateSpecializationDecl *Spec, Func F) {
+  std::stack<ClassTemplateSpecializationDecl *,
+             SmallVector<ClassTemplateSpecializationDecl *, 4>>
+      TypeStack, SpecStack;
+  for (auto &Expr : NCEs) {
+    switch (Expr.getKind()) {
+    case NonConstExpr::NonTypeParm:
+      F(cast<NonTypeTemplateParmDecl>(TypeStack.top()
+                                          ->getSpecializedTemplateOrPartial()
+                                          .get<ClassTemplateDecl *>()
+                                          ->getTemplateParameters()
+                                          ->getParam(Expr.getPosition())),
+        SpecStack.top()->getTemplateArgs().get(Expr.getPosition()));
+      break;
+    case NonConstExpr::TypePush:
+      TypeStack.push(Expr.getType());
+      if (SpecStack.empty())
+        SpecStack.push(Spec);
+      else
+        SpecStack.push(
+            cast<ClassTemplateSpecializationDecl>(SpecStack.top()
+                                                      ->getTemplateArgs()
+                                                      .get(Expr.getPosition())
+                                                      .getAsType()
+                                                      ->getAsCXXRecordDecl()));
+      break;
+    case NonConstExpr::TypePop:
+      TypeStack.pop();
+      SpecStack.pop();
+      break;
+    }
+  }
+}
 
 class HshBuiltins {
 public:
@@ -1530,6 +1710,14 @@ public:
 
     for (auto *Specialization : SpecializationSource->specializations()) {
       /*
+       * Hsh violates C++ within binding macros by permitting non-constexpr
+       * template parameters. These non-constexpr specializations shall not be
+       * translated.
+       */
+      if (!CheckConstexprTemplateSpecialization(Context, Specialization))
+        continue;
+
+      /*
        * Hsh supports forward-declared specializations for profiling macros.
        * Attempt to instantiate if necessary.
        */
@@ -1853,8 +2041,6 @@ struct SampleCall {
 };
 
 struct HostPrintingPolicy final : PrintingCallbacks, PrintingPolicy {
-  static constexpr llvm::StringLiteral SignedInt32Spelling{"std::int32_t"};
-  static constexpr llvm::StringLiteral UnsignedInt32Spelling{"std::uint32_t"};
   explicit HostPrintingPolicy(const PrintingPolicy &Policy)
       : PrintingPolicy(Policy) {
     Callbacks = this;
@@ -1863,17 +2049,6 @@ struct HostPrintingPolicy final : PrintingCallbacks, PrintingPolicy {
     SilentNullStatement = true;
     NeverSuppressScope = true;
     UseStdOffsetOf = true;
-  }
-
-  StringRef overrideBuiltinTypeName(const BuiltinType *T) const override {
-    if (T->isEnumeralType())
-      return {};
-    if (T->isSignedIntegerType()) {
-      return SignedInt32Spelling;
-    } else if (T->isUnsignedIntegerType()) {
-      return UnsignedInt32Spelling;
-    }
-    return {};
   }
 };
 
@@ -3159,7 +3334,7 @@ std::unique_ptr<StagesCompilerBase> MakeCompiler(HshTarget Target,
   }
 }
 
-class StageStmtLifter {
+class StageStmtPartitioner {
   /*
    * Per-statement stage dependencies are centrally tracked here.
    * The first DependencyPass populates the stage bits of each statement in
@@ -3222,10 +3397,11 @@ class StageStmtLifter {
   using DeclMapType = DenseMap<const Decl *, DeclDepInfo>;
 
   struct DependencyPass : ConstStmtVisitor<DependencyPass, HshStage> {
-    StageStmtLifter &Lifter;
+    StageStmtPartitioner &Partitioner;
     StagesBuilder &Builder;
-    explicit DependencyPass(StageStmtLifter &Lifter, StagesBuilder &Builder)
-        : Lifter(Lifter), Builder(Builder) {}
+    explicit DependencyPass(StageStmtPartitioner &Partitioner,
+                            StagesBuilder &Builder)
+        : Partitioner(Partitioner), Builder(Builder) {}
 
     /*
      * Statement stage dependencies include condition variables that decide
@@ -3291,7 +3467,7 @@ class StageStmtLifter {
       for (const auto *D : DS->decls()) {
         if (auto *VD = dyn_cast<VarDecl>(D)) {
           if (const Expr *Init = VD->getInit()) {
-            Lifter.StmtMap[Init].Dependents.insert(DS);
+            Partitioner.StmtMap[Init].Dependents.insert(DS);
             auto &DepInfo = ScopeStack.getDeclDepInfo(D);
             DepInfo.Stage = Visit(Init);
             DepInfo.MutatorStmts.insert(DS);
@@ -3299,7 +3475,7 @@ class StageStmtLifter {
           }
         }
       }
-      Lifter.StmtMap[DS].setPrimaryStage(MaxStage);
+      Partitioner.StmtMap[DS].setPrimaryStage(MaxStage);
       return MaxStage;
     }
 
@@ -3309,17 +3485,17 @@ class StageStmtLifter {
       if (AssignMutator)
         DepInfo.MutatorStmts.insert(AssignMutator);
       for (auto *MS : DepInfo.MutatorStmts)
-        Lifter.StmtMap[MS].Dependents.insert(DRE);
+        Partitioner.StmtMap[MS].Dependents.insert(DRE);
       if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
-        DepInfo.Stage = Lifter.Builtins.determineParmVarStage(PVD);
+        DepInfo.Stage = Partitioner.Builtins.determineParmVarStage(PVD);
       }
-      Lifter.StmtMap[DRE].setPrimaryStage(DepInfo.Stage);
+      Partitioner.StmtMap[DRE].setPrimaryStage(DepInfo.Stage);
       return DepInfo.Stage;
     }
 
     HshStage VisitMemberExpr(const MemberExpr *ME) {
       if (auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl())) {
-        auto Stage = Lifter.Builtins.determinePipelineFieldStage(FD);
+        auto Stage = Partitioner.Builtins.determinePipelineFieldStage(FD);
         if (Stage != HshNoStage) {
           if (AssignMutator)
             Builder.setStageUsed(Stage);
@@ -3335,15 +3511,15 @@ class StageStmtLifter {
         {
           SaveAndRestore<Expr *> SavedAssignMutator(AssignMutator, (Expr *)BO);
           auto *LHS = BO->getLHS();
-          Lifter.StmtMap[LHS].Dependents.insert(BO);
+          Partitioner.StmtMap[LHS].Dependents.insert(BO);
           MaxStage = std::max(MaxStage, Visit(LHS));
         }
         {
           auto *RHS = BO->getRHS();
-          Lifter.StmtMap[RHS].Dependents.insert(BO);
+          Partitioner.StmtMap[RHS].Dependents.insert(BO);
           MaxStage = std::max(MaxStage, Visit(RHS));
         }
-        Lifter.StmtMap[BO].setPrimaryStage(MaxStage);
+        Partitioner.StmtMap[BO].setPrimaryStage(MaxStage);
         return MaxStage;
       }
       return VisitStmt(BO);
@@ -3355,15 +3531,15 @@ class StageStmtLifter {
         {
           SaveAndRestore<Expr *> SavedAssignMutator(AssignMutator, (Expr *)OC);
           auto *LHS = OC->getArg(0);
-          Lifter.StmtMap[LHS].Dependents.insert(OC);
+          Partitioner.StmtMap[LHS].Dependents.insert(OC);
           MaxStage = std::max(MaxStage, Visit(LHS));
         }
         {
           auto *RHS = OC->getArg(1);
-          Lifter.StmtMap[RHS].Dependents.insert(OC);
+          Partitioner.StmtMap[RHS].Dependents.insert(OC);
           MaxStage = std::max(MaxStage, Visit(RHS));
         }
-        Lifter.StmtMap[OC].setPrimaryStage(MaxStage);
+        Partitioner.StmtMap[OC].setPrimaryStage(MaxStage);
         return MaxStage;
       }
       return VisitStmt(OC);
@@ -3372,10 +3548,10 @@ class StageStmtLifter {
     HshStage VisitStmt(const Stmt *S) {
       HshStage MaxStage = ScopeStack.getContextStage();
       for (auto *Child : S->children()) {
-        Lifter.StmtMap[Child].Dependents.insert(S);
+        Partitioner.StmtMap[Child].Dependents.insert(S);
         MaxStage = std::max(MaxStage, Visit(Child));
       }
-      Lifter.StmtMap[S].setPrimaryStage(MaxStage);
+      Partitioner.StmtMap[S].setPrimaryStage(MaxStage);
       return MaxStage;
     }
 
@@ -3384,8 +3560,8 @@ class StageStmtLifter {
       size_t EstStmtCount = 0;
       for (auto *B : *CFG)
         EstStmtCount += B->size();
-      Lifter.StmtMap.reserve(EstStmtCount);
-      Lifter.OrderedStmts.reserve(EstStmtCount);
+      Partitioner.StmtMap.reserve(EstStmtCount);
+      Partitioner.OrderedStmts.reserve(EstStmtCount);
       ScopeStack.push(HshNoStage);
 
       struct SuccStack {
@@ -3508,7 +3684,7 @@ class StageStmtLifter {
           if (auto Stmt = Elem.getAs<CFGStmt>()) {
             dumper() << Stmt->getStmt() << " ";
             dumper() << Visit(Stmt->getStmt()) << "\n";
-            Lifter.OrderedStmts.push_back(Stmt->getStmt());
+            Partitioner.OrderedStmts.push_back(Stmt->getStmt());
           }
         }
 
@@ -3527,8 +3703,9 @@ class StageStmtLifter {
   };
 
   struct LiftPass : ConstStmtVisitor<LiftPass, bool> {
-    StageStmtLifter &Lifter;
-    explicit LiftPass(StageStmtLifter &Lifter) : Lifter(Lifter) {}
+    StageStmtPartitioner &Partitioner;
+    explicit LiftPass(StageStmtPartitioner &Partitioner)
+        : Partitioner(Partitioner) {}
 
     static bool VisitStmt(const Stmt *) { return false; }
 
@@ -3562,7 +3739,7 @@ class StageStmtLifter {
       if (auto *DeclRef =
               dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
         if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
-          auto HBF = Lifter.Builtins.identifyBuiltinFunction(FD);
+          auto HBF = Partitioner.Builtins.identifyBuiltinFunction(FD);
           if (HBF != HBF_None && !HshBuiltins::isInterpolationDistributed(HBF))
             return true;
         }
@@ -3583,13 +3760,13 @@ class StageStmtLifter {
         return;
       }
       dumper() << " Yes\n";
-      auto Search = Lifter.StmtMap.find(S);
-      if (Search != Lifter.StmtMap.end()) {
+      auto Search = Partitioner.StmtMap.find(S);
+      if (Search != Partitioner.StmtMap.end()) {
         StageBits DepStageBits;
         for (const auto *Dep : Search->second.Dependents) {
           dumper() << "  Checking dep " << Dep;
-          auto DepSearch = Lifter.StmtMap.find(Dep);
-          if (DepSearch != Lifter.StmtMap.end()) {
+          auto DepSearch = Partitioner.StmtMap.find(Dep);
+          if (DepSearch != Partitioner.StmtMap.end()) {
             DepStageBits |= DepSearch->second.StageBits;
             dumper() << " " << DepSearch->second.StageBits;
           }
@@ -3601,14 +3778,14 @@ class StageStmtLifter {
           Search->second.StageBits = DepStageBits;
 
           if (auto *DS = dyn_cast<DeclStmt>(S))
-            Lifter.UpdateDeclRefExprStages(DS, DepStageBits);
+            Partitioner.UpdateDeclRefExprStages(DS, DepStageBits);
         }
       }
     }
 
     unsigned PassthroughDependents() {
       unsigned LiftCount = 0;
-      for (auto &Stmt : Lifter.StmtMap) {
+      for (auto &Stmt : Partitioner.StmtMap) {
         auto &StmtDeps = Stmt.second.Dependents;
         if (StmtDeps.empty())
           continue;
@@ -3617,8 +3794,8 @@ class StageStmtLifter {
         for (auto *Dep : StmtDeps) {
           if (isa<CastExpr>(Dep) || isa<DeclStmt>(Dep) ||
               isa<DeclRefExpr>(Dep) || isa<CXXConstructExpr>(Dep)) {
-            auto Search = Lifter.StmtMap.find(Dep);
-            if (Search != Lifter.StmtMap.end()) {
+            auto Search = Partitioner.StmtMap.find(Dep);
+            if (Search != Partitioner.StmtMap.end()) {
               auto &DREDeps = Search->second.Dependents;
               dumper() << "passing " << Dep->getStmtClassName()
                        << " dependent to " << Stmt.first->getStmtClassName()
@@ -3641,8 +3818,8 @@ class StageStmtLifter {
       while (PassthroughDependents()) {
       }
 
-      for (auto I = Lifter.OrderedStmts.rbegin(),
-                E = Lifter.OrderedStmts.rend();
+      for (auto I = Partitioner.OrderedStmts.rbegin(),
+                E = Partitioner.OrderedStmts.rend();
            I != E; ++I) {
         LiftToDependents(*I);
       }
@@ -3650,14 +3827,15 @@ class StageStmtLifter {
   };
 
   struct BlockDependencyPass : ConstStmtVisitor<BlockDependencyPass, unsigned> {
-    StageStmtLifter &Lifter;
-    explicit BlockDependencyPass(StageStmtLifter &Lifter) : Lifter(Lifter) {}
+    StageStmtPartitioner &Partitioner;
+    explicit BlockDependencyPass(StageStmtPartitioner &Partitioner)
+        : Partitioner(Partitioner) {}
 
     unsigned VisitStmt(const Stmt *S) {
       if (auto *E = dyn_cast<Expr>(S))
         S = E->IgnoreParenImpCasts();
-      auto Search = Lifter.StmtMap.find(S);
-      if (Search != Lifter.StmtMap.end())
+      auto Search = Partitioner.StmtMap.find(S);
+      if (Search != Partitioner.StmtMap.end())
         return Search->second.StageBits;
       return 0;
     }
@@ -3666,7 +3844,7 @@ class StageStmtLifter {
       StageBits NewStageBits;
       for (auto *Child : CS->body())
         NewStageBits |= Visit(Child);
-      auto &DepInfo = Lifter.StmtMap[CS];
+      auto &DepInfo = Partitioner.StmtMap[CS];
       DepInfo.StageBits |= NewStageBits;
       return DepInfo.StageBits;
     }
@@ -3677,7 +3855,7 @@ class StageStmtLifter {
         NewStageBits |= Visit(Then);
       if (auto *Else = S->getElse())
         NewStageBits |= Visit(Else);
-      auto &DepInfo = Lifter.StmtMap[S];
+      auto &DepInfo = Partitioner.StmtMap[S];
       DepInfo.StageBits |= NewStageBits;
       return DepInfo.StageBits;
     }
@@ -3686,7 +3864,7 @@ class StageStmtLifter {
       StageBits NewStageBits;
       if (auto *Body = S->getBody())
         NewStageBits |= Visit(Body);
-      auto &DepInfo = Lifter.StmtMap[S];
+      auto &DepInfo = Partitioner.StmtMap[S];
       DepInfo.StageBits |= NewStageBits;
       return DepInfo.StageBits;
     }
@@ -3699,7 +3877,7 @@ class StageStmtLifter {
       StageBits NewStageBits;
       if (auto *Sub = S->getSubStmt())
         NewStageBits |= Visit(Sub);
-      auto &DepInfo = Lifter.StmtMap[S];
+      auto &DepInfo = Partitioner.StmtMap[S];
       DepInfo.StageBits |= NewStageBits;
       return DepInfo.StageBits;
     }
@@ -3710,17 +3888,18 @@ class StageStmtLifter {
   };
 
   struct DeclUsagePass : StmtVisitor<DeclUsagePass, void, HshStage> {
-    StageStmtLifter &Lifter;
+    StageStmtPartitioner &Partitioner;
     StagesBuilder &Builder;
-    explicit DeclUsagePass(StageStmtLifter &Lifter, StagesBuilder &Builder)
-        : Lifter(Lifter), Builder(Builder) {}
+    explicit DeclUsagePass(StageStmtPartitioner &Partitioner,
+                           StagesBuilder &Builder)
+        : Partitioner(Partitioner), Builder(Builder) {}
 
     void InterStageReferenceExpr(Expr *E, HshStage ToStage) {
       if (auto *DRE = dyn_cast<DeclRefExpr>(E))
         if (isa<EnumConstantDecl>(DRE->getDecl()))
           return;
-      auto Search = Lifter.StmtMap.find(E);
-      if (Search != Lifter.StmtMap.end()) {
+      auto Search = Partitioner.StmtMap.find(E);
+      if (Search != Partitioner.StmtMap.end()) {
         auto &DepInfo = Search->second;
         if (DepInfo.StageBits) {
           Visit(E, DepInfo.getMaxStage());
@@ -3754,8 +3933,8 @@ class StageStmtLifter {
       }
       /* "Root" statements of bodies are conditionally emitted based on stage
        */
-      auto Search = Lifter.StmtMap.find(S);
-      if (Search != Lifter.StmtMap.end() && Search->second.hasStage(Stage))
+      auto Search = Partitioner.StmtMap.find(S);
+      if (Search != Partitioner.StmtMap.end() && Search->second.hasStage(Stage))
         Visit(S, Stage);
       /* Prune this statement */
     }
@@ -3802,7 +3981,8 @@ class StageStmtLifter {
       if (auto *DeclRef = dyn_cast<DeclRefExpr>(
               CallExpr->getCallee()->IgnoreParenImpCasts())) {
         if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
-          HshBuiltinFunction Func = Lifter.Builtins.identifyBuiltinFunction(FD);
+          HshBuiltinFunction Func =
+              Partitioner.Builtins.identifyBuiltinFunction(FD);
           if (Func != HBF_None)
             DoVisitExprRange(CallExpr->arguments(), Stage);
         }
@@ -3813,7 +3993,8 @@ class StageStmtLifter {
       CXXMethodDecl *MD = CallExpr->getMethodDecl();
       Expr *ObjArg =
           CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts();
-      HshBuiltinCXXMethod Method = Lifter.Builtins.identifyBuiltinMethod(MD);
+      HshBuiltinCXXMethod Method =
+          Partitioner.Builtins.identifyBuiltinMethod(MD);
       if (HshBuiltins::isSwizzleMethod(Method)) {
         DoVisit(ObjArg, Stage);
       }
@@ -3827,14 +4008,15 @@ class StageStmtLifter {
     }
 
     void VisitCastExpr(CastExpr *CastExpr, HshStage Stage) {
-      if (Lifter.Builtins.identifyBuiltinType(CastExpr->getType()) == HBT_None)
+      if (Partitioner.Builtins.identifyBuiltinType(CastExpr->getType()) ==
+          HBT_None)
         return;
       DoVisit(CastExpr->getSubExpr(), Stage);
     }
 
     void VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr,
                                HshStage Stage) {
-      if (Lifter.Builtins.identifyBuiltinType(ConstructExpr->getType()) ==
+      if (Partitioner.Builtins.identifyBuiltinType(ConstructExpr->getType()) ==
           HBT_None)
         return;
       DoVisitExprRange(ConstructExpr->arguments(), Stage);
@@ -3856,7 +4038,7 @@ class StageStmtLifter {
       if (auto *PVD = dyn_cast<ParmVarDecl>(DeclRef->getDecl())) {
       } else if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
         dumper() << VD << " Used in " << Stage << "\n";
-        Lifter.UsedDecls[Stage].insert(VD);
+        Partitioner.UsedDecls[Stage].insert(VD);
       }
     }
 
@@ -3865,7 +4047,7 @@ class StageStmtLifter {
     }
 
     void VisitMemberExpr(MemberExpr *MemberExpr, HshStage Stage) {
-      if (!InMemberExpr && Lifter.Builtins.identifyBuiltinType(
+      if (!InMemberExpr && Partitioner.Builtins.identifyBuiltinType(
                                MemberExpr->getType()) == HBT_None)
         return;
       SaveAndRestore<bool> SavedInMemberExpr(InMemberExpr, true);
@@ -3946,13 +4128,14 @@ class StageStmtLifter {
   };
 
   struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
-    StageStmtLifter &Lifter;
+    StageStmtPartitioner &Partitioner;
     StagesBuilder &Builder;
-    explicit BuildPass(StageStmtLifter &Lifter, StagesBuilder &Builder)
-        : Lifter(Lifter), Builder(Builder) {}
+    explicit BuildPass(StageStmtPartitioner &Partitioner,
+                       StagesBuilder &Builder)
+        : Partitioner(Partitioner), Builder(Builder) {}
 
     bool hasErrorOccurred() const {
-      return Lifter.Context.getDiagnostics().hasErrorOccurred();
+      return Partitioner.Context.getDiagnostics().hasErrorOccurred();
     }
 
     Expr *InterStageReferenceExpr(Expr *E, HshStage ToStage) {
@@ -3960,8 +4143,8 @@ class StageStmtLifter {
         if (isa<EnumConstantDecl>(DRE->getDecl()))
           return E;
       }
-      auto Search = Lifter.StmtMap.find(E);
-      if (Search != Lifter.StmtMap.end()) {
+      auto Search = Partitioner.StmtMap.find(E);
+      if (Search != Partitioner.StmtMap.end()) {
         auto &DepInfo = Search->second;
         if (!DepInfo.StageBits)
           return cast_or_null<Expr>(Visit(E, ToStage));
@@ -3996,8 +4179,8 @@ class StageStmtLifter {
       }
       /* "Root" statements of bodies are conditionally emitted based on stage
        */
-      auto Search = Lifter.StmtMap.find(S);
-      if (Search != Lifter.StmtMap.end() && Search->second.hasStage(Stage))
+      auto Search = Partitioner.StmtMap.find(S);
+      if (Search != Partitioner.StmtMap.end() && Search->second.hasStage(Stage))
         return Visit(S, Stage);
       /* Prune this statement */
       return nullptr;
@@ -4041,12 +4224,12 @@ class StageStmtLifter {
     /* End ignores */
 
     Stmt *VisitStmt(Stmt *S, HshStage) {
-      ReportUnsupportedStmt(S, Lifter.Context);
+      ReportUnsupportedStmt(S, Partitioner.Context);
       return nullptr;
     }
 
     Stmt *VisitExpr(Expr *E, HshStage) {
-      ReportUnsupportedStmt(E, Lifter.Context);
+      ReportUnsupportedStmt(E, Partitioner.Context);
       return nullptr;
     }
 
@@ -4054,11 +4237,11 @@ class StageStmtLifter {
       SmallVector<Decl *, 4> NewDecls;
       for (auto *Decl : DS->decls()) {
         if (auto *VD = dyn_cast<VarDecl>(Decl)) {
-          if (Lifter.UsedDecls[Stage].find(VD) !=
-              Lifter.UsedDecls[Stage].end()) {
+          if (Partitioner.UsedDecls[Stage].find(VD) !=
+              Partitioner.UsedDecls[Stage].end()) {
             auto *NewVD =
-                VarDecl::Create(Lifter.Context, VD->getDeclContext(), {}, {},
-                                VD->getIdentifier(), VD->getType(),
+                VarDecl::Create(Partitioner.Context, VD->getDeclContext(), {},
+                                {}, VD->getIdentifier(), VD->getType(),
                                 VD->getTypeSourceInfo(), VD->getStorageClass());
             if (Expr *Init = VD->getInit()) {
               auto *InitStmt = DoVisit(Init, Stage);
@@ -4069,13 +4252,13 @@ class StageStmtLifter {
             NewDecls.push_back(NewVD);
           }
         } else {
-          ReportUnsupportedTypeReference(DS, Lifter.Context);
+          ReportUnsupportedTypeReference(DS, Partitioner.Context);
           return nullptr;
         }
       }
       if (!NewDecls.empty()) {
-        return new (Lifter.Context)
-            DeclStmt(DeclGroupRef::Create(Lifter.Context, NewDecls.data(),
+        return new (Partitioner.Context)
+            DeclStmt(DeclGroupRef::Create(Partitioner.Context, NewDecls.data(),
                                           NewDecls.size()),
                      {}, {});
       }
@@ -4088,18 +4271,19 @@ class StageStmtLifter {
       if (auto *DeclRef = dyn_cast<DeclRefExpr>(
               CallExpr->getCallee()->IgnoreParenImpCasts())) {
         if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
-          HshBuiltinFunction Func = Lifter.Builtins.identifyBuiltinFunction(FD);
+          HshBuiltinFunction Func =
+              Partitioner.Builtins.identifyBuiltinFunction(FD);
           if (Func != HBF_None) {
             auto Arguments = DoVisitExprRange(CallExpr->arguments(), Stage);
             if (!Arguments)
               return nullptr;
-            return CallExpr::Create(Lifter.Context, CallExpr->getCallee(),
+            return CallExpr::Create(Partitioner.Context, CallExpr->getCallee(),
                                     *Arguments, CallExpr->getType(), VK_XValue,
                                     {});
           }
         }
       }
-      ReportUnsupportedFunctionCall(CallExpr, Lifter.Context);
+      ReportUnsupportedFunctionCall(CallExpr, Partitioner.Context);
       return nullptr;
     }
 
@@ -4107,12 +4291,13 @@ class StageStmtLifter {
       CXXMethodDecl *MD = CallExpr->getMethodDecl();
       Expr *ObjArg =
           CallExpr->getImplicitObjectArgument()->IgnoreParenImpCasts();
-      HshBuiltinCXXMethod Method = Lifter.Builtins.identifyBuiltinMethod(MD);
+      HshBuiltinCXXMethod Method =
+          Partitioner.Builtins.identifyBuiltinMethod(MD);
       if (HshBuiltins::isSwizzleMethod(Method)) {
         auto *BaseStmt = DoVisit(ObjArg, Stage);
-        return MemberExpr::CreateImplicit(Lifter.Context, cast<Expr>(BaseStmt),
-                                          false, MD, MD->getReturnType(),
-                                          VK_XValue, OK_Ordinary);
+        return MemberExpr::CreateImplicit(
+            Partitioner.Context, cast<Expr>(BaseStmt), false, MD,
+            MD->getReturnType(), VK_XValue, OK_Ordinary);
       }
       switch (Method) {
       case HBM_sample2d: {
@@ -4122,28 +4307,28 @@ class StageStmtLifter {
         if (PVD)
           Builder.registerParmVarRef(PVD, Stage);
         else
-          ReportBadTextureReference(CallExpr, Lifter.Context);
+          ReportBadTextureReference(CallExpr, Partitioner.Context);
         auto *UVStmt = DoVisit(CallExpr->getArg(0), Stage);
         if (!UVStmt)
           return nullptr;
         std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
         auto *NMCE = CXXMemberCallExpr::Create(
-            Lifter.Context, CallExpr->getCallee(), NewArgs, CallExpr->getType(),
-            VK_XValue, {});
+            Partitioner.Context, CallExpr->getCallee(), NewArgs,
+            CallExpr->getType(), VK_XValue, {});
         Builder.registerSampleCall(Method, NMCE, Stage);
         return NMCE;
       }
       default:
-        ReportUnsupportedFunctionCall(CallExpr, Lifter.Context);
+        ReportUnsupportedFunctionCall(CallExpr, Partitioner.Context);
         break;
       }
       return nullptr;
     }
 
     Stmt *VisitCastExpr(CastExpr *CastExpr, HshStage Stage) {
-      if (Lifter.Builtins.identifyBuiltinType(CastExpr->getType()) ==
+      if (Partitioner.Builtins.identifyBuiltinType(CastExpr->getType()) ==
           HBT_None) {
-        ReportUnsupportedTypeCast(CastExpr, Lifter.Context);
+        ReportUnsupportedTypeCast(CastExpr, Partitioner.Context);
         return nullptr;
       }
       return DoVisit(CastExpr->getSubExpr(), Stage);
@@ -4151,9 +4336,9 @@ class StageStmtLifter {
 
     Stmt *VisitCXXConstructExpr(CXXConstructExpr *ConstructExpr,
                                 HshStage Stage) {
-      if (Lifter.Builtins.identifyBuiltinType(ConstructExpr->getType()) ==
+      if (Partitioner.Builtins.identifyBuiltinType(ConstructExpr->getType()) ==
           HBT_None) {
-        ReportUnsupportedTypeConstruct(ConstructExpr, Lifter.Context);
+        ReportUnsupportedTypeConstruct(ConstructExpr, Partitioner.Context);
         return nullptr;
       }
 
@@ -4161,9 +4346,10 @@ class StageStmtLifter {
       if (!Arguments)
         return nullptr;
       return CXXTemporaryObjectExpr::Create(
-          Lifter.Context, ConstructExpr->getConstructor(),
+          Partitioner.Context, ConstructExpr->getConstructor(),
           ConstructExpr->getType(),
-          Lifter.Context.getTrivialTypeSourceInfo(ConstructExpr->getType()),
+          Partitioner.Context.getTrivialTypeSourceInfo(
+              ConstructExpr->getType()),
           *Arguments, {}, ConstructExpr->hadMultipleCandidates(),
           ConstructExpr->isListInitialization(),
           ConstructExpr->isStdInitListInitialization(),
@@ -4178,10 +4364,10 @@ class StageStmtLifter {
       if (CallExpr->isAssignmentOp()) {
         Expr *LHS = (*Arguments)[0];
         if (LHS->getType().isConstQualified())
-          ReportConstAssignment(CallExpr, Lifter.Context);
+          ReportConstAssignment(CallExpr, Partitioner.Context);
       }
       return CXXOperatorCallExpr::Create(
-          Lifter.Context, CallExpr->getOperator(), CallExpr->getCallee(),
+          Partitioner.Context, CallExpr->getOperator(), CallExpr->getCallee(),
           *Arguments, CallExpr->getType(), VK_XValue, {}, {});
     }
 
@@ -4194,9 +4380,9 @@ class StageStmtLifter {
         return nullptr;
       if (BinOp->isAssignmentOp()) {
         if (cast<Expr>(LStmt)->getType().isConstQualified())
-          ReportConstAssignment(BinOp, Lifter.Context);
+          ReportConstAssignment(BinOp, Partitioner.Context);
       }
-      return new (Lifter.Context) BinaryOperator(
+      return new (Partitioner.Context) BinaryOperator(
           cast<Expr>(LStmt), cast<Expr>(RStmt), BinOp->getOpcode(),
           BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
     }
@@ -4208,13 +4394,14 @@ class StageStmtLifter {
         Builder.registerParmVarRef(PVD, Stage);
         return DeclRef;
       } else if (auto *VD = dyn_cast<VarDecl>(DeclRef->getDecl())) {
-        if (!InMemberExpr && !Lifter.Builtins.checkHshFieldTypeCompatibility(
-                                 Lifter.Context, VD)) {
-          ReportUnsupportedTypeReference(DeclRef, Lifter.Context);
+        if (!InMemberExpr &&
+            !Partitioner.Builtins.checkHshFieldTypeCompatibility(
+                Partitioner.Context, VD)) {
+          ReportUnsupportedTypeReference(DeclRef, Partitioner.Context);
           return nullptr;
         }
-        auto Search = Lifter.StmtMap.find(DeclRef);
-        if (Search != Lifter.StmtMap.end()) {
+        auto Search = Partitioner.StmtMap.find(DeclRef);
+        if (Search != Partitioner.StmtMap.end()) {
           auto &DepInfo = Search->second;
           if (DepInfo.StageBits)
             return Builder.createInterStageReferenceExpr(
@@ -4224,7 +4411,7 @@ class StageStmtLifter {
       } else if (isa<EnumConstantDecl>(DeclRef->getDecl())) {
         return DeclRef;
       } else {
-        ReportUnsupportedTypeReference(DeclRef, Lifter.Context);
+        ReportUnsupportedTypeReference(DeclRef, Partitioner.Context);
         return nullptr;
       }
     }
@@ -4233,27 +4420,28 @@ class StageStmtLifter {
       auto Exprs = DoVisitExprRange(InitList->inits(), Stage);
       if (!Exprs)
         return nullptr;
-      return new (Lifter.Context) InitListExpr(Lifter.Context, {}, *Exprs, {});
+      return new (Partitioner.Context)
+          InitListExpr(Partitioner.Context, {}, *Exprs, {});
     }
 
     Stmt *VisitMemberExpr(MemberExpr *MemberExpr, HshStage Stage) {
-      if (!InMemberExpr && Lifter.Builtins.identifyBuiltinType(
+      if (!InMemberExpr && Partitioner.Builtins.identifyBuiltinType(
                                MemberExpr->getType()) == HBT_None) {
-        ReportUnsupportedTypeReference(MemberExpr, Lifter.Context);
+        ReportUnsupportedTypeReference(MemberExpr, Partitioner.Context);
         return nullptr;
       }
       SaveAndRestore<bool> SavedInMemberExpr(InMemberExpr, true);
       auto *BaseStmt = DoVisit(MemberExpr->getBase(), Stage);
-      return MemberExpr::CreateImplicit(Lifter.Context, cast<Expr>(BaseStmt),
-                                        false, MemberExpr->getMemberDecl(),
-                                        MemberExpr->getType(), VK_XValue,
-                                        OK_Ordinary);
+      return MemberExpr::CreateImplicit(
+          Partitioner.Context, cast<Expr>(BaseStmt), false,
+          MemberExpr->getMemberDecl(), MemberExpr->getType(), VK_XValue,
+          OK_Ordinary);
     }
 
     Stmt *StmtOrNull(Stmt *S) {
       if (S)
         return S;
-      return new (Lifter.Context) NullStmt({}, false);
+      return new (Partitioner.Context) NullStmt({}, false);
     };
 
     Stmt *VisitDoStmt(DoStmt *S, HshStage Stage) {
@@ -4271,7 +4459,7 @@ class StageStmtLifter {
       }
       if (hasErrorOccurred())
         return nullptr;
-      return new (Lifter.Context) DoStmt(NewBody, NewCond, {}, {}, {});
+      return new (Partitioner.Context) DoStmt(NewBody, NewCond, {}, {}, {});
     }
 
     Stmt *VisitForStmt(ForStmt *S, HshStage Stage) {
@@ -4301,9 +4489,9 @@ class StageStmtLifter {
       }
       if (hasErrorOccurred())
         return nullptr;
-      return new (Lifter.Context)
-          ForStmt(Lifter.Context, NewInit, NewCond, S->getConditionVariable(),
-                  NewInc, NewBody, {}, {}, {});
+      return new (Partitioner.Context)
+          ForStmt(Partitioner.Context, NewInit, NewCond,
+                  S->getConditionVariable(), NewInc, NewBody, {}, {}, {});
     }
 
     Stmt *VisitIfStmt(IfStmt *S, HshStage Stage) {
@@ -4330,7 +4518,7 @@ class StageStmtLifter {
       }
       if (hasErrorOccurred())
         return nullptr;
-      return IfStmt::Create(Lifter.Context, {}, S->isConstexpr(), NewInit,
+      return IfStmt::Create(Partitioner.Context, {}, S->isConstexpr(), NewInit,
                             S->getConditionVariable(), NewCond, NewThen,
                             SourceLocation{}, NewElse);
     }
@@ -4342,8 +4530,8 @@ class StageStmtLifter {
         NewSubStmt = DoVisit(St, Stage, true);
       if (hasErrorOccurred())
         return nullptr;
-      auto *NewCase =
-          CaseStmt::Create(Lifter.Context, S->getLHS(), nullptr, {}, {}, {});
+      auto *NewCase = CaseStmt::Create(Partitioner.Context, S->getLHS(),
+                                       nullptr, {}, {}, {});
       NewCase->setSubStmt(NewSubStmt);
       dumper() << "\n";
       return NewCase;
@@ -4356,7 +4544,8 @@ class StageStmtLifter {
         NewSubStmt = DoVisit(St, Stage, true);
       if (hasErrorOccurred())
         return nullptr;
-      auto *NewDefault = new (Lifter.Context) DefaultStmt({}, {}, NewSubStmt);
+      auto *NewDefault =
+          new (Partitioner.Context) DefaultStmt({}, {}, NewSubStmt);
       dumper() << "\n";
       return NewDefault;
     }
@@ -4374,7 +4563,7 @@ class StageStmtLifter {
     Stmt *VisitSwitchStmt(SwitchStmt *S, HshStage Stage) {
       dumper() << "Switch ";
       if (Stmt *Init = S->getInit()) {
-        auto &Diags = Lifter.Context.getDiagnostics();
+        auto &Diags = Partitioner.Context.getDiagnostics();
         Diags.Report(
             Init->getBeginLoc(),
             Diags.getCustomDiagID(DiagnosticsEngine::Error,
@@ -4392,7 +4581,7 @@ class StageStmtLifter {
         NewBody = DoVisit(Body, Stage);
       if (hasErrorOccurred())
         return nullptr;
-      auto *NewSwitch = SwitchStmt::Create(Lifter.Context, nullptr,
+      auto *NewSwitch = SwitchStmt::Create(Partitioner.Context, nullptr,
                                            S->getConditionVariable(), NewCond);
       NewSwitch->setBody(NewBody);
       return NewSwitch;
@@ -4411,7 +4600,7 @@ class StageStmtLifter {
         NewBody = DoVisit(Body, Stage, true);
       if (hasErrorOccurred())
         return nullptr;
-      return WhileStmt::Create(Lifter.Context, S->getConditionVariable(),
+      return WhileStmt::Create(Partitioner.Context, S->getConditionVariable(),
                                NewCond, NewBody, {});
     }
 
@@ -4425,7 +4614,7 @@ class StageStmtLifter {
       dumper() << "}\n";
       if (hasErrorOccurred())
         return nullptr;
-      return CompoundStmt::Create(Lifter.Context, Stmts, {}, {});
+      return CompoundStmt::Create(Partitioner.Context, Stmts, {}, {});
     }
 
     void run(AnalysisDeclContext &AD) {
@@ -4462,7 +4651,7 @@ class StageStmtLifter {
   HshBuiltins &Builtins;
 
 public:
-  StageStmtLifter(ASTContext &Context, HshBuiltins &Builtins)
+  StageStmtPartitioner(ASTContext &Context, HshBuiltins &Builtins)
       : Context(Context), Builtins(Builtins) {}
 
   void run(AnalysisDeclContext &AD, StagesBuilder &Builder) {
@@ -4492,13 +4681,15 @@ class GenerateConsumer : public ASTConsumer {
   raw_string_ostream AnonOS{AnonNSString};
   std::string AfterAnonNSString;
   raw_string_ostream AfterAnonOS{AfterAnonNSString};
+  std::string ProfileString;
+  raw_string_ostream ProfileOS{ProfileString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
   struct HshExpansion {
     SourceRange Range;
-    std::string Name;
+    SmallString<32> Name;
     CXXTemporaryObjectExpr *Construct;
   };
-  std::map<SourceLocation, HshExpansion> SeenHshExpansions;
+  DenseMap<SourceLocation, HshExpansion> SeenHshExpansions;
 
   std::array<std::unique_ptr<StagesCompilerBase>, HT_MAX> Compilers;
   StagesCompilerBase &getCompiler(HshTarget Target) {
@@ -4512,7 +4703,7 @@ class GenerateConsumer : public ASTConsumer {
   bool NeedsCoordinatorComma = false;
   void addCoordinatorType(QualType T) {
     if (NeedsCoordinatorComma)
-      AfterAnonOS << ", ";
+      AfterAnonOS << ",\n";
     else
       NeedsCoordinatorComma = true;
     T.print(AfterAnonOS, HostPolicy);
@@ -4597,11 +4788,64 @@ public:
     return HashStr;
   }
 
+  static void PrintNSDecl(raw_ostream &OS, DeclContext *DC, bool &PrintedNS) {
+    if (!DC->isNamespace())
+      DC = DC->getEnclosingNamespaceContext();
+    if (auto *NS = dyn_cast<NamespaceDecl>(DC)) {
+      PrintNSDecl(OS, NS->getParent(), PrintedNS);
+      if (PrintedNS)
+        OS << "::";
+      else
+        PrintedNS = true;
+      OS << NS->getName();
+    }
+  }
+
   void handlePipelineDerivative(NamedDecl *Decl) {
     auto &Diags = Context.getDiagnostics();
     auto *CD = dyn_cast<CXXRecordDecl>(Decl);
     auto *CTD = dyn_cast<ClassTemplateDecl>(Decl);
     assert((CTD || CD) && "Bad decl type");
+    if (CTD)
+      CD = CTD->getTemplatedDecl();
+
+    auto *RedeclContext = Decl->getDeclContext()->getRedeclContext();
+    if (!RedeclContext->isFileContext()) {
+      Diags.Report(
+          Decl->getBeginLoc(),
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "hsh::pipeline derivatives must be declared in "
+                                "file or namespace scope"));
+      return;
+    }
+
+    /*
+     * Forward declarations of source pipeline derivatives are emitted to aid
+     * code generated by runtime profiling.
+     */
+    bool InNamespace = RedeclContext->isNamespace();
+    if (InNamespace) {
+      ProfileOS << "namespace ";
+      bool PrintedNS = false;
+      PrintNSDecl(ProfileOS, RedeclContext, PrintedNS);
+      ProfileOS << " { ";
+    }
+
+    {
+      bool OrigIsCompleteDef = CD->isCompleteDefinition();
+      CD->setCompleteDefinition(false);
+      if (CTD)
+        CTD->print(ProfileOS, HostPolicy);
+      else
+        CD->print(ProfileOS, HostPolicy);
+      ProfileOS << ';';
+      CD->setCompleteDefinition(OrigIsCompleteDef);
+    }
+
+    if (InNamespace)
+      ProfileOS << " }";
+
+    ProfileOS << '\n';
 
     SmallString<32> BindingName("hshbinding_"_ll);
     BindingName += Decl->getName();
@@ -4637,6 +4881,8 @@ public:
       CXXConstructorDecl *PrevCtor = nullptr;
       bool MultiCtorReport = false;
       for (auto *Ctor : PipelineSource->ctors()) {
+        if (Ctor->isCopyOrMoveConstructor())
+          continue;
         if (!MultiCtorReport && PrevCtor) {
           Diags.Report(
               PrevCtor->getBeginLoc(),
@@ -4682,7 +4928,7 @@ public:
 #if ENABLE_DUMP
       CallCtx->dumpCFG(true);
 #endif
-      StageStmtLifter(Context, Builtins).run(*CallCtx, Builder);
+      StageStmtPartitioner(Context, Builtins).run(*CallCtx, Builder);
       if (Context.getDiagnostics().hasErrorOccurred())
         return;
 
@@ -4703,7 +4949,7 @@ public:
         InitArgs.reserve(Constructor->getNumParams());
         for (const auto *Param : Constructor->parameters()) {
           ConstructorArgs.push_back(
-              TypeName::getFullyQualifiedType(Param->getType(), Context, true));
+              TypeName::getFullyQualifiedType(Param->getType(), Context));
           ConstructorParms.push_back(ParmVarDecl::Create(
               Context, Specialization, {}, {}, Param->getIdentifier(),
               ConstructorArgs.back(), {}, SC_None, nullptr));
@@ -4788,8 +5034,9 @@ public:
           SeenHashes.insert(Hash);
           {
             raw_comment_ostream CommentOut(*OS);
-            CommentOut << HshStageToString(Stage) << " source targeting "
-                       << HshTargetToString(Target) << "\n\n";
+            CommentOut << "// " << HshStageToString(Stage)
+                       << " source targeting " << HshTargetToString(Target)
+                       << "\n\n";
             CommentOut << Source;
           }
           *OS << "inline ";
@@ -4940,6 +5187,170 @@ public:
     AnonOS << "\n\n";
   }
 
+  void handleHshExpansion(const HshExpansion &Expansion,
+                          const DenseSet<NamedDecl *> &SeenDecls,
+                          StringRef AbsProfFile) {
+    auto &Diags = Context.getDiagnostics();
+    auto *Decl = Expansion.Construct->getType()->getAsCXXRecordDecl();
+    NamedDecl *UseDecl = Decl;
+    if (auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(Decl))
+      UseDecl =
+          CTSD->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>();
+    if (SeenDecls.find(UseDecl) == SeenDecls.end()) {
+      Diags.Report(
+          Expansion.Construct->getLocation(),
+          Diags.getCustomDiagID(
+              DiagnosticsEngine::Error,
+              "binding constructor does not construct a valid pipeline"))
+          << Expansion.Construct->getTypeSourceInfo()
+                 ->getTypeLoc()
+                 .getSourceRange();
+      return;
+    }
+    SmallString<32> BindingName("hshbinding_"_ll);
+    BindingName += UseDecl->getName();
+
+    /* Determine if construction expression has all constant template parms */
+    bool NeedsMacroComma = false;
+    *OS << "template <typename... Res>\n"
+           "hsh::binding_typeless "
+        << Expansion.Name;
+    SmallVector<NonConstExpr, 8> NonConstExprs;
+    if (CheckConstexprTemplateSpecialization(
+            Context, Expansion.Construct->getType(), &NonConstExprs)) {
+      *OS << "(Res... Resources) {\n"
+             "  return ::"
+          << BindingName
+          << "(Resources...);\n"
+             "}\n"
+             "#define "
+          << Expansion.Name << "(...) ::" << Expansion.Name << '(';
+    } else {
+      *OS << '(';
+      TraverseNonConstExprs(NonConstExprs, [&](NonTypeTemplateParmDecl *NTTP) {
+        NTTP->getType().print(*OS, HostPolicy, NTTP->getName());
+        *OS << ", ";
+      });
+      SmallString<32> ProfName(Expansion.Name);
+      assert(ProfName.size() >= 3);
+      ProfName.insert(ProfName.begin() + 3, {'p', 'r', 'o', 'f'});
+      *OS << "Res... Resources) {\n"
+             "#if HSH_PROFILE_MODE\n"
+             "hsh::profile_context::instance\n"
+             ".get(\""
+          << AbsProfFile
+          << "\",\n"
+             "     \""
+          << ProfName << "\", \"";
+      if (auto *ET = TypeName::getFullyQualifiedType(
+                         QualType{Decl->getTypeForDecl(), 0}, Context)
+                         ->getAsAdjusted<ElaboratedType>()) {
+        if (auto *NNS = ET->getQualifier())
+          NNS->print(*OS, HostPolicy);
+      }
+      Decl->printName(*OS);
+      *OS << "\",\n     \"::" << BindingName << "\")\n.add(";
+      bool NeedsAddComma = false;
+      TraverseNonConstExprs(NonConstExprs, [&](NonTypeTemplateParmDecl *NTTP) {
+        if (NeedsAddComma)
+          *OS << ", ";
+        else
+          NeedsAddComma = true;
+        NTTP->printName(*OS);
+      });
+      *OS << ");\n"
+             "#elif "
+          << ProfName << "\n"
+          << ProfName << "\n#undef " << ProfName << "\n#else\n";
+
+      struct SpecializationTree {
+        static raw_ostream &indent(raw_ostream &OS, unsigned Indentation) {
+          for (unsigned i = 0; i < Indentation; ++i)
+            OS << "  ";
+          return OS;
+        }
+
+        struct Node {
+          DenseMap<APSInt, Node> Children;
+          ClassTemplateSpecializationDecl *Leaf = nullptr;
+          StringRef Name;
+
+          Node *getChild(const APSInt &Int) { return &Children[Int]; }
+
+          void print(raw_ostream &OS, const PrintingPolicy &Policy,
+                     StringRef BindingName, unsigned Indentation = 0) const {
+            if (Leaf) {
+              indent(OS, Indentation) << "return ::" << BindingName << '<';
+              bool NeedsArgComma = false;
+              for (auto &Arg : Leaf->getTemplateArgs().asArray()) {
+                if (NeedsArgComma)
+                  OS << ", ";
+                else
+                  NeedsArgComma = true;
+                Arg.print(Policy, OS);
+              }
+              OS << ">(Resources...);\n";
+              return;
+            }
+            indent(OS, Indentation) << "switch (" << Name << ") {\n";
+            for (auto &[Case, Child] : Children) {
+              indent(OS, Indentation) << "case " << Case << ":\n";
+              Child.print(OS, Policy, BindingName, Indentation + 1);
+            }
+            indent(OS, Indentation) << "}\n";
+          }
+        };
+        Node Root;
+
+        SpecializationTree(ASTContext &Context, ClassTemplateDecl *CTD,
+                           ArrayRef<NonConstExpr> NonConstExprs) {
+          for (auto *Specialization : CTD->specializations()) {
+            if (!CheckConstexprTemplateSpecialization(Context, Specialization))
+              continue;
+            SpecializationTree::Node *SpecLeaf = &Root;
+            TraverseNonConstExprs(NonConstExprs, Specialization,
+                                  [&](NonTypeTemplateParmDecl *NTTP,
+                                      const TemplateArgument &Arg) {
+                                    SpecLeaf->Name = NTTP->getName();
+                                    SpecLeaf =
+                                        SpecLeaf->getChild(Arg.getAsIntegral());
+                                  });
+            SpecLeaf->Leaf = Specialization;
+          }
+        }
+
+        void print(raw_ostream &OS, const PrintingPolicy &Policy,
+                   StringRef BindingName, unsigned Indentation = 0) {
+          Root.print(OS, Policy, BindingName, Indentation);
+        }
+      } SpecTree{Context, cast<ClassTemplateDecl>(UseDecl), NonConstExprs};
+      SpecTree.print(*OS, HostPolicy, BindingName);
+
+      *OS << "#endif\n"
+             "  return {};\n"
+             "}\n"
+             "#define "
+          << Expansion.Name << "(...) ::" << Expansion.Name << '(';
+      for (auto &NCE : NonConstExprs) {
+        if (NCE.getKind() != NonConstExpr::NonTypeParm)
+          continue;
+        if (NeedsMacroComma)
+          *OS << ", ";
+        else
+          NeedsMacroComma = true;
+        NCE.getExpr()->printPretty(*OS, nullptr, HostPolicy);
+      }
+    }
+    for (auto *Arg : Expansion.Construct->arguments()) {
+      if (NeedsMacroComma)
+        *OS << ", ";
+      else
+        NeedsMacroComma = true;
+      Arg->printPretty(*OS, nullptr, HostPolicy);
+    }
+    *OS << ")\n";
+  }
+
   void HandleTranslationUnit(ASTContext &Context) override {
     DiagnosticsEngine &Diags = Context.getDiagnostics();
     if (Diags.hasErrorOccurred())
@@ -4981,20 +5392,22 @@ public:
 
     AnonOS << "namespace {\n\n";
     AfterAnonOS << "template <> hsh::detail::GlobalListNode "
-                   "hsh::detail::PipelineCoordinator<";
+                   "hsh::detail::PipelineCoordinator<\n";
 
     /*
      * Process all hsh::pipeline derivatives
      */
+    DenseSet<NamedDecl *> SeenDecls;
     PipelineDerivativeSearch(Context, Builtins.getPipelineRecordDecl())
-        .search([this](NamedDecl *Decl) {
+        .search([this, &SeenDecls](NamedDecl *Decl) {
           handlePipelineDerivative(Decl);
+          SeenDecls.insert(Decl);
           return true;
         });
 
     AnonOS << "}\n\n";
 
-    AfterAnonOS << ">::global{";
+    AfterAnonOS << "\n>::global{";
     bool NeedsComma = false;
     for (HshTarget T = HT_GLSL; T < HT_MAX; T = HshTarget(T + 1)) {
       if (NeedsComma)
@@ -5011,7 +5424,27 @@ public:
     }
     AfterAnonOS << "};\n\n";
 
-    *OS << AnonOS.str() << AfterAnonOS.str();
+    *OS << AnonOS.str() << AfterAnonOS.str() << ProfileOS.str() << '\n';
+
+    /*
+     * Emit binding macro functions
+     */
+    StringRef OutFileRef = sys::path::filename(CI.getFrontendOpts().OutputFile);
+    SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
+    sys::path::replace_extension(ProfFile, ".hshprof");
+    SmallString<128> AbsProfFile(ProfFile);
+    sys::fs::make_absolute(AbsProfFile);
+    *OS << "#if __has_include(\"" << ProfFile
+        << "\")\n"
+           "#include \""
+        << ProfFile
+        << "\"\n"
+           "#endif\n";
+
+    *OS << "namespace {\n";
+    for (auto &Exp : SeenHshExpansions)
+      handleHshExpansion(Exp.second, SeenDecls, AbsProfFile);
+    *OS << "}\n";
 
     DxcLibrary::SharedInstance.reset();
   }

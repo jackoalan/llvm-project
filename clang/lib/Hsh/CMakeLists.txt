@@ -16,7 +16,7 @@ endif()
 ExternalProject_Add(
         DirectXShaderCompiler
         GIT_REPOSITORY https://github.com/microsoft/DirectXShaderCompiler
-        GIT_TAG e8422a4f4efec2dba14203630d7b24de906f6d42
+        GIT_TAG 80ec7c6bc7e3c40da52110dd2eb9b85192153775
         BUILD_COMMAND "${CMAKE_COMMAND}" --build . --target dxcompiler
         INSTALL_COMMAND
         "${CMAKE_COMMAND}" -E make_directory "${CLANG_BINARY_DIR}/include/dxc/"
@@ -62,10 +62,12 @@ set(dxc_header "${CLANG_BINARY_DIR}/include/dxc/dxcapi.h")
 add_custom_command(OUTPUT "${dxc_header}"
                    COMMAND "${CMAKE_COMMAND}" ARGS
                    --build . --target DirectXShaderCompiler
-                   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+                   DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
+                   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+                   COMMENT "Fetching and building DirectXShaderCompiler")
 
 add_clang_library(clangHsh
-        "${CLANG_BINARY_DIR}/include/dxc/dxcapi.h"
+        "${dxc_header}"
         HshGenerator.cpp
         LINK_LIBS
         clangTooling)

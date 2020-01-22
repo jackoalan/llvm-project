@@ -31,7 +31,7 @@ class raw_comment_ostream : public raw_ostream {
         break;
       } else {
         OS.write(SV.data(), NextNL);
-        OS << "\n * ";
+        OS << "\n";
         Ptr += NextNL + 1;
         Size -= NextNL + 1;
       }
@@ -41,10 +41,10 @@ class raw_comment_ostream : public raw_ostream {
   uint64_t current_pos() const override { return 0; }
 
 public:
-  explicit raw_comment_ostream(raw_ostream &OS) : OS(OS) { OS << "/*\n * "; }
+  explicit raw_comment_ostream(raw_ostream &OS) : OS(OS) { OS << "/*\n"; }
   ~raw_comment_ostream() override {
     flush();
-    OS << "\n */\n";
+    OS << "\n*/\n";
   }
 };
 
