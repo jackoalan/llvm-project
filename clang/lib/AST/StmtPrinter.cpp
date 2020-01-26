@@ -295,7 +295,8 @@ void StmtPrinter::VisitIfStmt(IfStmt *If) {
   if (Policy.SeparateConditionVarDecls) {
     bool StartedCompound = false;
     unsigned OldSAR = Policy.SuppressInitializers;
-    for (auto *SubIf = If; SubIf; SubIf = dyn_cast_or_null<IfStmt>(SubIf->getElse())) {
+    for (auto *SubIf = If; SubIf;
+         SubIf = dyn_cast_or_null<IfStmt>(SubIf->getElse())) {
       if (DeclStmt *DS = If->getConditionVariableDeclStmt()) {
         if (!StartedCompound) {
           Indent() << "{" << NL;

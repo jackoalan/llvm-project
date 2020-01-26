@@ -910,7 +910,8 @@ public:
     bool isActive, NoBacktrack;
 
   public:
-    explicit TentativeParsingAction(Parser& p, bool NoBacktrack = false) : P(p), NoBacktrack(NoBacktrack) {
+    explicit TentativeParsingAction(Parser &p, bool NoBacktrack = false)
+        : P(p), NoBacktrack(NoBacktrack) {
       PrevPreferredType = P.PreferredType;
       PrevTok = P.Tok;
       PrevTentativelyDeclaredIdentifierCount =

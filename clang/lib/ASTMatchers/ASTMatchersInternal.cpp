@@ -628,8 +628,6 @@ const internal::VariadicDynCastAllOfMatcher<Decl, TypedefNameDecl>
 const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasDecl> typeAliasDecl;
 const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasTemplateDecl>
     typeAliasTemplateDecl;
-const internal::VariadicDynCastAllOfMatcher<Stmt, AttributedStmt>
-    attributedStmt;
 const internal::VariadicAllOfMatcher<Decl> decl;
 const internal::VariadicDynCastAllOfMatcher<Decl, LinkageSpecDecl>
     linkageSpecDecl;
