@@ -9,9 +9,46 @@
 #include <utility>
 #include <iostream>
 #include <cassert>
+#include <list>
 #include <map>
 #include <unordered_map>
 #include <sstream>
+#include <fstream>
+
+namespace hsh::detail {
+// TODO: Make CMake define these in project-scope
+#define HSH_MAX_UNIFORMS 8
+#define HSH_MAX_IMAGES 8
+#define HSH_MAX_SAMPLERS 8
+#define HSH_MAX_VERTEX_BUFFERS 8
+#define HSH_MAX_INDEX_BUFFERS 8
+#define HSH_DESCRIPTOR_POOL_SIZE 8192
+
+#ifndef HSH_MAX_UNIFORMS
+#error HSH_MAX_UNIFORMS definition is mandatory!
+#endif
+#ifndef HSH_MAX_IMAGES
+#error HSH_MAX_IMAGES definition is mandatory!
+#endif
+#ifndef HSH_MAX_SAMPLERS
+#error HSH_MAX_SAMPLERS definition is mandatory!
+#endif
+#ifndef HSH_MAX_VERTEX_BUFFERS
+#error HSH_MAX_VERTEX_BUFFERS definition is mandatory!
+#endif
+#ifndef HSH_MAX_INDEX_BUFFERS
+#error HSH_MAX_INDEX_BUFFERS definition is mandatory!
+#endif
+#ifndef HSH_DESCRIPTOR_POOL_SIZE
+#error HSH_DESCRIPTOR_POOL_SIZE definition is mandatory!
+#endif
+constexpr uint32_t MaxUniforms = HSH_MAX_UNIFORMS;
+constexpr uint32_t MaxImages = HSH_MAX_IMAGES;
+constexpr uint32_t MaxSamplers = HSH_MAX_SAMPLERS;
+constexpr uint32_t MaxVertexBuffers = HSH_MAX_VERTEX_BUFFERS;
+constexpr uint32_t MaxIndexBuffers = HSH_MAX_INDEX_BUFFERS;
+constexpr uint32_t MaxDescriptorPoolSets = HSH_DESCRIPTOR_POOL_SIZE;
+}
 
 #define HSH_ENABLE_LOG 1
 #define HSH_ENABLE_VULKAN 1
@@ -27,28 +64,44 @@ inline void hshVkAssert(const char* pred) {
 #define VULKAN_HPP_ASSERT(pred) if (!(pred)) hshVkAssert(#pred)
 #include <vulkan/vulkan.hpp>
 
-namespace hsh::detail {
+#define VMA_USE_STL_CONTAINERS 1
+#define VMA_USE_STL_SHARED_MUTEX 1
+#define VMA_ASSERT(pred) if (!(pred)) hshVkAssert(#pred)
+#include "vk_mem_alloc_hsh.h"
+
+namespace hsh::detail::vulkan {
 inline struct {
   vk::Instance Instance;
   vk::Device Device;
+  VmaAllocator Allocator = VK_NULL_HANDLE;
+  std::array<vk::DescriptorSetLayout, 64> DescriptorSetLayout;
   vk::PipelineLayout PipelineLayout;
+  struct DescriptorPoolChain *DescriptorPoolChain = nullptr;
+  vk::DescriptorUpdateTemplate DescriptorUpdateTemplate;
   vk::RenderPass RenderPass;
   float Anisotropy = 0.f;
-} VulkanGlobals;
+  unsigned DynamicBufferIndex = 0;
+  vk::DeviceSize DynamicBufferMask = 0;
+  vk::CommandBuffer Cmd;
+
+  void setDescriptorSetLayout(vk::DescriptorSetLayout Layout) noexcept {
+    std::fill(DescriptorSetLayout.begin(), DescriptorSetLayout.end(), Layout);
+  }
+} Globals;
 }
 
-namespace vk {
+namespace VULKAN_HPP_NAMESPACE {
 template <> struct ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
 public:
   ObjectDestroy() = default;
   ObjectDestroy(
       Instance owner, Optional<const AllocationCallbacks> allocationCallbacks,
       VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
-    assert(owner == ::hsh::detail::VulkanGlobals.Instance);
+    assert(owner == ::hsh::detail::vulkan::Globals.Instance);
   }
 protected:
   template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT {
-    ::hsh::detail::VulkanGlobals.Instance.destroy(
+    ::hsh::detail::vulkan::Globals.Instance.destroy(
         t, {}, VULKAN_HPP_DEFAULT_DISPATCHER);
   }
 };
@@ -58,15 +111,297 @@ public:
   ObjectDestroy(
       Device owner, Optional<const AllocationCallbacks> allocationCallbacks,
       VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
-    assert(owner == ::hsh::detail::VulkanGlobals.Device);
+    assert(owner == ::hsh::detail::vulkan::Globals.Device);
   }
 protected:
   template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT {
-    ::hsh::detail::VulkanGlobals.Device.destroy(t, {},
-                                                VULKAN_HPP_DEFAULT_DISPATCHER);
+    ::hsh::detail::vulkan::Globals.Device.destroy(t, {},
+                                                  VULKAN_HPP_DEFAULT_DISPATCHER);
   }
 };
-} // namespace vk
+} // namespace VULKAN_HPP_NAMESPACE
+
+namespace hsh {
+enum Target : std::uint8_t {
+#define HSH_TARGET(Enumeration, Active) Enumeration,
+#include "targets.def"
+  TARGET_MAX
+};
+struct uniform_buffer_typeless;
+struct dynamic_uniform_buffer_typeless;
+struct vertex_buffer_typeless;
+struct dynamic_vertex_buffer_typeless;
+struct texture_typeless;
+} // namespace hsh
+
+namespace hsh::detail {
+template <hsh::Target T> struct SamplerObject;
+}
+
+namespace hsh::detail::vulkan {
+struct DescriptorPoolWritesBase {
+  std::array<vk::DescriptorBufferInfo, MaxUniforms> Uniforms;
+  std::array<vk::DescriptorImageInfo, MaxImages> Images;
+  std::array<vk::DescriptorImageInfo, MaxSamplers> Samplers;
+  template <std::size_t... USeq, std::size_t... ISeq, std::size_t... SSeq>
+  constexpr DescriptorPoolWritesBase(std::index_sequence<USeq...>,
+                                     std::index_sequence<ISeq...>,
+                                     std::index_sequence<SSeq...>) noexcept
+      : Uniforms{vk::DescriptorBufferInfo({}, ((void)USeq, 0), VK_WHOLE_SIZE)...},
+        Images{vk::DescriptorImageInfo(
+            {}, {}, ((void)ISeq, vk::ImageLayout::eShaderReadOnlyOptimal))...},
+        Samplers{vk::DescriptorImageInfo(
+            {}, {}, ((void)SSeq, vk::ImageLayout::eUndefined))...} {}
+};
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+struct DescriptorUpdateTemplateCreateInfo
+    : vk::DescriptorUpdateTemplateCreateInfo {
+  std::array<vk::DescriptorUpdateTemplateEntry, 3> Entries;
+  constexpr DescriptorUpdateTemplateCreateInfo() noexcept
+      : vk::DescriptorUpdateTemplateCreateInfo(
+            {}, Entries.size(), Entries.data(),
+            vk::DescriptorUpdateTemplateType::eDescriptorSet,
+            Globals.DescriptorSetLayout[0]),
+        Entries{
+            vk::DescriptorUpdateTemplateEntry(
+                0, 0, MaxUniforms, vk::DescriptorType::eUniformBufferDynamic,
+                offsetof(DescriptorPoolWritesBase, Uniforms),
+                sizeof(vk::DescriptorBufferInfo)),
+            vk::DescriptorUpdateTemplateEntry(
+                MaxUniforms, 0, MaxImages, vk::DescriptorType::eSampledImage,
+                offsetof(DescriptorPoolWritesBase, Images),
+                sizeof(vk::DescriptorImageInfo)),
+            vk::DescriptorUpdateTemplateEntry(
+                MaxUniforms + MaxImages, 0, MaxSamplers,
+                vk::DescriptorType::eSampler,
+                offsetof(DescriptorPoolWritesBase, Samplers),
+                sizeof(vk::DescriptorImageInfo))} {}
+};
+
+struct DescriptorPoolCreateInfo : vk::DescriptorPoolCreateInfo {
+  std::array<vk::DescriptorPoolSize, 3> PoolSizes{
+      vk::DescriptorPoolSize{vk::DescriptorType::eUniformBufferDynamic, MaxUniforms},
+      vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, MaxImages},
+      vk::DescriptorPoolSize{vk::DescriptorType::eSampler, MaxSamplers}};
+  constexpr DescriptorPoolCreateInfo() noexcept
+      : vk::DescriptorPoolCreateInfo({}, MaxDescriptorPoolSets,
+                                     PoolSizes.size(), PoolSizes.data()) {}
+};
+#pragma GCC diagnostic pop
+
+struct UniqueDescriptorSet {
+  vk::DescriptorSet Set;
+  std::uint64_t Index = UINT64_MAX;
+  UniqueDescriptorSet() noexcept = default;
+  UniqueDescriptorSet(vk::DescriptorSet Set,
+                      std::size_t Index) noexcept
+      : Set(Set), Index(Index) {}
+  UniqueDescriptorSet(const UniqueDescriptorSet&) = delete;
+  UniqueDescriptorSet &operator=(const UniqueDescriptorSet&) = delete;
+  UniqueDescriptorSet(UniqueDescriptorSet&& Other) noexcept {
+    Set = Other.Set;
+    std::swap(Index, Other.Index);
+  }
+  UniqueDescriptorSet &operator=(UniqueDescriptorSet&& Other) noexcept {
+    Set = Other.Set;
+    std::swap(Index, Other.Index);
+    return *this;
+  }
+  operator vk::DescriptorSet() const noexcept { return Set; }
+  ~UniqueDescriptorSet() noexcept;
+};
+
+struct DescriptorPoolChain {
+  struct DescriptorPool {
+    vk::UniqueDescriptorPool Pool;
+    std::size_t AllocatedSets = 0;
+    static_assert(MaxDescriptorPoolSets % 64 == 0);
+    std::array<uint64_t, MaxDescriptorPoolSets / 64> Bitmap{};
+    DescriptorPool() noexcept {
+      Pool =
+          Globals.Device.createDescriptorPoolUnique(DescriptorPoolCreateInfo())
+              .value;
+    }
+    struct DescriptorBucket {
+      std::array<vk::DescriptorSet, 64> DescriptorSets;
+      UniqueDescriptorSet allocate(struct DescriptorPool &pool, uint64_t &bmp,
+                                   std::size_t Index) noexcept {
+        VULKAN_HPP_ASSERT(bmp != UINT64_MAX && "descriptor bucket full");
+        if (!DescriptorSets[0]) {
+          struct DescriptorSetAllocateInfo
+              : public vk::DescriptorSetAllocateInfo {
+            explicit constexpr DescriptorSetAllocateInfo(
+                vk::DescriptorPool pool) noexcept
+                : vk::DescriptorSetAllocateInfo(
+                      pool, 64, Globals.DescriptorSetLayout.data()) {}
+          } AllocateInfo(pool.Pool.get());
+          VULKAN_HPP_ASSERT(Globals.Device.allocateDescriptorSets(
+                                &AllocateInfo, DescriptorSets.data()) ==
+                            vk::Result::eSuccess);
+        }
+        for (unsigned i = 0; i < 64; ++i) {
+          if ((bmp & (1u << i)) == 0) {
+            bmp |= (1u << i);
+            return UniqueDescriptorSet(DescriptorSets[i], Index + i);
+          }
+        }
+        return {};
+      }
+    };
+    std::array<DescriptorBucket, MaxDescriptorPoolSets / 64> Buckets;
+    UniqueDescriptorSet allocate(std::size_t Index) noexcept {
+      VULKAN_HPP_ASSERT(AllocatedSets < MaxDescriptorPoolSets &&
+                        "descriptor pool full");
+      auto BucketsIt = Buckets.begin();
+      for (uint64_t &bmp : Bitmap) {
+        if (bmp != UINT64_MAX) {
+          ++AllocatedSets;
+          return BucketsIt->allocate(*this, bmp, Index);
+        }
+        Index += 64;
+        ++BucketsIt;
+      }
+      return {};
+    }
+    void free(std::size_t Index) noexcept {
+      auto BucketIdx = Index / 64;
+      auto BucketRem = Index % 64;
+      VULKAN_HPP_ASSERT(AllocatedSets &&
+                        "freed too many descriptor sets from pool");
+      VULKAN_HPP_ASSERT(Bitmap[BucketIdx] & (1ull << BucketRem) &&
+                        "double free");
+      Bitmap[BucketIdx] &= ~(1ull << BucketRem);
+      --AllocatedSets;
+    }
+  };
+  std::list<DescriptorPool> Chain;
+  UniqueDescriptorSet allocate() noexcept {
+    std::size_t Index = 0;
+    for (auto &pool : Chain) {
+      if (pool.AllocatedSets != MaxDescriptorPoolSets)
+        return pool.allocate(Index);
+      Index += MaxDescriptorPoolSets;
+    }
+    return Chain.emplace_back().allocate(Index);
+  }
+  void free(std::size_t Index) noexcept {
+    auto PoolIdx = Index / MaxDescriptorPoolSets;
+    auto PoolRem = Index % MaxDescriptorPoolSets;
+    auto PoolIt = Chain.begin();
+    std::advance(PoolIt, PoolIdx);
+    PoolIt->free(PoolRem);
+  }
+};
+
+UniqueDescriptorSet::~UniqueDescriptorSet() noexcept {
+  if (Index != UINT64_MAX)
+    Globals.DescriptorPoolChain->free(Index);
+}
+
+inline VkResult vmaCreateAllocator(const VmaAllocatorCreateInfo& pCreateInfo,
+                                   VmaAllocator* pAllocator) noexcept {
+  return ::vmaCreateAllocator(
+      reinterpret_cast<const VmaAllocatorCreateInfo *>(&pCreateInfo),
+      pAllocator);
+}
+
+class BufferAllocation {
+protected:
+  vk::Buffer Buffer;
+  VmaAllocation Allocation;
+  BufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation) noexcept
+      : Buffer(Buffer), Allocation(Allocation) {}
+public:
+  BufferAllocation(const BufferAllocation& other) = delete;
+  BufferAllocation(BufferAllocation&& other) = delete;
+  BufferAllocation &operator=(const BufferAllocation& other) = delete;
+  BufferAllocation &operator=(BufferAllocation&& other) = delete;
+  ~BufferAllocation() noexcept {
+    vmaDestroyBuffer(Globals.Allocator, Buffer, Allocation);
+  }
+  vk::Buffer getBuffer() const { return Buffer; }
+};
+
+class DynamicBufferBinding {
+  friend class DynamicBufferAllocation;
+  vk::Buffer Buffer;
+  vk::DeviceSize SecondOffset;
+  DynamicBufferBinding(vk::Buffer Buffer, vk::DeviceSize SecondOffset)
+  : Buffer(Buffer), SecondOffset(SecondOffset) {}
+public:
+  vk::Buffer getBuffer() const noexcept { return Buffer; }
+  vk::DeviceSize getSecondOffset() const noexcept { return SecondOffset; }
+};
+
+class DynamicBufferAllocation : public BufferAllocation {
+  friend DynamicBufferAllocation
+  AllocateDynamicBuffer(vk::DeviceSize size, vk::BufferUsageFlagBits usage) noexcept;
+  void *MappedData;
+  vk::DeviceSize SecondOffset;
+  DynamicBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation, void *MappedData, vk::DeviceSize SecondOffset) noexcept
+      : BufferAllocation(Buffer, Allocation), MappedData(MappedData), SecondOffset(SecondOffset) {}
+public:
+  DynamicBufferBinding getBinding() const {
+    return DynamicBufferBinding(Buffer, SecondOffset);
+  }
+  operator DynamicBufferBinding() const {
+    return getBinding();
+  }
+  vk::DeviceSize getOffset() const noexcept {
+    return SecondOffset & Globals.DynamicBufferMask;
+  }
+  vk::DescriptorBufferInfo getDescriptorBufferInfo() const noexcept {
+    return {Buffer, 0, SecondOffset};
+  }
+  void *map() noexcept {
+    return reinterpret_cast<uint8_t*>(MappedData) + getOffset();
+  }
+  void unmap() noexcept {
+    vmaFlushAllocation(Globals.Allocator, Allocation, getOffset(), SecondOffset);
+  }
+};
+
+inline VkResult vmaCreateDoubleBuffer(const vk::BufferCreateInfo& pBufferCreateInfo,
+                                      const VmaAllocationCreateInfo& pAllocationCreateInfo,
+                                      VkBuffer* pBuffer,
+                                      VmaAllocation* pAllocation,
+                                      VmaAllocationInfo* pAllocationInfo,
+                                      vk::DeviceSize* secondOffset) noexcept {
+  return ::vmaCreateDoubleBuffer(
+      Globals.Allocator,
+      reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
+      reinterpret_cast<const VmaAllocationCreateInfo *>(&pAllocationCreateInfo),
+      pBuffer, pAllocation, pAllocationInfo, secondOffset);
+}
+
+inline DynamicBufferAllocation
+AllocateDynamicBuffer(vk::DeviceSize size,
+                      vk::BufferUsageFlagBits usage) noexcept {
+  struct DynamicUniformBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+    constexpr DynamicUniformBufferAllocationCreateInfo() noexcept
+        : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                  VMA_MEMORY_USAGE_CPU_TO_GPU} {}
+  };
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VmaAllocationInfo AllocInfo;
+  VkDeviceSize SecondOffset;
+  VULKAN_HPP_ASSERT(vmaCreateDoubleBuffer(
+                        vk::BufferCreateInfo({}, size, usage),
+                        DynamicUniformBufferAllocationCreateInfo(), &Buffer,
+                        &Allocation, &AllocInfo, &SecondOffset) == VK_SUCCESS);
+  return DynamicBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
+                                 SecondOffset);
+}
+
+struct TextureBinding {
+  vk::ImageView ImageView;
+  std::uint8_t NumMips : 7;
+  std::uint8_t Integer : 1;
+};
+}
 #endif
 
 #if 0
@@ -93,6 +428,134 @@ LogPrinter &logger() {
 #endif
 
 namespace hsh {
+namespace detail {
+template <typename T>
+struct ClassWrapper {};
+
+struct SamplerBinding;
+
+constexpr unsigned NumStaticallyActiveTargets = 0
+#define HSH_TARGET(Enumeration, Active) + unsigned(!!(Active))
+#include "targets.def"
+;
+static_assert(NumStaticallyActiveTargets != 0, "No hsh targets are statically active");
+constexpr enum Target FirstStaticallyActiveTarget() noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration) return Enumeration;
+#include "targets.def"
+}
+inline enum Target ActiveTarget = FirstStaticallyActiveTarget();
+
+template <Target T>
+struct TargetTraits {
+  struct UniformBufferBinding {};
+  struct UniformBufferOwner {};
+  struct DynamicUniformBufferBinding {};
+  struct DynamicUniformBufferOwner {};
+  struct VertexBufferBinding {};
+  struct VertexBufferOwner {};
+  struct DynamicVertexBufferBinding {};
+  struct DynamicVertexBufferOwner {};
+  struct TextureBinding {};
+  struct TextureOwner {};
+  struct PipelineBinding {};
+};
+#if HSH_ENABLE_VULKAN
+template <>
+struct TargetTraits<VULKAN_SPIRV> {
+  using UniformBufferBinding = vk::Buffer;
+  using UniformBufferOwner = vulkan::BufferAllocation;
+  using DynamicUniformBufferBinding = vulkan::DynamicBufferBinding;
+  using DynamicUniformBufferOwner = vulkan::DynamicBufferAllocation;
+  using VertexBufferBinding = vk::Buffer;
+  using VertexBufferOwner = vulkan::BufferAllocation;
+  using DynamicVertexBufferBinding = vulkan::DynamicBufferBinding;
+  using DynamicVertexBufferOwner = vulkan::DynamicBufferAllocation;
+  using TextureBinding = vulkan::TextureBinding;
+  struct TextureOwner {};
+  struct PipelineBinding {
+    vk::Pipeline Pipeline;
+    vulkan::UniqueDescriptorSet DescriptorSet;
+    std::array<uint32_t, MaxUniforms> UniformOffsets{};
+    std::array<vk::Buffer, MaxVertexBuffers> VertexBuffers{};
+    std::array<vk::DeviceSize, MaxVertexBuffers> VertexOffsets{};
+    struct Iterators {
+      decltype(UniformOffsets)::iterator UniformOffsetIt;
+      decltype(VertexBuffers)::iterator VertexBufferIt;
+      decltype(VertexOffsets)::iterator VertexOffsetIt;
+      constexpr explicit Iterators(PipelineBinding &Binding)
+          : UniformOffsetIt(Binding.UniformOffsets.begin()),
+            VertexBufferIt(Binding.VertexBuffers.begin()),
+            VertexOffsetIt(Binding.VertexOffsets.begin()) {}
+
+      void add(uniform_buffer_typeless uniform);
+      void add(dynamic_uniform_buffer_typeless uniform);
+      void add(vertex_buffer_typeless uniform);
+      void add(dynamic_vertex_buffer_typeless uniform);
+      static void add(texture_typeless uniform);
+      static void add(SamplerBinding sampler);
+    };
+
+    PipelineBinding() = default;
+
+    template <typename Impl, typename... Args>
+    explicit PipelineBinding(ClassWrapper<Impl>, Args... args);
+  };
+};
+#endif
+template <unsigned NSTs>
+struct SelectTargetTraits {
+#define HSH_MULTI_TRAIT UniformBufferBinding
+#include "trait.def"
+#define HSH_MULTI_TRAIT UniformBufferOwner
+#include "trait.def"
+#define HSH_MULTI_TRAIT DynamicUniformBufferBinding
+#include "trait.def"
+#define HSH_MULTI_TRAIT DynamicUniformBufferOwner
+#include "trait.def"
+#define HSH_MULTI_TRAIT VertexBufferBinding
+#include "trait.def"
+#define HSH_MULTI_TRAIT VertexBufferOwner
+#include "trait.def"
+#define HSH_MULTI_TRAIT DynamicVertexBufferBinding
+#include "trait.def"
+#define HSH_MULTI_TRAIT DynamicVertexBufferOwner
+#include "trait.def"
+#define HSH_MULTI_TRAIT TextureBinding
+#include "trait.def"
+#define HSH_MULTI_TRAIT TextureOwner
+#include "trait.def"
+#define HSH_MULTI_TRAIT PipelineBinding
+#include "trait.def"
+};
+template <>
+struct SelectTargetTraits<1> {
+  using TargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
+#define HSH_SINGLE_TRAIT UniformBufferBinding
+#include "trait.def"
+#define HSH_SINGLE_TRAIT UniformBufferOwner
+#include "trait.def"
+#define HSH_SINGLE_TRAIT DynamicUniformBufferBinding
+#include "trait.def"
+#define HSH_SINGLE_TRAIT DynamicUniformBufferOwner
+#include "trait.def"
+#define HSH_SINGLE_TRAIT VertexBufferBinding
+#include "trait.def"
+#define HSH_SINGLE_TRAIT VertexBufferOwner
+#include "trait.def"
+#define HSH_SINGLE_TRAIT DynamicVertexBufferBinding
+#include "trait.def"
+#define HSH_SINGLE_TRAIT DynamicVertexBufferOwner
+#include "trait.def"
+#define HSH_SINGLE_TRAIT TextureBinding
+#include "trait.def"
+#define HSH_SINGLE_TRAIT TextureOwner
+#include "trait.def"
+#define HSH_SINGLE_TRAIT PipelineBinding
+#include "trait.def"
+};
+using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
+}
+
 struct base_buffer {};
 
 template <typename T>
@@ -107,8 +570,17 @@ struct dynamic_vertex_buffer;
 struct uniform_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
-  uniform_buffer_typeless(const char *UniqueId) : UniqueId(UniqueId) {}
+  template <typename... Args>
+  explicit uniform_buffer_typeless(const char *UniqueId, Args... args)
+  : UniqueId(UniqueId), Binding(args...) {}
+  explicit uniform_buffer_typeless(
+      const char *UniqueId, uniform_buffer_typeless other)
+      : UniqueId(UniqueId), Binding(other.Binding) {}
+#else
+  template <typename... Args>
+  explicit uniform_buffer_typeless(Args... args) : Binding(args...) {}
 #endif
+  detail::ActiveTargetTraits::UniformBufferBinding Binding;
   template <typename T>
   uniform_buffer<T> cast() const;
   template <typename T>
@@ -117,8 +589,17 @@ struct uniform_buffer_typeless : base_buffer {
 struct dynamic_uniform_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
-  dynamic_uniform_buffer_typeless(const char *UniqueId) : UniqueId(UniqueId) {}
+  template <typename... Args>
+  explicit dynamic_uniform_buffer_typeless(const char *UniqueId, Args... args)
+      : UniqueId(UniqueId), Binding(args...) {}
+  explicit dynamic_uniform_buffer_typeless(
+      const char *UniqueId, dynamic_uniform_buffer_typeless other)
+      : UniqueId(UniqueId), Binding(other.Binding) {}
+#else
+  template <typename... Args>
+  explicit dynamic_uniform_buffer_typeless(Args... args) : Binding(args...) {}
 #endif
+  detail::ActiveTargetTraits::DynamicUniformBufferBinding Binding;
   template <typename T>
   dynamic_uniform_buffer<T> cast() const;
   template <typename T>
@@ -127,8 +608,17 @@ struct dynamic_uniform_buffer_typeless : base_buffer {
 struct vertex_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
-  vertex_buffer_typeless(const char *UniqueId) : UniqueId(UniqueId) {}
+  template <typename... Args>
+  explicit vertex_buffer_typeless(const char *UniqueId, Args... args)
+      : UniqueId(UniqueId), Binding(args...) {}
+  explicit vertex_buffer_typeless(
+      const char *UniqueId, vertex_buffer_typeless other)
+      : UniqueId(UniqueId), Binding(other.Binding) {}
+#else
+  template <typename... Args>
+  explicit vertex_buffer_typeless(Args... args) : Binding(args...) {}
 #endif
+  detail::ActiveTargetTraits::VertexBufferBinding Binding;
   template <typename T>
   vertex_buffer<T> cast() const;
   template <typename T>
@@ -137,71 +627,57 @@ struct vertex_buffer_typeless : base_buffer {
 struct dynamic_vertex_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
-  dynamic_vertex_buffer_typeless(const char *UniqueId) : UniqueId(UniqueId) {}
+  template <typename... Args>
+  explicit dynamic_vertex_buffer_typeless(const char *UniqueId, Args... args)
+      : UniqueId(UniqueId), Binding(args...) {}
+  explicit dynamic_vertex_buffer_typeless(
+      const char *UniqueId, dynamic_vertex_buffer_typeless other)
+      : UniqueId(UniqueId), Binding(other.Binding) {}
+#else
+  template <typename... Args>
+  explicit dynamic_vertex_buffer_typeless(Args... args) : Binding(args...) {}
 #endif
+  detail::ActiveTargetTraits::DynamicVertexBufferBinding Binding;
   template <typename T>
   dynamic_vertex_buffer<T> cast() const;
   template <typename T>
   operator dynamic_vertex_buffer<T>() const { return cast<T>(); }
 };
 
-template <typename T>
-struct uniform_buffer : uniform_buffer_typeless {
 #ifndef NDEBUG
-  static constexpr char StaticUniqueId{};
-  uniform_buffer() : uniform_buffer_typeless(&StaticUniqueId) {}
-#endif
-  const T *operator->() const { assert(false && "Not to be called from host!"); return nullptr; }
-  const T &operator*() const { assert(false && "Not to be called from host!"); return *reinterpret_cast<T*>(0); }
+#define HSH_CASTABLE_BUFFER(derived) \
+template <typename T> struct derived : derived##_typeless { \
+static constexpr char StaticUniqueId{}; \
+template <typename... Args> \
+explicit derived(Args... args) : derived##_typeless(&StaticUniqueId, args...) {} \
+const T *operator->() const { assert(false && "Not to be used from host!"); return nullptr; } \
+const T &operator*() const { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
 };
-template <typename T>
-struct dynamic_uniform_buffer : dynamic_uniform_buffer_typeless {
-#ifndef NDEBUG
-  static constexpr char StaticUniqueId{};
-  dynamic_uniform_buffer() : dynamic_uniform_buffer_typeless(&StaticUniqueId) {}
-#endif
-  const T *operator->() const { assert(false && "Not to be called from host!"); return nullptr; }
-  const T &operator*() const { assert(false && "Not to be called from host!"); return *reinterpret_cast<T*>(0); }
+#else
+#define HSH_CASTABLE_BUFFER(derived) \
+template <typename T> struct derived : derived##_typeless { \
+template <typename... Args> \
+explicit derived(Args... args) : derived##_typeless(args...) {} \
+const T *operator->() const { assert(false && "Not to be used from host!"); return nullptr; } \
+const T &operator*() const { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
 };
-template <typename T>
-struct vertex_buffer : vertex_buffer_typeless {
-#ifndef NDEBUG
-  static constexpr char StaticUniqueId{};
-  vertex_buffer() : vertex_buffer_typeless(&StaticUniqueId) {}
 #endif
-  const T *operator->() const { assert(false && "Not to be called from host!"); return nullptr; }
-  const T &operator*() const { assert(false && "Not to be called from host!"); return *reinterpret_cast<T*>(0); }
-};
-template <typename T>
-struct dynamic_vertex_buffer : dynamic_vertex_buffer_typeless {
-#ifndef NDEBUG
-  static constexpr char StaticUniqueId{};
-  dynamic_vertex_buffer() : dynamic_vertex_buffer_typeless(&StaticUniqueId) {}
-#endif
-  const T *operator->() const { assert(false && "Not to be called from host!"); return nullptr; }
-  const T &operator*() const { assert(false && "Not to be called from host!"); return *reinterpret_cast<T*>(0); }
-};
+HSH_CASTABLE_BUFFER(uniform_buffer)
+HSH_CASTABLE_BUFFER(dynamic_uniform_buffer)
+HSH_CASTABLE_BUFFER(vertex_buffer)
+HSH_CASTABLE_BUFFER(dynamic_vertex_buffer)
+#undef HSH_CASTABLE_BUFFER
 
-template <typename T>
-uniform_buffer<T> uniform_buffer_typeless::cast() const {
-  assert(UniqueId == &uniform_buffer<T>::StaticUniqueId && "bad cast");
-  return static_cast<uniform_buffer<T>>(*this);
+#define HSH_DEFINE_BUFFER_CAST(derived) \
+template <typename T> derived<T> derived##_typeless::cast() const { \
+  assert(UniqueId == &derived<T>::StaticUniqueId && "bad cast"); \
+  return static_cast<derived<T>>(*this); \
 }
-template <typename T>
-dynamic_uniform_buffer<T> dynamic_uniform_buffer_typeless::cast() const {
-  assert(UniqueId == &dynamic_uniform_buffer<T>::StaticUniqueId && "bad cast");
-  return static_cast<dynamic_uniform_buffer<T>>(*this);
-}
-template <typename T>
-vertex_buffer<T> vertex_buffer_typeless::cast() const {
-  assert(UniqueId == &vertex_buffer<T>::StaticUniqueId && "bad cast");
-  return static_cast<vertex_buffer<T>>(*this);
-}
-template <typename T>
-dynamic_vertex_buffer<T> dynamic_vertex_buffer_typeless::cast() const {
-  assert(UniqueId == &dynamic_vertex_buffer<T>::StaticUniqueId && "bad cast");
-  return static_cast<dynamic_vertex_buffer<T>>(*this);
-}
+HSH_DEFINE_BUFFER_CAST(uniform_buffer)
+HSH_DEFINE_BUFFER_CAST(dynamic_uniform_buffer)
+HSH_DEFINE_BUFFER_CAST(vertex_buffer)
+HSH_DEFINE_BUFFER_CAST(dynamic_vertex_buffer)
+#undef HSH_DEFINE_BUFFER_CAST
 
 struct float3;
 struct float2;
@@ -489,27 +965,63 @@ template <> struct scalar_to_vector<unsigned int, 3> { using type = uint3; };
 template <> struct scalar_to_vector<unsigned int, 4> { using type = uint4; };
 template <typename T, int N>
 using scalar_to_vector_t = typename scalar_to_vector<T, N>::type;
-template <typename T> struct texture1d {
-  scalar_to_vector_t<T, 4> sample(float, sampler = {}) const { return {}; }
+
+struct base_texture {};
+
+struct texture_typeless : base_texture {
+#ifndef NDEBUG
+  const char *UniqueId;
+  template <typename... Args>
+  explicit texture_typeless(const char *UniqueId, Args... args)
+      : UniqueId(UniqueId), Binding(args...) {}
+#else
+  template <typename... Args>
+  explicit texture_typeless(Args... args) : Binding(args...) {}
+#endif
+  detail::ActiveTargetTraits::TextureBinding Binding;
+  template <typename T>
+  T cast() const {
+    assert(UniqueId == &T::StaticUniqueId && "bad cast");
+    return static_cast<T>(*this);
+  }
+  template <typename T>
+  operator T() const { return cast<T>(); }
 };
-template <typename T> struct texture1d_array {
-  scalar_to_vector_t<T, 4> sample(float2, sampler = {}) const { return {}; }
+
+#ifndef NDEBUG
+#define HSH_CASTABLE_TEXTURE(derived, coordt) \
+template <typename T> struct derived : texture_typeless { \
+static constexpr char StaticUniqueId{}; \
+template <typename... Args> \
+explicit derived(Args... args) : texture_typeless(&StaticUniqueId, args...) {} \
+scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const { return {}; } \
 };
-template <typename T> struct texture2d {
-  scalar_to_vector_t<T, 4> sample(float2, sampler = {}) const { return {}; }
+#else
+#define HSH_CASTABLE_TEXTURE(derived, coordt) \
+template <typename T> struct derived : texture_typeless { \
+template <typename... Args> \
+explicit derived(Args... args) : texture_typeless(args...) {} \
+scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const { return {}; } \
 };
-template <typename T> struct texture2d_array {
-  scalar_to_vector_t<T, 4> sample(float3, sampler = {}) const { return {}; }
+#endif
+HSH_CASTABLE_TEXTURE(texture1d, float)
+HSH_CASTABLE_TEXTURE(texture1d_array, float2)
+HSH_CASTABLE_TEXTURE(texture2d, float2)
+HSH_CASTABLE_TEXTURE(texture2d_array, float3)
+HSH_CASTABLE_TEXTURE(texture3d, float3)
+HSH_CASTABLE_TEXTURE(texturecube, float3)
+HSH_CASTABLE_TEXTURE(texturecube_array, float4)
+#undef HSH_CASTABLE_TEXTURE
+
+template <typename T>
+struct resource_owner {
+  typename decltype(T::Binding)::Owner Owner;
+  T get() const { return T(Owner); }
+  operator T() const { return get(); }
+  void *map() noexcept { return Owner.map(); }
+  void unmap() noexcept { Owner.unmap(); }
 };
-template <typename T> struct texture3d {
-  scalar_to_vector_t<T, 4> sample(float3, sampler = {}) const { return {}; }
-};
-template <typename T> struct texturecube {
-  scalar_to_vector_t<T, 4> sample(float3, sampler = {}) const { return {}; }
-};
-template <typename T> struct texturecube_array {
-  scalar_to_vector_t<T, 4> sample(float4, sampler = {}) const { return {}; }
-};
+
 float dot(const float2 &a, const float2 &b) {
   return a.x * b.x + a.y * b.y;
 }
@@ -585,22 +1097,6 @@ float abs(float v) {
   return std::abs(v);
 }
 void discard() {}
-
-enum Target : std::uint8_t {
-  GLSL,
-  HLSL,
-  DXBC,
-  DXIL,
-  VULKAN_SPIRV,
-  METAL,
-  METAL_BIN_MAC,
-  METAL_BIN_IOS,
-  METAL_BIN_TVOS,
-  TARGET_MAX
-};
-namespace detail {
-constexpr enum Target ActiveTarget = VULKAN_SPIRV;
-}
 
 enum Stage : std::uint8_t {
   Vertex,
@@ -716,6 +1212,12 @@ constexpr std::size_t MaxMipCount = 14;
 
 /* Holds sampler object as loaded into graphics API */
 template <hsh::Target T> struct SamplerObject {};
+
+/* Associates texture with sampler object index in shader data. */
+struct SamplerBinding {
+  texture_typeless tex;
+  unsigned idx = 0;
+};
 
 enum InputRate : std::uint8_t { PerVertex, PerInstance };
 
@@ -838,7 +1340,8 @@ struct ShaderConstData {
                             std::array<sampler, NSamplers> Samps,
                             std::array<ColorAttachment, NAttachments> Atts,
                             struct PipelineInfo PipelineInfo)
-      : StageCodes(S), Bindings(B), Attributes(A), Samplers(Samps), Attachments(Atts), PipelineInfo(PipelineInfo) {}
+      : StageCodes(S), Bindings(B), Attributes(A), Samplers(Samps),
+        Attachments(Atts), PipelineInfo(PipelineInfo) {}
 };
 
 template <Target T, std::uint32_t NStages, std::uint32_t NSamplers> struct ShaderData {
@@ -858,16 +1361,6 @@ struct PipelineBuilder {
   static void build_pipelines(std::index_sequence<BSeq...>) {
     assert(false && "unimplemented pipeline builder");
   }
-};
-
-struct OpaqueBindingData {
-  std::uint64_t Data1 = 0;
-  std::uint64_t Data2 = 0;
-  bool is_valid() const { return Data1 != 0; }
-  template <typename T>
-  T get() { assert(false && "unimplemented get"); return {}; }
-  template <typename T>
-  void set(T d) { assert(false && "unimplemented set"); }
 };
 
 #if HSH_ENABLE_VULKAN
@@ -1119,7 +1612,7 @@ template <> struct ShaderObject<VULKAN_SPIRV> {
   ShaderObject() noexcept = default;
   vk::ShaderModule get(const vk::ShaderModuleCreateInfo &Info) {
     if (!ShaderModule)
-      ShaderModule = VulkanGlobals.Device.createShaderModuleUnique(Info).value;
+      ShaderModule = vulkan::Globals.Device.createShaderModuleUnique(Info).value;
     return ShaderModule.get();
   }
 };
@@ -1133,15 +1626,88 @@ template <> struct SamplerObject<VULKAN_SPIRV> {
     if (!Samp) {
       vk::SamplerCreateInfo ModInfo(Info);
       ModInfo.setMaxLod(float(MipCount - 1))
-          .setAnisotropyEnable(VulkanGlobals.Anisotropy != 0.f)
-          .setMaxAnisotropy(VulkanGlobals.Anisotropy);
+          .setAnisotropyEnable(vulkan::Globals.Anisotropy != 0.f)
+          .setMaxAnisotropy(vulkan::Globals.Anisotropy);
       if (Int)
         ModInfo.setBorderColor(vk::BorderColor(int(Info.borderColor) + 1));
-      Samp = VulkanGlobals.Device.createSamplerUnique(ModInfo).value;
+      Samp = vulkan::Globals.Device.createSamplerUnique(ModInfo).value;
     }
     return Samp.get();
   }
+  vk::Sampler get(const vk::SamplerCreateInfo &Info, texture_typeless tex) {
+    return get(Info, tex.Binding.get_VULKAN_SPIRV().Integer,
+               tex.Binding.get_VULKAN_SPIRV().NumMips);
+  }
 };
+
+namespace vulkan {
+template <typename Impl>
+struct DescriptorPoolWrites : DescriptorPoolWritesBase {
+  struct Iterators {
+    decltype(Uniforms)::iterator UniformIt;
+    decltype(Images)::iterator ImageIt;
+    decltype(Samplers)::iterator SamplerIt;
+    constexpr explicit Iterators(DescriptorPoolWrites &Writes)
+        : UniformIt(Writes.Uniforms.begin()),
+          ImageIt(Writes.Images.begin()),
+          SamplerIt(Writes.Samplers.begin()) {}
+    void add(uniform_buffer_typeless uniform) {
+      (UniformIt++)->setBuffer(uniform.Binding.get_VULKAN_SPIRV());
+    }
+    void add(dynamic_uniform_buffer_typeless uniform) {
+      (UniformIt++)->setBuffer(uniform.Binding.get_VULKAN_SPIRV().getBuffer());
+    }
+    static void add(vertex_buffer_typeless) {}
+    static void add(dynamic_vertex_buffer_typeless) {}
+    void add(texture_typeless texture) {
+      (ImageIt++)->setImageView(texture.Binding.get_VULKAN_SPIRV().ImageView);
+    }
+    void add(hsh::detail::SamplerBinding sampler) {
+      (SamplerIt++)->setSampler(
+          Impl::template data<VULKAN_SPIRV>.SamplerObjects[sampler.idx].get().
+          get(Impl::template cdata<VULKAN_SPIRV>.Samplers[sampler.idx],
+              sampler.tex));
+    }
+  };
+  template <typename... Args>
+  constexpr explicit DescriptorPoolWrites(Args... args) noexcept
+      : DescriptorPoolWritesBase(std::make_index_sequence<MaxUniforms>(),
+                                 std::make_index_sequence<MaxImages>(),
+                                 std::make_index_sequence<MaxSamplers>()) {
+    Iterators Its(*this);
+    (Its.add(args), ...);
+  }
+};
+} // namespace vulkan
+
+template <typename Impl, typename... Args>
+TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(ClassWrapper<Impl>,
+                                                             Args... args)
+    : Pipeline(Impl::template data<VULKAN_SPIRV>.Pipeline.get()),
+      DescriptorSet(vulkan::Globals.DescriptorPoolChain->allocate()) {
+  vulkan::DescriptorPoolWrites<Impl> Writes(args...);
+  vulkan::Globals.Device.updateDescriptorSetWithTemplate(
+      DescriptorSet, vulkan::Globals.DescriptorUpdateTemplate, &Writes);
+  Iterators Its(*this);
+  (Its.add(args), ...);
+}
+
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(uniform_buffer_typeless) {
+  UniformOffsetIt++;
+}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(dynamic_uniform_buffer_typeless uniform) {
+  *UniformOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
+}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(vertex_buffer_typeless uniform) {
+  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV();
+  VertexOffsetIt++;
+}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(dynamic_vertex_buffer_typeless uniform) {
+  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV().getBuffer();
+  *VertexOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
+}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(texture_typeless) {}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(SamplerBinding) {}
 
 constexpr std::array<vk::DynamicState, 2> Dynamics{vk::DynamicState::eViewport,
                                                    vk::DynamicState::eScissor};
@@ -1149,15 +1715,18 @@ constexpr vk::PipelineDynamicStateCreateInfo DynamicState{
     {}, 2, Dynamics.data()};
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
-          std::uint32_t NAttributes, std::uint32_t NSamplers, std::uint32_t NAttachments>
-struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers, NAttachments> {
+          std::uint32_t NAttributes, std::uint32_t NSamplers,
+          std::uint32_t NAttachments>
+struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
+                       NAttachments> {
   std::array<vk::ShaderModuleCreateInfo, NStages> StageCodes;
   std::array<vk::ShaderStageFlagBits, NStages> StageFlags;
   std::array<vk::VertexInputBindingDescription, NBindings>
       VertexBindingDescriptions;
   std::array<vk::VertexInputAttributeDescription, NAttributes>
       VertexAttributeDescriptions;
-  std::array<vk::PipelineColorBlendAttachmentState, NAttachments> TargetAttachments;
+  std::array<vk::PipelineColorBlendAttachmentState, NAttachments>
+      TargetAttachments;
   vk::PipelineVertexInputStateCreateInfo VertexInputState;
   vk::PipelineInputAssemblyStateCreateInfo InputAssemblyState;
   vk::PipelineTessellationStateCreateInfo TessellationState;
@@ -1243,7 +1812,7 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
       StageInfos[i] = vk::PipelineShaderStageCreateInfo{
           {},
           StageFlags[i],
-          B::template data<hsh::VULKAN_SPIRV>.ShaderObjects[i].get().get(
+          B::template data<VULKAN_SPIRV>.ShaderObjects[i].get().get(
               StageCodes[i])};
 
     return vk::GraphicsPipelineCreateInfo{
@@ -1259,8 +1828,8 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
         &DepthStencilState,
         &ColorBlendState,
         &DynamicState,
-        VulkanGlobals.PipelineLayout,
-        VulkanGlobals.RenderPass};
+        vulkan::Globals.PipelineLayout,
+        vulkan::Globals.RenderPass};
   }
 };
 
@@ -1276,10 +1845,10 @@ struct ShaderData<VULKAN_SPIRV, NStages, NSamplers> {
       : ShaderObjects(S), SamplerObjects(Samps) {}
 };
 
-template <> struct PipelineBuilder<hsh::VULKAN_SPIRV> {
+template <> struct PipelineBuilder<VULKAN_SPIRV> {
   template <typename B>
   static constexpr std::size_t get_num_stages(bool NotZero) {
-    return NotZero ? B::template cdata<hsh::VULKAN_SPIRV>.StageCodes.size() : 0;
+    return NotZero ? B::template cdata<VULKAN_SPIRV>.StageCodes.size() : 0;
   }
   template <typename... B, std::size_t... BSeq>
   static constexpr std::size_t stage_info_start(std::size_t BIdx,
@@ -1288,8 +1857,8 @@ template <> struct PipelineBuilder<hsh::VULKAN_SPIRV> {
   }
   template <typename B> static void set_pipeline(vk::Pipeline data) {
     vk::ObjectDestroy<vk::Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> deleter(
-        VulkanGlobals.Device, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
-    B::template data<hsh::VULKAN_SPIRV>.Pipeline =
+        vulkan::Globals.Device, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
+    B::template data<VULKAN_SPIRV>.Pipeline =
         vk::UniquePipeline(data, deleter);
   }
   template <typename... B, std::size_t... BSeq>
@@ -1298,33 +1867,15 @@ template <> struct PipelineBuilder<hsh::VULKAN_SPIRV> {
                (get_num_stages<B>(true) + ...)>
         ShaderStageInfos;
     std::array<vk::GraphicsPipelineCreateInfo, sizeof...(B)> Infos{
-        B::template cdata<hsh::VULKAN_SPIRV>.template getPipelineInfo<B>(
+        B::template cdata<VULKAN_SPIRV>.template getPipelineInfo<B>(
           ShaderStageInfos.data() + stage_info_start<B...>(BSeq, seq))...};
     std::array<vk::Pipeline, sizeof...(B)> Pipelines;
-    VULKAN_HPP_ASSERT(VulkanGlobals.Device.createGraphicsPipelines(
+    VULKAN_HPP_ASSERT(vulkan::Globals.Device.createGraphicsPipelines(
                           {}, Infos.size(), Infos.data(), nullptr,
                           Pipelines.data()) == vk::Result::eSuccess);
     (set_pipeline<B>(Pipelines[BSeq]), ...);
   }
 };
-
-template <>
-vk::Pipeline OpaqueBindingData::get<vk::Pipeline>() {
-  return vk::Pipeline(reinterpret_cast<VkPipeline>(Data1));
-}
-template <>
-void OpaqueBindingData::set<vk::Pipeline>(vk::Pipeline d) {
-  Data1 = reinterpret_cast<std::uint64_t>(VkPipeline(d));
-}
-
-template <>
-vk::DescriptorSet OpaqueBindingData::get<vk::DescriptorSet>() {
-  return vk::DescriptorSet(reinterpret_cast<VkDescriptorSet>(Data2));
-}
-template <>
-void OpaqueBindingData::set<vk::DescriptorSet>(vk::DescriptorSet d) {
-  Data2 = reinterpret_cast<std::uint64_t>(VkDescriptorSet(d));
-}
 #endif
 
 struct GlobalListNode;
@@ -1357,31 +1908,23 @@ struct PipelineCoordinator {
 #define _hsh_dummy(...) ::hsh::binding_typeless{};
 } // namespace detail
 
-#define HSH_PROFILE_MODE 0
+#define HSH_PROFILE_MODE 1
 
 class binding_typeless {
 protected:
-  detail::OpaqueBindingData Data;
+  detail::ActiveTargetTraits::PipelineBinding Data;
+  template <typename... Args>
+  explicit binding_typeless(Args... args) : Data(args...) {}
 public:
   binding_typeless() = default;
-  bool is_valid() const { return Data.is_valid(); }
 };
 
 template <typename Impl>
 class binding : public binding_typeless {
 protected:
   template <typename... Args>
-  explicit binding(Args... args) {
-    switch (detail::ActiveTarget) {
-#if HSH_ENABLE_VULKAN
-    case VULKAN_SPIRV:
-      Data.set(Impl::template data<VULKAN_SPIRV>.Pipeline.get());
-      break;
-#endif
-    default:
-      break;
-    }
-  }
+  explicit binding(Args... args)
+  : binding_typeless(detail::ClassWrapper<Impl>(), args...) {}
 };
 
 #if HSH_PROFILE_MODE
@@ -1394,17 +1937,25 @@ struct value_formatter {
 
 class profiler {
   friend class profile_context;
+  const char *source = nullptr;
 public:
   struct push {
     const char *name;
     explicit push(const char *name) : name(name) {}
   };
   struct pop {};
+  struct cast_base {};
+  template <typename T>
+  struct cast : cast_base {
+    const char *type;
+    T val;
+    explicit cast(const char *type, T val) : type(type), val(val) {}
+  };
 private:
   template <typename T>
   using EnableIfNonControlArg =
   std::enable_if_t<!std::is_same_v<T, push> && !std::is_same_v<T, pop> &&
-                   !std::is_same_v<T, const char *>,
+                   !std::is_same_v<T, const char *> && !std::is_base_of_v<cast_base, T>,
       int>;
   struct node {
     std::map<std::string, node> children;
@@ -1424,27 +1975,24 @@ private:
     node &get(const char *arg, Args... rest) {
       return get(rest...);
     }
+    template <typename T, typename... Args>
+    node &get(cast<T> arg, Args... rest) {
+      std::ostringstream ss;
+      hsh::value_formatter::format(ss, arg.val);
+      return children[ss.str()].get(rest...);
+    }
     template <typename T, typename... Args, EnableIfNonControlArg<T> = 0>
     node &get(T arg, Args... rest) {
       std::ostringstream ss;
       hsh::value_formatter::format(ss, arg);
       return children[ss.str()].get(rest...);
     }
-    static std::ostream &indent(std::ostream &out, unsigned arg) {
-      for (unsigned i = 0; i < arg; ++i)
-        out << "  ";
-      return out;
-    }
-    void write(std::ostream &out, unsigned arg) const {
+    void write(std::ostream &out, const char *src, unsigned &idx) const {
       if (!children.empty()) {
-        indent(out, arg) << "switch (arg" << arg << ") {\n";
-        for (auto [key, node] : children) {
-          indent(out, arg) << "case " << key << ":\n";
-          node.write(out, arg + 1);
-        }
-        indent(out, arg) << "}\n";
+        for (auto [key, node] : children)
+          node.write(out, src, idx);
       } else {
-        indent(out, arg) << "return " << leaf << "(Resources...);\n";
+        out << "using s" << idx++ << " = " << src << leaf << ";\n";
       }
     }
   } root;
@@ -1456,6 +2004,12 @@ private:
   }
   static void do_format_param(std::ostream &out, const char *arg) {
     out << arg;
+  }
+  template <typename T>
+  static void do_format_param(std::ostream &out, cast<T> arg) {
+    out << arg.type << '(';
+    hsh::value_formatter::format(out, arg.val);
+    out << ')';
   }
   template <typename T, EnableIfNonControlArg<T> = 0>
   static void do_format_param(std::ostream &out, T arg) {
@@ -1473,26 +2027,50 @@ private:
     (format_param_next(out, rest), ...);
   }
   void write_header(std::ostream &out) const {
-    root.write(out, 0);
+    unsigned idx = 0;
+    root.write(out, source, idx);
   }
 public:
   template <typename... Args>
-  void add(const char *binding, Args... args) {
+  void add(Args... args) {
     node &n = root.get(args...);
     std::ostringstream ss;
-    ss << binding << "<";
+    ss << '<';
     format_params(ss, args...);
-    ss << ">";
+    ss << '>';
     n.leaf = ss.str();
   }
 };
 
 class profile_context {
-  std::unordered_map<std::string, std::unordered_map<std::string, profiler>> profilers;
+  struct File {
+    const char *fwds = nullptr;
+    std::unordered_map<std::string, profiler> profilers;
+  };
+  std::unordered_map<std::string, File> files;
 public:
   static profile_context instance;
-  profiler &get(const char *filename, const char *macro) {
-    return profilers[filename][macro];
+  profiler &get(const char *filename, const char *fwds, const char *binding, const char *source) {
+    auto &file = files[filename];
+    file.fwds = fwds;
+    auto &ret = file.profilers[binding];
+    ret.source = source;
+    return ret;
+  }
+  void write_headers() {
+    for (auto &[filename, file] : files) {
+      std::ofstream out(filename);
+      if (!out.is_open()) {
+        std::cerr << "Unable to open '" << filename << "' for writing\n";
+        continue;
+      }
+      out << file.fwds;
+      for (auto &[binding, prof] : file.profilers) {
+        out << "namespace " << binding << "_specializations {\n";
+        prof.write_header(out);
+        out << "}\n";
+      }
+    }
   }
 };
 

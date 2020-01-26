@@ -502,11 +502,13 @@ enum HshBuiltinPipelineField {
 
 class NonConstExpr {
 public:
-  enum Kind { NonTypeParm, TypePush, TypePop };
+  enum Kind { NonTypeParm, TypePush, TypePop, Integer };
 
 private:
   enum Kind Kind;
-  PointerUnion<Expr *, ClassTemplateSpecializationDecl *> ExprOrType;
+  PointerUnion<Expr *, ClassTemplateSpecializationDecl *, const clang::Type *>
+      ExprOrType;
+  APSInt Int;
   unsigned Position;
 
 public:
@@ -517,6 +519,8 @@ public:
   struct Pop {};
   explicit NonConstExpr(Pop)
       : Kind(TypePop), ExprOrType(nullptr), Position(0) {}
+  explicit NonConstExpr(const APSInt &Int, QualType Tp)
+      : Kind(Integer), ExprOrType(Tp.getTypePtr()), Int(Int) {}
 
   enum Kind getKind() const { return Kind; }
   Expr *getExpr() const {
@@ -530,6 +534,14 @@ public:
   ClassTemplateSpecializationDecl *getType() const {
     assert(Kind == TypePush);
     return ExprOrType.get<ClassTemplateSpecializationDecl *>();
+  }
+  const APSInt &getInt() const {
+    assert(Kind == Integer);
+    return Int;
+  }
+  QualType getIntType() const {
+    assert(Kind == Integer);
+    return QualType{ExprOrType.get<const clang::Type *>(), 0};
   }
 };
 
@@ -549,12 +561,20 @@ bool CheckConstexprTemplateSpecialization(
       Ret &= CheckConstexprTemplateSpecialization(Context, Arg.getAsType(),
                                                   NonConstExprs, Position);
       break;
-    case TemplateArgument::Expression:
-      if (!Arg.getAsExpr()->isIntegerConstantExpr(Context)) {
+    case TemplateArgument::Expression: {
+      APSInt Value;
+      if (!Arg.getAsExpr()->isIntegerConstantExpr(Value, Context)) {
         Ret = false;
         if (NonConstExprs)
           NonConstExprs->emplace_back(Arg.getAsExpr(), Position);
+      } else if (NonConstExprs) {
+        NonConstExprs->emplace_back(Value, Arg.getAsExpr()->getType());
       }
+      break;
+    }
+    case TemplateArgument::Integral:
+      if (NonConstExprs)
+        NonConstExprs->emplace_back(Arg.getAsIntegral(), Arg.getIntegralType());
       break;
     default:
       break;
@@ -601,6 +621,39 @@ void TraverseNonConstExprs(ArrayRef<NonConstExpr> NCEs, Func F) {
     case NonConstExpr::TypePop:
       TypeStack.pop();
       break;
+    case NonConstExpr::Integer:
+      break;
+    }
+  }
+}
+
+template <typename Func, typename PushFunc, typename PopFunc,
+          typename IntegerFunc>
+void TraverseNonConstExprs(ArrayRef<NonConstExpr> NCEs, Func F, PushFunc Push,
+                           PopFunc Pop, IntegerFunc Integer) {
+  std::stack<ClassTemplateSpecializationDecl *,
+             SmallVector<ClassTemplateSpecializationDecl *, 4>>
+      TypeStack;
+  for (auto &Expr : NCEs) {
+    switch (Expr.getKind()) {
+    case NonConstExpr::NonTypeParm:
+      F(cast<NonTypeTemplateParmDecl>(TypeStack.top()
+                                          ->getSpecializedTemplateOrPartial()
+                                          .get<ClassTemplateDecl *>()
+                                          ->getTemplateParameters()
+                                          ->getParam(Expr.getPosition())));
+      break;
+    case NonConstExpr::TypePush:
+      Push(Expr.getType());
+      TypeStack.push(Expr.getType());
+      break;
+    case NonConstExpr::TypePop:
+      Pop();
+      TypeStack.pop();
+      break;
+    case NonConstExpr::Integer:
+      Integer(Expr.getInt(), Expr.getIntType());
+      break;
     }
   }
 }
@@ -636,6 +689,8 @@ void TraverseNonConstExprs(ArrayRef<NonConstExpr> NCEs,
     case NonConstExpr::TypePop:
       TypeStack.pop();
       SpecStack.pop();
+      break;
+    case NonConstExpr::Integer:
       break;
     }
   }
@@ -899,6 +954,7 @@ private:
   ClassTemplateDecl *ShaderConstDataTemplateType = nullptr;
   ClassTemplateDecl *ShaderDataTemplateType = nullptr;
   CXXRecordDecl *SamplerRecordType = nullptr;
+  CXXRecordDecl *SamplerBindingType = nullptr;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const TagDecl *, HBT_Max> AlignedTypes{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
@@ -1354,6 +1410,8 @@ public:
     ShaderDataTemplateType =
         findClassTemplate("ShaderData"_ll, "hsh"_ll, "detail"_ll, Context);
     SamplerRecordType = findCXXRecord("sampler"_ll, {}, Context);
+    SamplerBindingType =
+        findCXXRecord("SamplerBinding"_ll, "detail"_ll, Context);
 
     TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
@@ -1669,6 +1727,20 @@ public:
     return SamplerRecordType;
   }
 
+  CXXFunctionalCastExpr *makeSamplerBinding(ASTContext &Context,
+                                            ParmVarDecl *Tex,
+                                            unsigned SamplerIdx) const {
+    std::array<Expr *, 2> Args{
+        DeclRefExpr::Create(Context, {}, {}, Tex, false, SourceLocation{},
+                            Tex->getType(), VK_XValue),
+        IntegerLiteral::Create(Context, APInt(32, SamplerIdx), Context.IntTy,
+                               {})};
+    auto *Init = new (Context) InitListExpr(Context, {}, Args, {});
+    return CXXFunctionalCastExpr::Create(
+        Context, QualType{SamplerBindingType->getTypeForDecl(), 0}, VK_XValue,
+        nullptr, CastKind::CK_NoOp, Init, nullptr, {}, {});
+  }
+
   CXXRecordDecl *makeBindingDerivative(ASTContext &Context,
                                        CXXRecordDecl *Source,
                                        StringRef Name) const {
@@ -1964,6 +2036,11 @@ HshBuiltins::getSpelling<HT_METAL>(HshBuiltinFunction Func) {
 
 struct SamplerRecord {
   APValue Config;
+};
+
+struct SamplerBinding {
+  unsigned RecordIdx;
+  ParmVarDecl *TextureDecl;
   unsigned UseStages;
 };
 
@@ -2055,13 +2132,15 @@ struct HostPrintingPolicy final : PrintingCallbacks, PrintingPolicy {
 struct ShaderPrintingPolicyBase : PrintingPolicy {
   HshTarget Target;
   virtual ~ShaderPrintingPolicyBase() = default;
-  virtual void
-  printStage(raw_ostream &OS, ASTContext &Context,
-             ArrayRef<UniformRecord> UniformRecords, CXXRecordDecl *FromRecord,
-             CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
-             ArrayRef<TextureRecord> Textures, ArrayRef<SamplerRecord> Samplers,
-             unsigned NumColorAttachments, CompoundStmt *Stmts, HshStage Stage,
-             HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) = 0;
+  virtual void printStage(raw_ostream &OS, ASTContext &Context,
+                          ArrayRef<UniformRecord> UniformRecords,
+                          CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
+                          ArrayRef<AttributeRecord> Attributes,
+                          ArrayRef<TextureRecord> Textures,
+                          ArrayRef<SamplerBinding> Samplers,
+                          unsigned NumColorAttachments, CompoundStmt *Stmts,
+                          HshStage Stage, HshStage From, HshStage To,
+                          ArrayRef<SampleCall> SampleCalls) = 0;
   explicit ShaderPrintingPolicyBase(HshTarget Target)
       : PrintingPolicy(LangOptions()), Target(Target) {}
 };
@@ -2270,7 +2349,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                   ArrayRef<AttributeRecord> Attributes,
                   ArrayRef<TextureRecord> Textures,
-                  ArrayRef<SamplerRecord> Samplers,
+                  ArrayRef<SamplerBinding> Samplers,
                   unsigned NumColorAttachments, CompoundStmt *Stmts,
                   HshStage Stage, HshStage From, HshStage To,
                   ArrayRef<SampleCall> SampleCalls) override {
@@ -2500,7 +2579,7 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                   ArrayRef<AttributeRecord> Attributes,
                   ArrayRef<TextureRecord> Textures,
-                  ArrayRef<SamplerRecord> Samplers,
+                  ArrayRef<SamplerBinding> Samplers,
                   unsigned NumColorAttachments, CompoundStmt *Stmts,
                   HshStage Stage, HshStage From, HshStage To,
                   ArrayRef<SampleCall> SampleCalls) override {
@@ -2827,6 +2906,7 @@ class StagesBuilder {
   SmallVector<AttributeRecord, 4> AttributeRecords;
   SmallVector<TextureRecord, 8> Textures;
   SmallVector<SamplerRecord, 8> Samplers;
+  SmallVector<SamplerBinding, 8> SamplerBindings;
   unsigned NumColorAttachments = 0;
   unsigned FinalStageCount = 0;
   SmallVector<VertexBinding, 4> VertexBindings;
@@ -2919,12 +2999,23 @@ public:
               return CheckSamplersEqual(S.Config, Res);
             });
         if (Search == Samplers.end()) {
-          Search = Samplers.insert(Samplers.end(),
-                                   SamplerRecord{std::move(Res), 1u << Stage});
-        } else {
-          Search->UseStages |= 1u << Stage;
+          Search =
+              Samplers.insert(Samplers.end(), SamplerRecord{std::move(Res)});
         }
-        StageCalls.push_back({C, PVD, unsigned(Search - Samplers.begin())});
+        unsigned RecordIdx = Search - Samplers.begin();
+        auto BindingSearch = std::find_if(
+            SamplerBindings.begin(), SamplerBindings.end(), [&](const auto &B) {
+              return B.RecordIdx == RecordIdx && B.TextureDecl == PVD;
+            });
+        if (BindingSearch == SamplerBindings.end()) {
+          BindingSearch = SamplerBindings.insert(
+              SamplerBindings.end(),
+              SamplerBinding{RecordIdx, PVD, 1u << Stage});
+        } else {
+          BindingSearch->UseStages |= 1u << Stage;
+        }
+        StageCalls.push_back(
+            {C, PVD, unsigned(BindingSearch - SamplerBindings.begin())});
       }
     }
   }
@@ -3177,7 +3268,7 @@ public:
             OS, Context, UniformRecords, InterStageRecords[S].getRecord(),
             NextStage != HshNoStage ? InterStageRecords[NextStage].getRecord()
                                     : nullptr,
-            AttributeRecords, Textures, Samplers, NumColorAttachments,
+            AttributeRecords, Textures, SamplerBindings, NumColorAttachments,
             StageStmts[S].CStmts, HshStage(S), previousUsedStage(HshStage(S)),
             NextStage, SampleCalls[S]);
       }
@@ -3190,9 +3281,13 @@ public:
   unsigned getNumBindings() const { return VertexBindings.size(); }
   unsigned getNumAttributes() const { return VertexAttributes.size(); }
   unsigned getNumSamplers() const { return Samplers.size(); }
+  unsigned getNumSamplerBindings() const { return SamplerBindings.size(); }
   ArrayRef<VertexBinding> getBindings() const { return VertexBindings; }
   ArrayRef<VertexAttribute> getAttributes() const { return VertexAttributes; }
   ArrayRef<SamplerRecord> getSamplers() const { return Samplers; }
+  ArrayRef<SamplerBinding> getSamplerBindings() const {
+    return SamplerBindings;
+  }
 };
 
 struct StageBinaries
@@ -3895,6 +3990,8 @@ class StageStmtPartitioner {
         : Partitioner(Partitioner), Builder(Builder) {}
 
     void InterStageReferenceExpr(Expr *E, HshStage ToStage) {
+      if (E->isIntegerConstantExpr(Partitioner.Context))
+        return;
       if (auto *DRE = dyn_cast<DeclRefExpr>(E))
         if (isa<EnumConstantDecl>(DRE->getDecl()))
           return;
@@ -4139,6 +4236,12 @@ class StageStmtPartitioner {
     }
 
     Expr *InterStageReferenceExpr(Expr *E, HshStage ToStage) {
+      llvm::APSInt ConstVal;
+      if (E->isIntegerConstantExpr(ConstVal, Partitioner.Context)) {
+        return IntegerLiteral::Create(Partitioner.Context,
+                                      ConstVal.extOrTrunc(32),
+                                      Partitioner.Context.IntTy, {});
+      }
       if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
         if (isa<EnumConstantDecl>(DRE->getDecl()))
           return E;
@@ -4941,12 +5044,13 @@ public:
 
       // Make constructor
       {
-        SmallVector<QualType, 4> ConstructorArgs;
-        SmallVector<ParmVarDecl *, 4> ConstructorParms;
+        SmallVector<QualType, 16> ConstructorArgs;
+        SmallVector<ParmVarDecl *, 16> ConstructorParms;
         SmallVector<Expr *, 32> InitArgs;
         ConstructorArgs.reserve(Constructor->getNumParams());
         ConstructorParms.reserve(Constructor->getNumParams());
-        InitArgs.reserve(Constructor->getNumParams());
+        InitArgs.reserve(Constructor->getNumParams() +
+                         Builder.getNumSamplerBindings());
         for (const auto *Param : Constructor->parameters()) {
           ConstructorArgs.push_back(
               TypeName::getFullyQualifiedType(Param->getType(), Context));
@@ -4956,6 +5060,10 @@ public:
           InitArgs.push_back(DeclRefExpr::Create(
               Context, {}, {}, ConstructorParms.back(), false, SourceLocation{},
               ConstructorParms.back()->getType(), VK_XValue));
+        }
+        for (const auto &SamplerBinding : Builder.getSamplerBindings()) {
+          InitArgs.push_back(Builtins.makeSamplerBinding(
+              Context, SamplerBinding.TextureDecl, SamplerBinding.RecordIdx));
         }
         CanQualType CDType =
             Specialization->getTypeForDecl()->getCanonicalTypeUnqualified();
@@ -5240,28 +5348,70 @@ public:
              ".get(\""
           << AbsProfFile
           << "\",\n"
-             "     \""
+             "R\"("
+          << ProfileOS.str()
+          << ")\",\n"
+             "\""
           << ProfName << "\", \"";
-      if (auto *ET = TypeName::getFullyQualifiedType(
-                         QualType{Decl->getTypeForDecl(), 0}, Context)
-                         ->getAsAdjusted<ElaboratedType>()) {
-        if (auto *NNS = ET->getQualifier())
-          NNS->print(*OS, HostPolicy);
-      }
-      Decl->printName(*OS);
-      *OS << "\",\n     \"::" << BindingName << "\")\n.add(";
+      auto PrintFullyQualType = [&](TypeDecl *Decl) {
+        if (auto *ET = TypeName::getFullyQualifiedType(
+                           QualType{Decl->getTypeForDecl(), 0}, Context)
+                           ->getAsAdjusted<ElaboratedType>()) {
+          if (auto *NNS = ET->getQualifier())
+            NNS->print(*OS, HostPolicy);
+        }
+        Decl->printName(*OS);
+      };
+      PrintFullyQualType(Decl);
+      *OS << "\")\n.add(";
       bool NeedsAddComma = false;
-      TraverseNonConstExprs(NonConstExprs, [&](NonTypeTemplateParmDecl *NTTP) {
+      auto AddComma = [&]() {
         if (NeedsAddComma)
           *OS << ", ";
         else
           NeedsAddComma = true;
-        NTTP->printName(*OS);
-      });
+      };
+      unsigned PushCount = 0;
+      TraverseNonConstExprs(
+          NonConstExprs,
+          [&](NonTypeTemplateParmDecl *NTTP) {
+            AddComma();
+            if (auto *EnumTp = NTTP->getType()->getAs<EnumType>()) {
+              *OS << "hsh::profiler::cast{\"";
+              PrintFullyQualType(EnumTp->getDecl());
+              *OS << "\", ";
+              NTTP->printName(*OS);
+              *OS << '}';
+            } else {
+              NTTP->printName(*OS);
+            }
+          },
+          [&](ClassTemplateSpecializationDecl *Spec) {
+            ++PushCount;
+            if (PushCount == 1)
+              return;
+            AddComma();
+            *OS << "hsh::profiler::push{\"";
+            auto *CTD = Spec->getSpecializedTemplateOrPartial()
+                            .get<ClassTemplateDecl *>();
+            PrintFullyQualType(CTD->getTemplatedDecl());
+            *OS << "\"}";
+          },
+          [&]() {
+            --PushCount;
+            if (PushCount == 0)
+              return;
+            AddComma();
+            *OS << "hsh::profiler::pop{}";
+          },
+          [&](const APSInt &Int, QualType IntType) {
+            AddComma();
+            *OS << '\"';
+            TemplateArgument(Context, Int, IntType).print(HostPolicy, *OS);
+            *OS << '\"';
+          });
       *OS << ");\n"
-             "#elif "
-          << ProfName << "\n"
-          << ProfName << "\n#undef " << ProfName << "\n#else\n";
+             "#else\n";
 
       struct SpecializationTree {
         static raw_ostream &indent(raw_ostream &OS, unsigned Indentation) {
@@ -5274,6 +5424,7 @@ public:
           DenseMap<APSInt, Node> Children;
           ClassTemplateSpecializationDecl *Leaf = nullptr;
           StringRef Name;
+          bool IntCast = false;
 
           Node *getChild(const APSInt &Int) { return &Children[Int]; }
 
@@ -5290,14 +5441,24 @@ public:
                 Arg.print(Policy, OS);
               }
               OS << ">(Resources...);\n";
-              return;
+            } else if (!Name.empty()) {
+              if (IntCast)
+                indent(OS, Indentation) << "switch (int(" << Name << ")) {\n";
+              else
+                indent(OS, Indentation) << "switch (" << Name << ") {\n";
+              for (auto &[Case, Child] : Children) {
+                indent(OS, Indentation) << "case " << Case << ":\n";
+                Child.print(OS, Policy, BindingName, Indentation + 1);
+              }
+              indent(OS, Indentation) << "default:\n";
+              indent(OS, Indentation + 1)
+                  << "assert(false && \"Unimplemented shader "
+                     "specialization\"); return {};\n";
+              indent(OS, Indentation) << "}\n";
+            } else {
+              indent(OS, Indentation) << "assert(false && \"Unimplemented "
+                                         "shader specialization\");\n";
             }
-            indent(OS, Indentation) << "switch (" << Name << ") {\n";
-            for (auto &[Case, Child] : Children) {
-              indent(OS, Indentation) << "case " << Case << ":\n";
-              Child.print(OS, Policy, BindingName, Indentation + 1);
-            }
-            indent(OS, Indentation) << "}\n";
           }
         };
         Node Root;
@@ -5311,6 +5472,8 @@ public:
             TraverseNonConstExprs(NonConstExprs, Specialization,
                                   [&](NonTypeTemplateParmDecl *NTTP,
                                       const TemplateArgument &Arg) {
+                                    if (NTTP->getType()->isBooleanType())
+                                      SpecLeaf->IntCast = true;
                                     SpecLeaf->Name = NTTP->getName();
                                     SpecLeaf =
                                         SpecLeaf->getChild(Arg.getAsIntegral());
@@ -5388,7 +5551,7 @@ public:
     StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
     *OS << "/* Auto-generated hshhead for " << MainName
         << " */\n"
-           "#include <hsh.h>\n\n";
+           "#include <hsh/hsh.h>\n\n";
 
     AnonOS << "namespace {\n\n";
     AfterAnonOS << "template <> hsh::detail::GlobalListNode "
@@ -5424,7 +5587,7 @@ public:
     }
     AfterAnonOS << "};\n\n";
 
-    *OS << AnonOS.str() << AfterAnonOS.str() << ProfileOS.str() << '\n';
+    *OS << AnonOS.str() << AfterAnonOS.str();
 
     /*
      * Emit binding macro functions
@@ -5434,12 +5597,6 @@ public:
     sys::path::replace_extension(ProfFile, ".hshprof");
     SmallString<128> AbsProfFile(ProfFile);
     sys::fs::make_absolute(AbsProfFile);
-    *OS << "#if __has_include(\"" << ProfFile
-        << "\")\n"
-           "#include \""
-        << ProfFile
-        << "\"\n"
-           "#endif\n";
 
     *OS << "namespace {\n";
     for (auto &Exp : SeenHshExpansions)
@@ -5525,12 +5682,24 @@ public:
     Preprocessor &PP;
     FileManager &FM;
     SourceManager &SM;
-    static constexpr llvm::StringLiteral DummyInclude{"#include <hsh.h>\n"};
+    std::string DummyInclude = "#include <hsh/hsh.h>\n";
 
   public:
     explicit PPCallbacks(GenerateConsumer &Consumer, Preprocessor &PP,
                          FileManager &FM, SourceManager &SM)
-        : Consumer(Consumer), PP(PP), FM(FM), SM(SM) {}
+        : Consumer(Consumer), PP(PP), FM(FM), SM(SM) {
+      StringRef OutFileRef =
+          sys::path::filename(Consumer.CI.getFrontendOpts().OutputFile);
+      SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
+      sys::path::replace_extension(ProfFile, ".hshprof");
+      raw_string_ostream DummyOS(DummyInclude);
+      DummyOS << "#if __has_include(\"" << ProfFile
+              << "\")\n"
+                 "#include \""
+              << ProfFile
+              << "\"\n"
+                 "#endif\n";
+    }
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
       if (FileName.endswith_lower(".hshhead"_ll)) {

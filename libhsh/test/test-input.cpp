@@ -1,4 +1,4 @@
-#include <hsh.h>
+#include <hsh/hsh.h>
 
 namespace MyNS {
 enum class PostMode {
@@ -22,61 +22,18 @@ struct UniformData {
   hsh::aligned_float3x3 dynColor;
   float bfloat;
 };
+
+enum AlphaMode {
+  AM_NoAlpha, AM_Alpha
+};
+
+template <AlphaMode AM>
+struct AlphaTraits {
+  static constexpr AlphaMode Mode = AM;
+};
 }
 
 #include "test-input.cpp.hshhead"
-#if 0
-namespace hshprof_DrawSomethingTemplated_specializations {
-using s0 = MyNS::DrawSomethingTemplated<true>;
-using s1 = MyNS::DrawSomethingTemplated<false>;
-using s2 = MyNS::DrawSomethingTemplated<false>;
-using s3 = MyNS::DrawSomethingTemplated<false>;
-using s4 = MyNS::DrawSomethingTemplated<false>;
-}
-#endif
-#if 0
-#define hshprof_DrawSomethingTemplated \
-switch (ZeroAlpha) { \
-case 1: \
-return ::hshbinding_DrawSomethingTemplated<1>(Resources...); \
-case 0: \
-return ::hshbinding_DrawSomethingTemplated<0>(Resources...); \
-}
-#endif
-
-#if 0
-namespace {
-template <typename... Res>
-hsh::binding_typeless hsh_DrawSomething(Res... Resources) {
-  return ::hshbinding_DrawSomething(Resources...);
-}
-#define hsh_DrawSomething(...) ::hsh_DrawSomething(u, v, tex0)
-
-template <typename... Res>
-hsh::binding_typeless hsh_DrawSomethingTemplated(bool ZeroAlpha, Res... Resources) {
-#if HSH_PROFILE_MODE
-  hsh::profile_context::instance
-      .get("/home/jacko/llvm-project/libhsh/test/test-input.cpp.hshprof",
-           "hshprof_DrawSomethingTemplated", "MyNS::DrawSomethingTemplated",
-           "::hshbinding_DrawSomethingTemplated")
-      .add(ZeroAlpha);
-#elif hshprof_DrawSomethingTemplated
-hshprof_DrawSomethingTemplated
-#undef hshprof_DrawSomethingTemplated
-#else
-  /* Generated based on explicit specializations */
-  switch (ZeroAlpha) {
-  case 1:
-    return ::hshbinding_DrawSomethingTemplated<1>(Resources...);
-  case 0:
-    return ::hshbinding_DrawSomethingTemplated<0>(Resources...);
-  }
-#endif
-  return {};
-}
-#define hsh_DrawSomethingTemplated(...) ::hsh_DrawSomethingTemplated(ZeroAlpha, u, v, tex0)
-}
-#endif
 
 namespace MyNS {
 
@@ -100,7 +57,7 @@ struct DrawSomething : pipeline<color_attachment<>> {
 #endif
 
 #if 1
-template <bool ZeroAlpha>
+template <bool Something, class AT>
 struct DrawSomethingTemplated : pipeline<color_attachment<>> {
   DrawSomethingTemplated(hsh::dynamic_uniform_buffer<UniformData> u,
                          hsh::vertex_buffer<MyFormat> v,
@@ -108,7 +65,7 @@ struct DrawSomethingTemplated : pipeline<color_attachment<>> {
     position = u->xf * hsh::float4{v->position, 1.f};
     hsh::float3x3 normalXf = u->xf;
     hsh::float3 finalNormal = normalXf * v->normal;
-    if (ZeroAlpha) {
+    if (AT::Mode == AM_NoAlpha) {
       color_out[0] = hsh::float4{hsh::float3{
           tex0.sample({0.f, 0.f}, TestSampler).xyz() *
           hsh::dot(finalNormal, -u->lightDir)}, 0.f};
@@ -119,8 +76,8 @@ struct DrawSomethingTemplated : pipeline<color_attachment<>> {
     }
   }
 };
-template struct DrawSomethingTemplated<false>;
-template struct DrawSomethingTemplated<true>;
+template struct DrawSomethingTemplated<false, AlphaTraits<MyNS::AlphaMode(0)>>;
+template struct DrawSomethingTemplated<false, AlphaTraits<MyNS::AlphaMode(1)>>;
 #endif
 
 #if 1
@@ -135,8 +92,8 @@ hsh::binding_typeless BindDrawSomething(hsh::dynamic_uniform_buffer_typeless u,
 hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typeless u,
                                         hsh::vertex_buffer_typeless v,
                                         hsh::texture2d<float> tex0,
-                                        bool ZeroAlpha) {
-  return hsh_DrawSomethingTemplated(DrawSomethingTemplated<ZeroAlpha>(u, v, tex0));
+                                        AlphaMode AMode) {
+  return hsh_DrawSomethingTemplated(DrawSomethingTemplated<false, AlphaTraits<AMode>>(u, v, tex0));
 }
 #endif
 

@@ -1,0 +1,75 @@
+#ifdef HSH_MULTI_TRAIT
+union HSH_MULTI_TRAIT {
+#define HSH_ACTIVE_TARGET(Enumeration) TargetTraits<Enumeration>::HSH_MULTI_TRAIT _##Enumeration;
+#include "targets.def"
+  template <typename... Parms>
+  HSH_MULTI_TRAIT(Parms... p) {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(p...); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  ~HSH_MULTI_TRAIT() {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: std::destroy_at(&_##Enumeration); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  HSH_MULTI_TRAIT(const HSH_MULTI_TRAIT &other) {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(other._##Enumeration); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  HSH_MULTI_TRAIT(HSH_MULTI_TRAIT &&other) {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(std::move(other._##Enumeration)); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  HSH_MULTI_TRAIT &operator=(const HSH_MULTI_TRAIT &other) {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration = other._##Enumeration; break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+    return *this;
+  }
+  HSH_MULTI_TRAIT &operator=(HSH_MULTI_TRAIT &&other) {
+    switch (ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration = std::move(other._##Enumeration); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+    return *this;
+  }
+#define HSH_ACTIVE_TARGET(Enumeration) \
+operator TargetTraits<Enumeration>::HSH_MULTI_TRAIT &() { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; } \
+TargetTraits<Enumeration>::HSH_MULTI_TRAIT &get_##Enumeration() { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; }
+#include "targets.def"
+};
+#undef HSH_MULTI_TRAIT
+#endif
+
+#ifdef HSH_SINGLE_TRAIT
+struct HSH_SINGLE_TRAIT {
+  TargetTraits::HSH_SINGLE_TRAIT D;
+  template <typename... Parms>
+  HSH_SINGLE_TRAIT(Parms... p) : D(p...) {}
+#define HSH_ACTIVE_TARGET(Enumeration) \
+operator TargetTraits::HSH_SINGLE_TRAIT &() { return D; } \
+TargetTraits::HSH_SINGLE_TRAIT &get_##Enumeration() { return D; }
+#include "targets.def"
+  };
+#undef HSH_SINGLE_TRAIT
+#endif
