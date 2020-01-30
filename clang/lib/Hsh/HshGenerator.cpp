@@ -955,6 +955,9 @@ private:
   ClassTemplateDecl *ShaderDataTemplateType = nullptr;
   CXXRecordDecl *SamplerRecordType = nullptr;
   CXXRecordDecl *SamplerBindingType = nullptr;
+  APSInt MaxUniforms;
+  APSInt MaxImages;
+  APSInt MaxSamplers;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const TagDecl *, HBT_Max> AlignedTypes{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
@@ -1205,6 +1208,19 @@ private:
     using DeclFinder<MethodFinder>::DeclFinder;
   };
 
+  class VarFinder : public DeclFinder<VarFinder> {
+  public:
+    bool VisitVarDecl(VarDecl *Var) {
+      if (inCorrectNS() && Var->getDeclName().isIdentifier() &&
+          Var->getName() == Name) {
+        Found = Var;
+        return false;
+      }
+      return true;
+    }
+    using DeclFinder<VarFinder>::DeclFinder;
+  };
+
   void addType(ASTContext &Context, HshBuiltinType TypeKind, StringRef Name,
                Decl *D) {
     if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
@@ -1366,6 +1382,40 @@ private:
     return nullptr;
   }
 
+  VarDecl *findVar(StringRef Name, StringRef SubNS, ASTContext &Context) const {
+    if (auto *Ret = dyn_cast_or_null<VarDecl>(
+            VarFinder("hsh"_ll, SubNS)
+                .Find(Name, Context.getTranslationUnitDecl())))
+      return Ret;
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "unable to locate declaration of variable %0%1%2; "
+        "is hsh.h included?"))
+        << SubNS << (!SubNS.empty() ? "::" : "") << Name;
+    return nullptr;
+  }
+
+  APSInt findICEVar(StringRef Name, StringRef SubNS,
+                    ASTContext &Context) const {
+    if (auto *VD = findVar(Name, SubNS, Context)) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      if (auto *Val = VD->evaluateValue()) {
+        if (Val->isInt())
+          return Val->getInt();
+        Diags.Report(
+            Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                  "variable %0%1%2 is not integer constexpr"))
+            << SubNS << (!SubNS.empty() ? "::" : "") << Name;
+        return APSInt{};
+      }
+      Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                         "variable %0%1%2 is not constexpr"))
+          << SubNS << (!SubNS.empty() ? "::" : "") << Name;
+    }
+    return APSInt{};
+  }
+
 public:
   void findBuiltinDecls(ASTContext &Context) {
     PipelineAttributes.findDecls(Context);
@@ -1404,7 +1454,7 @@ public:
     EnumTarget = findEnum("Target"_ll, {}, Context);
     EnumStage = findEnum("Stage"_ll, {}, Context);
     EnumInputRate = findEnum("InputRate"_ll, "detail"_ll, Context);
-    EnumFormat = findEnum("Format"_ll, "detail"_ll, Context);
+    EnumFormat = findEnum("Format"_ll, {}, Context);
     ShaderConstDataTemplateType =
         findClassTemplate("ShaderConstData"_ll, "hsh"_ll, "detail"_ll, Context);
     ShaderDataTemplateType =
@@ -1412,6 +1462,10 @@ public:
     SamplerRecordType = findCXXRecord("sampler"_ll, {}, Context);
     SamplerBindingType =
         findCXXRecord("SamplerBinding"_ll, "detail"_ll, Context);
+
+    MaxUniforms = findICEVar("MaxUniforms"_ll, "detail"_ll, Context);
+    MaxImages = findICEVar("MaxImages"_ll, "detail"_ll, Context);
+    MaxSamplers = findICEVar("MaxSamplers"_ll, "detail"_ll, Context);
 
     TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
@@ -2005,6 +2059,10 @@ public:
     }
     llvm_unreachable("Invalid type passed to formatOfType");
   }
+
+  unsigned getMaxUniforms() const { return MaxUniforms.getZExtValue(); }
+  unsigned getMaxImages() const { return MaxImages.getZExtValue(); }
+  unsigned getMaxSamplers() const { return MaxSamplers.getZExtValue(); }
 };
 
 template <>
@@ -3335,6 +3393,8 @@ public:
 
 class StagesCompilerDxc : public StagesCompilerBase {
   DiagnosticsEngine &Diags;
+  WCHAR TShiftArg[4];
+  WCHAR SShiftArg[4];
   CComPtr<IDxcCompiler3> Compiler;
 
   static constexpr std::array<LPCWSTR, 6> ShaderProfiles{
@@ -3354,7 +3414,17 @@ protected:
         continue;
       DxcText SourceBuf{Stage.data(), Stage.size(), 0};
       LPCWSTR DxArgs[] = {L"-T", Profile};
-      LPCWSTR VkArgs[] = {L"-T", Profile, L"-spirv", L"-fvk-use-dx-layout"};
+      LPCWSTR VkArgs[] = {L"-T",
+                          Profile,
+                          L"-spirv",
+                          L"-fspv-target-env=vulkan1.1",
+                          L"-fvk-use-dx-layout",
+                          L"-fvk-t-shift",
+                          TShiftArg,
+                          L"0",
+                          L"-fvk-s-shift",
+                          SShiftArg,
+                          L"0"};
       LPCWSTR *Args = Target == HT_VULKAN_SPIRV ? VkArgs : DxArgs;
       UINT32 ArgCount = Target == HT_VULKAN_SPIRV
                             ? std::extent_v<decltype(VkArgs)>
@@ -3402,16 +3472,22 @@ protected:
 
 public:
   explicit StagesCompilerDxc(HshTarget Target, StringRef ResourceDir,
-                             DiagnosticsEngine &Diags)
+                             DiagnosticsEngine &Diags, HshBuiltins &Builtins)
       : StagesCompilerBase(Target), Diags(Diags) {
     DxcLibrary::EnsureSharedInstance(ResourceDir, Diags);
     Compiler = DxcLibrary::SharedInstance->MakeCompiler();
+
+    assert(std::swprintf(TShiftArg, 4, L"%u", Builtins.getMaxUniforms()) >= 0);
+    assert(std::swprintf(SShiftArg, 4, L"%u",
+                         Builtins.getMaxUniforms() + Builtins.getMaxImages()) >=
+           0);
   }
 };
 
 std::unique_ptr<StagesCompilerBase> MakeCompiler(HshTarget Target,
                                                  StringRef ResourceDir,
-                                                 DiagnosticsEngine &Diags) {
+                                                 DiagnosticsEngine &Diags,
+                                                 HshBuiltins &Builtins) {
   switch (Target) {
   default:
   case HT_GLSL:
@@ -3420,7 +3496,8 @@ std::unique_ptr<StagesCompilerBase> MakeCompiler(HshTarget Target,
   case HT_DXBC:
   case HT_DXIL:
   case HT_VULKAN_SPIRV:
-    return std::make_unique<StagesCompilerDxc>(Target, ResourceDir, Diags);
+    return std::make_unique<StagesCompilerDxc>(Target, ResourceDir, Diags,
+                                               Builtins);
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
@@ -4799,7 +4876,7 @@ class GenerateConsumer : public ASTConsumer {
     auto &Compiler = Compilers[Target];
     if (!Compiler)
       Compiler = MakeCompiler(Target, CI.getHeaderSearchOpts().ResourceDir,
-                              Context.getDiagnostics());
+                              Context.getDiagnostics(), Builtins);
     return *Compiler;
   }
 

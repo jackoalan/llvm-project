@@ -22,6 +22,7 @@ namespace hsh::detail {
 #define HSH_MAX_SAMPLERS 8
 #define HSH_MAX_VERTEX_BUFFERS 8
 #define HSH_MAX_INDEX_BUFFERS 8
+#define HSH_MAX_RENDER_TEXTURE_BINDINGS 4
 #define HSH_DESCRIPTOR_POOL_SIZE 8192
 
 #ifndef HSH_MAX_UNIFORMS
@@ -39,6 +40,9 @@ namespace hsh::detail {
 #ifndef HSH_MAX_INDEX_BUFFERS
 #error HSH_MAX_INDEX_BUFFERS definition is mandatory!
 #endif
+#ifndef HSH_MAX_RENDER_TEXTURE_BINDINGS
+#error HSH_MAX_RENDER_TEXTURE_BINDINGS definition is mandatory!
+#endif
 #ifndef HSH_DESCRIPTOR_POOL_SIZE
 #error HSH_DESCRIPTOR_POOL_SIZE definition is mandatory!
 #endif
@@ -47,7 +51,61 @@ constexpr uint32_t MaxImages = HSH_MAX_IMAGES;
 constexpr uint32_t MaxSamplers = HSH_MAX_SAMPLERS;
 constexpr uint32_t MaxVertexBuffers = HSH_MAX_VERTEX_BUFFERS;
 constexpr uint32_t MaxIndexBuffers = HSH_MAX_INDEX_BUFFERS;
+constexpr uint32_t MaxRenderTextureBindings = HSH_MAX_RENDER_TEXTURE_BINDINGS;
 constexpr uint32_t MaxDescriptorPoolSets = HSH_DESCRIPTOR_POOL_SIZE;
+
+template <typename T> class ArrayProxy {
+public:
+  constexpr ArrayProxy(std::nullptr_t) noexcept : Length(0), Data(nullptr) {}
+
+  ArrayProxy(const T &OneElt)
+      : Data(&OneElt), Length(1) {}
+
+  ArrayProxy(const T *data, size_t length)
+      : Data(data), Length(length) {}
+
+  ArrayProxy(const T *begin, const T *end)
+      : Data(begin), Length(end - begin) {}
+
+  template<typename A>
+  ArrayProxy(const std::vector<T, A> &Vec)
+      : Data(Vec.data()), Length(Vec.size()) {}
+
+  template <size_t N>
+  constexpr ArrayProxy(const std::array<T, N> &Arr)
+      : Data(Arr.data()), Length(N) {}
+
+  template <size_t N>
+  constexpr ArrayProxy(const T (&Arr)[N]) : Data(Arr), Length(N) {}
+
+  ArrayProxy(const std::initializer_list<T> &Vec)
+      : Data(Vec.begin() == Vec.end() ? (T*)nullptr : Vec.begin()),
+        Length(Vec.size()) {}
+
+  const T *begin() const noexcept { return Data; }
+
+  const T *end() const noexcept { return Data + Length; }
+
+  const T &front() const noexcept {
+    assert(Count && Ptr);
+    return *Data;
+  }
+
+  const T &back() const noexcept {
+    assert(Count && Ptr);
+    return *(Data + Length - 1);
+  }
+
+  bool empty() const noexcept { return (Length == 0); }
+
+  std::size_t size() const noexcept { return Length; }
+
+  const T *data() const noexcept { return Data; }
+
+private:
+  std::size_t Length = 0;
+  const T *Data = nullptr;
+};
 }
 
 #define HSH_ENABLE_LOG 1
@@ -69,9 +127,225 @@ inline void hshVkAssert(const char* pred) {
 #define VMA_ASSERT(pred) if (!(pred)) hshVkAssert(#pred)
 #include "vk_mem_alloc_hsh.h"
 
+namespace VULKAN_HPP_NAMESPACE {
+template <> struct ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
+public:
+  ObjectDestroy() = default;
+  ObjectDestroy(
+      Instance owner, Optional<const AllocationCallbacks> allocationCallbacks,
+      VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT;
+
+protected:
+  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT;
+};
+template <> struct ObjectDestroy<Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
+public:
+  ObjectDestroy() = default;
+  ObjectDestroy(
+      Device owner, Optional<const AllocationCallbacks> allocationCallbacks,
+      VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT;
+
+protected:
+  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT;
+};
+} // namespace VULKAN_HPP_NAMESPACE
+
 namespace hsh::detail::vulkan {
+class BufferAllocation {
+protected:
+  friend BufferAllocation
+  AllocateStaticBuffer(vk::DeviceSize size,
+                       vk::BufferUsageFlagBits usage) noexcept;
+  vk::Buffer Buffer;
+  VmaAllocation Allocation = VK_NULL_HANDLE;
+  BufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation) noexcept
+      : Buffer(Buffer), Allocation(Allocation) {}
+public:
+  BufferAllocation(const BufferAllocation& other) = delete;
+  BufferAllocation &operator=(const BufferAllocation& other) = delete;
+  BufferAllocation(BufferAllocation &&other) {
+    std::swap(Buffer, other.Buffer);
+    std::swap(Allocation, other.Allocation);
+  }
+  BufferAllocation &operator=(BufferAllocation&& other) {
+    std::swap(Buffer, other.Buffer);
+    std::swap(Allocation, other.Allocation);
+    return *this;
+  }
+  ~BufferAllocation() noexcept;
+  vk::Buffer getBuffer() const noexcept { return Buffer; }
+  operator vk::Buffer() const { return getBuffer(); }
+};
+
+class DynamicBufferBinding {
+  friend class DynamicBufferAllocation;
+  vk::Buffer Buffer;
+  vk::DeviceSize SecondOffset;
+  DynamicBufferBinding(vk::Buffer Buffer, vk::DeviceSize SecondOffset)
+      : Buffer(Buffer), SecondOffset(SecondOffset) {}
+public:
+  DynamicBufferBinding() = default;
+  vk::Buffer getBuffer() const noexcept { return Buffer; }
+  vk::DeviceSize getSecondOffset() const noexcept { return SecondOffset; }
+};
+
+class DynamicBufferAllocation : public BufferAllocation {
+  friend DynamicBufferAllocation
+  AllocateDynamicBuffer(vk::DeviceSize size, vk::BufferUsageFlagBits usage) noexcept;
+  void *MappedData;
+  vk::DeviceSize SecondOffset;
+  DynamicBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation,
+                          void *MappedData,
+                          vk::DeviceSize SecondOffset) noexcept
+      : BufferAllocation(Buffer, Allocation), MappedData(MappedData),
+        SecondOffset(SecondOffset) {}
+
+public:
+  DynamicBufferBinding getBinding() const noexcept {
+    return DynamicBufferBinding(Buffer, SecondOffset);
+  }
+  operator DynamicBufferBinding() const noexcept {
+    return getBinding();
+  }
+  vk::DeviceSize getOffset() const noexcept;
+  vk::DescriptorBufferInfo getDescriptorBufferInfo() const noexcept {
+    return {Buffer, 0, SecondOffset};
+  }
+  void *map() noexcept {
+    return reinterpret_cast<uint8_t*>(MappedData) + getOffset();
+  }
+  void unmap() noexcept;
+};
+
+class UploadBufferAllocation : public BufferAllocation {
+  friend UploadBufferAllocation
+  AllocateUploadBuffer(vk::DeviceSize size) noexcept;
+  void *MappedData;
+  UploadBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation,
+                         void *MappedData) noexcept
+      : BufferAllocation(Buffer, Allocation), MappedData(MappedData) {}
+
+public:
+  void *getMappedData() const noexcept { return MappedData; }
+};
+
+struct TextureAllocation {
+  friend TextureAllocation
+  AllocateTexture(const vk::ImageCreateInfo &CreateInfo,
+                  bool Dedicated) noexcept;
+protected:
+  vk::Image Image;
+  VmaAllocation Allocation = VK_NULL_HANDLE;
+  TextureAllocation(vk::Image Image, VmaAllocation Allocation) noexcept
+      : Image(Image), Allocation(Allocation) {}
+public:
+  TextureAllocation() = default;
+  TextureAllocation(const TextureAllocation& other) = delete;
+  TextureAllocation &operator=(const TextureAllocation& other) = delete;
+  TextureAllocation(TextureAllocation &&other) {
+    std::swap(Image, other.Image);
+    std::swap(Allocation, other.Allocation);
+  }
+  TextureAllocation &operator=(TextureAllocation&& other) {
+    std::swap(Image, other.Image);
+    std::swap(Allocation, other.Allocation);
+    return *this;
+  }
+  ~TextureAllocation() noexcept;
+  vk::Image getImage() const noexcept { return Image; }
+};
+
+class SurfaceAllocation {
+  SurfaceAllocation *Prev = nullptr, *Next = nullptr;
+  vk::UniqueSurfaceKHR Surface;
+  vk::UniqueSwapchainKHR Swapchain;
+  vk::Extent2D Extent;
+  vk::Format ColorFormat = vk::Format::eUndefined;
+public:
+  ~SurfaceAllocation() noexcept;
+  explicit SurfaceAllocation(SurfaceAllocation *Next,
+                             vk::UniqueSurfaceKHR &&Surface) noexcept
+      : Next(Next), Surface(std::move(Surface)) {
+    if (Next) Next->Prev = this;
+  }
+  bool EnsureReady() noexcept;
+  const vk::Extent2D &getExtent() const noexcept { return Extent; }
+  vk::Format getColorFormat() const noexcept { return ColorFormat; }
+  SurfaceAllocation *getNext() const { return Next; }
+};
+
+class RenderTextureAllocation;
+class RenderTextureBinding {
+  friend class RenderTextureAllocation;
+  RenderTextureAllocation *Allocation = nullptr;
+  uint32_t BindingIdx = 0;
+  RenderTextureBinding(RenderTextureAllocation &Allocation,
+                       uint32_t BindingIdx) noexcept
+      : Allocation(&Allocation), BindingIdx(BindingIdx) {}
+public:
+  RenderTextureBinding() noexcept = default;
+  operator bool() const noexcept { return Allocation != nullptr; }
+  RenderTextureAllocation *getAllocation() const noexcept { return Allocation; }
+  uint32_t getBindingIdx() const noexcept { return BindingIdx; }
+};
+
+class RenderTextureAllocation {
+  RenderTextureAllocation *Prev = nullptr, *Next = nullptr;
+  SurfaceAllocation *Surface;
+  vk::Extent2D Extent;
+  vk::Format ColorFormat = vk::Format::eUndefined;
+  uint32_t NumColorBindings, NumDepthBindings;
+  TextureAllocation ColorTexture;
+  TextureAllocation DepthTexture;
+  struct Binding {
+    TextureAllocation Texture;
+    vk::UniqueImageView ImageView;
+  };
+  std::array<Binding, MaxRenderTextureBindings> ColorBindings;
+  std::array<Binding, MaxRenderTextureBindings> DepthBindings;
+  void Prepare() noexcept;
+public:
+  ~RenderTextureAllocation() noexcept;
+  explicit RenderTextureAllocation(RenderTextureAllocation *Next,
+                                   SurfaceAllocation *Surface,
+                                   uint32_t NumColorBindings,
+                                   uint32_t NumDepthBindings) noexcept
+      : Next(Next), Surface(Surface), NumColorBindings(NumColorBindings),
+        NumDepthBindings(NumDepthBindings) {
+    if (Next) Next->Prev = this;
+    assert(Surface);
+    assert(NumColorBindings <= MaxRenderTextureBindings);
+    assert(NumDepthBindings <= MaxRenderTextureBindings);
+  }
+  explicit RenderTextureAllocation(RenderTextureAllocation *Next,
+                                   uint32_t width, uint32_t height,
+                                   vk::Format colorFormat,
+                                   uint32_t NumColorBindings,
+                                   uint32_t NumDepthBindings) noexcept
+      : Next(Next), Extent(width, height), ColorFormat(colorFormat),
+        NumColorBindings(NumColorBindings), NumDepthBindings(NumDepthBindings) {
+    if (Next) Next->Prev = this;
+    assert(NumColorBindings <= MaxRenderTextureBindings);
+    assert(NumDepthBindings <= MaxRenderTextureBindings);
+    Prepare();
+  }
+  void EnsureReady() noexcept {
+    if (Surface) {
+      auto &SurfAlloc = *Surface;
+      if (SurfAlloc.getExtent() != Extent ||
+          SurfAlloc.getColorFormat() != ColorFormat) {
+        Extent = SurfAlloc.getExtent();
+        ColorFormat = SurfAlloc.getColorFormat();
+        Prepare();
+      }
+    }
+  }
+  RenderTextureAllocation *getNext() const { return Next; }
+};
+
 inline struct {
   vk::Instance Instance;
+  vk::PhysicalDevice PhysDevice;
   vk::Device Device;
   VmaAllocator Allocator = VK_NULL_HANDLE;
   std::array<vk::DescriptorSetLayout, 64> DescriptorSetLayout;
@@ -84,41 +358,132 @@ inline struct {
   vk::DeviceSize DynamicBufferMask = 0;
   vk::CommandBuffer Cmd;
 
-  void setDescriptorSetLayout(vk::DescriptorSetLayout Layout) noexcept {
+  std::vector<UploadBufferAllocation> PendingUploadBuffers;
+  SurfaceAllocation *SurfaceHead = nullptr;
+  RenderTextureAllocation *RenderTextureHead = nullptr;
+
+  void EnsureReady() noexcept {
+    for (auto *Surf = SurfaceHead; Surf; Surf = Surf->getNext())
+      Surf->EnsureReady();
+    for (auto *RT = RenderTextureHead; RT; RT = RT->getNext())
+      RT->EnsureReady();
+  }
+
+  void SetDescriptorSetLayout(vk::DescriptorSetLayout Layout) noexcept {
     std::fill(DescriptorSetLayout.begin(), DescriptorSetLayout.end(), Layout);
   }
+
+  void SetBufferIndex(unsigned Idx) noexcept {
+    DynamicBufferIndex = Idx;
+    DynamicBufferMask = Idx ? ~VkDeviceSize(0) : 0;
+  }
 } Globals;
+
+bool SurfaceAllocation::EnsureReady() noexcept {
+  auto Capabilities =
+      Globals.PhysDevice.getSurfaceCapabilitiesKHR(Surface.get()).value;
+  if (!Swapchain || Capabilities.currentExtent != Extent) {
+    struct SwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
+      explicit SwapchainCreateInfo(vk::PhysicalDevice PD,
+                                   const vk::SurfaceCapabilitiesKHR &SC,
+                                   vk::SurfaceKHR Surface, vk::Format &FmtOut,
+                                   vk::SwapchainKHR OldSwapchain)
+          : vk::SwapchainCreateInfoKHR({}, Surface) {
+        setMinImageCount(std::max(2u, SC.minImageCount));
+        vk::SurfaceFormatKHR UseFormat;
+        for (auto &Format : PD.getSurfaceFormatsKHR(Surface).value) {
+          if (Format.format == vk::Format::eB8G8R8A8Unorm) {
+            FmtOut = vk::Format::eB8G8R8A8Unorm;
+            UseFormat = Format;
+            break;
+          }
+        }
+        VULKAN_HPP_ASSERT(UseFormat.format != vk::Format::eUndefined);
+        setImageFormat(UseFormat.format)
+            .setImageColorSpace(UseFormat.colorSpace);
+        setImageExtent(SC.currentExtent);
+        setImageArrayLayers(1);
+        constexpr auto WantedUsage = vk::ImageUsageFlagBits::eTransferDst |
+                                     vk::ImageUsageFlagBits::eColorAttachment;
+        VULKAN_HPP_ASSERT((SC.supportedUsageFlags & WantedUsage) ==
+                          WantedUsage);
+        setImageUsage(WantedUsage);
+        setPresentMode(vk::PresentModeKHR::eFifo);
+        setOldSwapchain(OldSwapchain);
+      }
+    };
+    Swapchain = Globals.Device
+                    .createSwapchainKHRUnique(SwapchainCreateInfo(
+                        Globals.PhysDevice, Capabilities, Surface.get(),
+                        ColorFormat, Swapchain.get()))
+                    .value;
+    Extent = Capabilities.currentExtent;
+    return true;
+  }
+  return false;
+}
+
+BufferAllocation::~BufferAllocation() noexcept {
+  vmaDestroyBuffer(Globals.Allocator, Buffer, Allocation);
+}
+
+TextureAllocation::~TextureAllocation() noexcept {
+  vmaDestroyImage(Globals.Allocator, Image, Allocation);
+}
+
+SurfaceAllocation::~SurfaceAllocation() noexcept {
+  if (Prev)
+    Prev->Next = Next;
+  else
+    Globals.SurfaceHead = Next;
+  if (Next)
+    Next->Prev = Prev;
+}
+
+RenderTextureAllocation::~RenderTextureAllocation() noexcept {
+  if (Prev)
+    Prev->Next = Next;
+  else
+    Globals.RenderTextureHead = Next;
+  if (Next)
+    Next->Prev = Prev;
+}
+
+vk::DeviceSize DynamicBufferAllocation::getOffset() const noexcept {
+  return SecondOffset & Globals.DynamicBufferMask;
+}
+
+void DynamicBufferAllocation::unmap() noexcept {
+  vmaFlushAllocation(Globals.Allocator, Allocation, getOffset(), SecondOffset);
+}
 }
 
 namespace VULKAN_HPP_NAMESPACE {
-template <> struct ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
-public:
-  ObjectDestroy() = default;
-  ObjectDestroy(
-      Instance owner, Optional<const AllocationCallbacks> allocationCallbacks,
-      VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
-    assert(owner == ::hsh::detail::vulkan::Globals.Instance);
-  }
-protected:
-  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT {
-    ::hsh::detail::vulkan::Globals.Instance.destroy(
-        t, {}, VULKAN_HPP_DEFAULT_DISPATCHER);
-  }
-};
-template <> struct ObjectDestroy<Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
-public:
-  ObjectDestroy() = default;
-  ObjectDestroy(
-      Device owner, Optional<const AllocationCallbacks> allocationCallbacks,
-      VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
-    assert(owner == ::hsh::detail::vulkan::Globals.Device);
-  }
-protected:
-  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT {
-    ::hsh::detail::vulkan::Globals.Device.destroy(t, {},
-                                                  VULKAN_HPP_DEFAULT_DISPATCHER);
-  }
-};
+ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::ObjectDestroy(
+    Instance owner, Optional<const AllocationCallbacks> allocationCallbacks,
+    VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
+  assert(owner == ::hsh::detail::vulkan::Globals.Instance);
+}
+
+template <typename T>
+void ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::destroy(T t)
+    VULKAN_HPP_NOEXCEPT {
+  ::hsh::detail::vulkan::Globals.Instance.destroy(
+      t, {}, VULKAN_HPP_DEFAULT_DISPATCHER);
+}
+
+ObjectDestroy<Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::ObjectDestroy(
+    Device owner, Optional<const AllocationCallbacks> allocationCallbacks,
+    VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
+  assert(owner == ::hsh::detail::vulkan::Globals.Device);
+}
+
+template <typename T>
+void ObjectDestroy<Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::destroy(T t)
+    VULKAN_HPP_NOEXCEPT {
+  ::hsh::detail::vulkan::Globals.Device.destroy(t, {},
+                                                VULKAN_HPP_DEFAULT_DISPATCHER);
+}
 } // namespace VULKAN_HPP_NAMESPACE
 
 namespace hsh {
@@ -307,61 +672,17 @@ inline VkResult vmaCreateAllocator(const VmaAllocatorCreateInfo& pCreateInfo,
       pAllocator);
 }
 
-class BufferAllocation {
-protected:
-  vk::Buffer Buffer;
-  VmaAllocation Allocation;
-  BufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation) noexcept
-      : Buffer(Buffer), Allocation(Allocation) {}
-public:
-  BufferAllocation(const BufferAllocation& other) = delete;
-  BufferAllocation(BufferAllocation&& other) = delete;
-  BufferAllocation &operator=(const BufferAllocation& other) = delete;
-  BufferAllocation &operator=(BufferAllocation&& other) = delete;
-  ~BufferAllocation() noexcept {
-    vmaDestroyBuffer(Globals.Allocator, Buffer, Allocation);
-  }
-  vk::Buffer getBuffer() const { return Buffer; }
-};
-
-class DynamicBufferBinding {
-  friend class DynamicBufferAllocation;
-  vk::Buffer Buffer;
-  vk::DeviceSize SecondOffset;
-  DynamicBufferBinding(vk::Buffer Buffer, vk::DeviceSize SecondOffset)
-  : Buffer(Buffer), SecondOffset(SecondOffset) {}
-public:
-  vk::Buffer getBuffer() const noexcept { return Buffer; }
-  vk::DeviceSize getSecondOffset() const noexcept { return SecondOffset; }
-};
-
-class DynamicBufferAllocation : public BufferAllocation {
-  friend DynamicBufferAllocation
-  AllocateDynamicBuffer(vk::DeviceSize size, vk::BufferUsageFlagBits usage) noexcept;
-  void *MappedData;
-  vk::DeviceSize SecondOffset;
-  DynamicBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation, void *MappedData, vk::DeviceSize SecondOffset) noexcept
-      : BufferAllocation(Buffer, Allocation), MappedData(MappedData), SecondOffset(SecondOffset) {}
-public:
-  DynamicBufferBinding getBinding() const {
-    return DynamicBufferBinding(Buffer, SecondOffset);
-  }
-  operator DynamicBufferBinding() const {
-    return getBinding();
-  }
-  vk::DeviceSize getOffset() const noexcept {
-    return SecondOffset & Globals.DynamicBufferMask;
-  }
-  vk::DescriptorBufferInfo getDescriptorBufferInfo() const noexcept {
-    return {Buffer, 0, SecondOffset};
-  }
-  void *map() noexcept {
-    return reinterpret_cast<uint8_t*>(MappedData) + getOffset();
-  }
-  void unmap() noexcept {
-    vmaFlushAllocation(Globals.Allocator, Allocation, getOffset(), SecondOffset);
-  }
-};
+inline VkResult
+vmaCreateBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
+                const VmaAllocationCreateInfo &pAllocationCreateInfo,
+                VkBuffer *pBuffer, VmaAllocation *pAllocation,
+                VmaAllocationInfo *pAllocationInfo) noexcept {
+  return ::vmaCreateBuffer(
+      Globals.Allocator,
+      reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
+      reinterpret_cast<const VmaAllocationCreateInfo *>(&pAllocationCreateInfo),
+      pBuffer, pAllocation, pAllocationInfo);
+}
 
 inline VkResult vmaCreateDoubleBuffer(const vk::BufferCreateInfo& pBufferCreateInfo,
                                       const VmaAllocationCreateInfo& pAllocationCreateInfo,
@@ -374,6 +695,22 @@ inline VkResult vmaCreateDoubleBuffer(const vk::BufferCreateInfo& pBufferCreateI
       reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
       reinterpret_cast<const VmaAllocationCreateInfo *>(&pAllocationCreateInfo),
       pBuffer, pAllocation, pAllocationInfo, secondOffset);
+}
+
+inline BufferAllocation
+AllocateStaticBuffer(vk::DeviceSize size,
+                     vk::BufferUsageFlagBits usage) noexcept {
+  struct StaticUniformBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+    constexpr StaticUniformBufferAllocationCreateInfo() noexcept
+        : VmaAllocationCreateInfo{0, VMA_MEMORY_USAGE_GPU_ONLY} {}
+  };
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VULKAN_HPP_ASSERT(vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
+                                    StaticUniformBufferAllocationCreateInfo(),
+                                    &Buffer, &Allocation,
+                                    nullptr) == VK_SUCCESS);
+  return BufferAllocation(Buffer, Allocation);
 }
 
 inline DynamicBufferAllocation
@@ -396,11 +733,93 @@ AllocateDynamicBuffer(vk::DeviceSize size,
                                  SecondOffset);
 }
 
-struct TextureBinding {
-  vk::ImageView ImageView;
-  std::uint8_t NumMips : 7;
-  std::uint8_t Integer : 1;
-};
+inline UploadBufferAllocation
+AllocateUploadBuffer(vk::DeviceSize size) noexcept {
+  struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+    constexpr UploadBufferAllocationCreateInfo() noexcept
+        : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                  VMA_MEMORY_USAGE_CPU_ONLY} {}
+  };
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VmaAllocationInfo AllocInfo;
+  VULKAN_HPP_ASSERT(vmaCreateBuffer(
+      vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
+      UploadBufferAllocationCreateInfo(), &Buffer,
+      &Allocation, &AllocInfo) == VK_SUCCESS);
+  return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
+}
+
+inline TextureAllocation AllocateTexture(const vk::ImageCreateInfo &CreateInfo,
+                                         bool Dedicated = false) noexcept {
+  struct TextureAllocationCreateInfo : VmaAllocationCreateInfo {
+    constexpr TextureAllocationCreateInfo(bool Dedicated) noexcept
+        : VmaAllocationCreateInfo{
+              Dedicated ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
+                        : VmaAllocationCreateFlagBits(0),
+              VMA_MEMORY_USAGE_GPU_ONLY} {}
+  } AllocationCreateInfo{Dedicated};
+  VkImage Image;
+  VmaAllocation Allocation;
+  VULKAN_HPP_ASSERT(
+      vmaCreateImage(Globals.Allocator,
+                     reinterpret_cast<const VkImageCreateInfo *>(&CreateInfo),
+                     &AllocationCreateInfo, &Image, &Allocation,
+                     nullptr) == VK_SUCCESS);
+  return TextureAllocation(Image, Allocation);
+}
+
+void RenderTextureAllocation::Prepare() noexcept {
+  ColorTexture = AllocateTexture(vk::ImageCreateInfo(
+      {}, vk::ImageType::e2D, ColorFormat, vk::Extent3D(Extent),
+      1, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eColorAttachment |
+      vk::ImageUsageFlagBits::eTransferSrc,
+      {}, {}, {}, vk::ImageLayout::eUndefined), true);
+  DepthTexture = AllocateTexture(vk::ImageCreateInfo(
+      {}, vk::ImageType::e2D, vk::Format::eD32Sfloat, vk::Extent3D(Extent),
+      1, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eDepthStencilAttachment |
+      vk::ImageUsageFlagBits::eTransferSrc,
+      {}, {}, {}, vk::ImageLayout::eUndefined), true);
+  for (uint32_t i = 0; i < NumColorBindings; ++i) {
+    ColorBindings[i].Texture = AllocateTexture(
+        vk::ImageCreateInfo(
+            {}, vk::ImageType::e2D, ColorFormat, vk::Extent3D(Extent), 1, 1,
+            vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eSampled |
+                vk::ImageUsageFlagBits::eTransferDst,
+            {}, {}, {}, vk::ImageLayout::eUndefined),
+        true);
+    ColorBindings[i].ImageView =
+        vulkan::Globals.Device
+            .createImageViewUnique(vk::ImageViewCreateInfo(
+                {}, ColorBindings[i].Texture.getImage(), vk::ImageViewType::e2D,
+                ColorFormat, {},
+                vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1,
+                                          0, 1)))
+            .value;
+  }
+  for (uint32_t i = 0; i < NumDepthBindings; ++i) {
+    DepthBindings[i].Texture = AllocateTexture(
+        vk::ImageCreateInfo({}, vk::ImageType::e2D, vk::Format::eD32Sfloat,
+                            vk::Extent3D(Extent), 1, 1,
+                            vk::SampleCountFlagBits::e1,
+                            vk::ImageTiling::eOptimal,
+                            vk::ImageUsageFlagBits::eSampled |
+                                vk::ImageUsageFlagBits::eTransferDst,
+                            {}, {}, {}, vk::ImageLayout::eUndefined),
+        true);
+    DepthBindings[i].ImageView =
+        vulkan::Globals.Device
+            .createImageViewUnique(vk::ImageViewCreateInfo(
+                {}, DepthBindings[i].Texture.getImage(), vk::ImageViewType::e2D,
+                vk::Format::eD32Sfloat, {},
+                vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1,
+                                          0, 1)))
+            .value;
+  }
+}
 }
 #endif
 
@@ -447,31 +866,91 @@ inline enum Target ActiveTarget = FirstStaticallyActiveTarget();
 
 template <Target T>
 struct TargetTraits {
-  struct UniformBufferBinding {};
   struct UniformBufferOwner {};
-  struct DynamicUniformBufferBinding {};
+  struct UniformBufferBinding {};
   struct DynamicUniformBufferOwner {};
-  struct VertexBufferBinding {};
+  struct DynamicUniformBufferBinding {};
   struct VertexBufferOwner {};
-  struct DynamicVertexBufferBinding {};
+  struct VertexBufferBinding {};
   struct DynamicVertexBufferOwner {};
-  struct TextureBinding {};
+  struct DynamicVertexBufferBinding {};
   struct TextureOwner {};
+  struct TextureBinding {};
+  struct RenderTextureOwner {};
+  struct RenderTextureBinding {};
+  struct SurfaceOwner {};
+  struct SurfaceBinding {};
   struct PipelineBinding {};
+  template <typename ResTp>
+  struct ResourceFactory {};
 };
 #if HSH_ENABLE_VULKAN
 template <>
 struct TargetTraits<VULKAN_SPIRV> {
-  using UniformBufferBinding = vk::Buffer;
   using UniformBufferOwner = vulkan::BufferAllocation;
-  using DynamicUniformBufferBinding = vulkan::DynamicBufferBinding;
+  using UniformBufferBinding = vk::Buffer;
   using DynamicUniformBufferOwner = vulkan::DynamicBufferAllocation;
-  using VertexBufferBinding = vk::Buffer;
+  using DynamicUniformBufferBinding = vulkan::DynamicBufferBinding;
   using VertexBufferOwner = vulkan::BufferAllocation;
-  using DynamicVertexBufferBinding = vulkan::DynamicBufferBinding;
+  using VertexBufferBinding = vk::Buffer;
   using DynamicVertexBufferOwner = vulkan::DynamicBufferAllocation;
-  using TextureBinding = vulkan::TextureBinding;
-  struct TextureOwner {};
+  using DynamicVertexBufferBinding = vulkan::DynamicBufferBinding;
+  struct TextureBinding {
+    vk::ImageView ImageView;
+    std::uint8_t NumMips : 7;
+    std::uint8_t Integer : 1;
+  };
+  struct TextureOwner {
+    vulkan::TextureAllocation Allocation;
+    vk::UniqueImageView ImageView;
+    std::uint8_t NumMips : 7;
+    std::uint8_t Integer : 1;
+    TextureOwner(const TextureOwner& other) = delete;
+    TextureOwner &operator=(const TextureOwner& other) = delete;
+    TextureOwner(TextureOwner &&other) = default;
+    TextureOwner &operator=(TextureOwner&& other) = default;
+
+    TextureBinding getBinding() const noexcept {
+      return TextureBinding{ImageView.get(), NumMips, Integer};
+    }
+    operator TextureBinding() const noexcept {
+      return getBinding();
+    }
+  };
+  struct RenderTextureBinding {
+    vulkan::RenderTextureAllocation *Allocation = nullptr;
+  };
+  struct RenderTextureOwner {
+    std::unique_ptr<vulkan::RenderTextureAllocation> Allocation;
+    RenderTextureOwner(const RenderTextureOwner& other) = delete;
+    RenderTextureOwner &operator=(const RenderTextureOwner& other) = delete;
+    RenderTextureOwner(RenderTextureOwner &&other) = default;
+    RenderTextureOwner &operator=(RenderTextureOwner&& other) = default;
+
+    RenderTextureBinding getBinding() const noexcept {
+      return RenderTextureBinding{Allocation.get()};
+    }
+    operator RenderTextureBinding() const noexcept {
+      return getBinding();
+    }
+  };
+  struct SurfaceBinding {
+    vulkan::SurfaceAllocation *Allocation = nullptr;
+  };
+  struct SurfaceOwner {
+    std::unique_ptr<vulkan::SurfaceAllocation> Allocation;
+    SurfaceOwner(const SurfaceOwner& other) = delete;
+    SurfaceOwner &operator=(const SurfaceOwner& other) = delete;
+    SurfaceOwner(SurfaceOwner &&other) = default;
+    SurfaceOwner &operator=(SurfaceOwner&& other) = default;
+
+    SurfaceBinding getBinding() const noexcept {
+      return SurfaceBinding{Allocation.get()};
+    }
+    operator SurfaceBinding() const noexcept {
+      return getBinding();
+    }
+  };
   struct PipelineBinding {
     vk::Pipeline Pipeline;
     vulkan::UniqueDescriptorSet DescriptorSet;
@@ -500,57 +979,146 @@ struct TargetTraits<VULKAN_SPIRV> {
     template <typename Impl, typename... Args>
     explicit PipelineBinding(ClassWrapper<Impl>, Args... args);
   };
+
+  template <typename ResTp>
+  struct ResourceFactory {};
 };
 #endif
 template <unsigned NSTs>
 struct SelectTargetTraits {
-#define HSH_MULTI_TRAIT UniformBufferBinding
-#include "trait.def"
+#define HSH_TRAIT_BINDING UniformBufferBinding
 #define HSH_MULTI_TRAIT UniformBufferOwner
 #include "trait.def"
-#define HSH_MULTI_TRAIT DynamicUniformBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER UniformBufferOwner
+#define HSH_MULTI_TRAIT UniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicUniformBufferBinding
 #define HSH_MULTI_TRAIT DynamicUniformBufferOwner
 #include "trait.def"
-#define HSH_MULTI_TRAIT VertexBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicUniformBufferOwner
+#define HSH_MULTI_TRAIT DynamicUniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING VertexBufferBinding
 #define HSH_MULTI_TRAIT VertexBufferOwner
 #include "trait.def"
-#define HSH_MULTI_TRAIT DynamicVertexBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER VertexBufferOwner
+#define HSH_MULTI_TRAIT VertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicVertexBufferBinding
 #define HSH_MULTI_TRAIT DynamicVertexBufferOwner
 #include "trait.def"
-#define HSH_MULTI_TRAIT TextureBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicVertexBufferOwner
+#define HSH_MULTI_TRAIT DynamicVertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING TextureBinding
 #define HSH_MULTI_TRAIT TextureOwner
 #include "trait.def"
+
+#define HSH_TRAIT_OWNER TextureOwner
+#define HSH_MULTI_TRAIT TextureBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING RenderTextureBinding
+#define HSH_MULTI_TRAIT RenderTextureOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER RenderTextureOwner
+#define HSH_MULTI_TRAIT RenderTextureBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING SurfaceBinding
+#define HSH_MULTI_TRAIT SurfaceOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER SurfaceOwner
+#define HSH_MULTI_TRAIT SurfaceBinding
+#include "trivial_trait.def"
+
 #define HSH_MULTI_TRAIT PipelineBinding
+#include "trait.def"
+
+#define HSH_TRAIT_TEMPLATE_PARMS template<typename ResTp>
+#define HSH_TRAIT_TEMPLATE_REFS <ResTp>
+#define HSH_MULTI_TRAIT ResourceFactory
 #include "trait.def"
 };
 template <>
 struct SelectTargetTraits<1> {
   using TargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
-#define HSH_SINGLE_TRAIT UniformBufferBinding
-#include "trait.def"
+#define HSH_TRAIT_BINDING UniformBufferBinding
 #define HSH_SINGLE_TRAIT UniformBufferOwner
 #include "trait.def"
-#define HSH_SINGLE_TRAIT DynamicUniformBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER UniformBufferOwner
+#define HSH_SINGLE_TRAIT UniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicUniformBufferBinding
 #define HSH_SINGLE_TRAIT DynamicUniformBufferOwner
 #include "trait.def"
-#define HSH_SINGLE_TRAIT VertexBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicUniformBufferOwner
+#define HSH_SINGLE_TRAIT DynamicUniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING VertexBufferBinding
 #define HSH_SINGLE_TRAIT VertexBufferOwner
 #include "trait.def"
-#define HSH_SINGLE_TRAIT DynamicVertexBufferBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER VertexBufferOwner
+#define HSH_SINGLE_TRAIT VertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicVertexBufferBinding
 #define HSH_SINGLE_TRAIT DynamicVertexBufferOwner
 #include "trait.def"
-#define HSH_SINGLE_TRAIT TextureBinding
-#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicVertexBufferOwner
+#define HSH_SINGLE_TRAIT DynamicVertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING TextureBinding
 #define HSH_SINGLE_TRAIT TextureOwner
 #include "trait.def"
+
+#define HSH_TRAIT_OWNER TextureOwner
+#define HSH_SINGLE_TRAIT TextureBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING RenderTextureBinding
+#define HSH_SINGLE_TRAIT RenderTextureOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER RenderTextureOwner
+#define HSH_SINGLE_TRAIT RenderTextureBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING SurfaceBinding
+#define HSH_SINGLE_TRAIT SurfaceOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER SurfaceOwner
+#define HSH_SINGLE_TRAIT SurfaceBinding
+#include "trivial_trait.def"
+
 #define HSH_SINGLE_TRAIT PipelineBinding
+#include "trait.def"
+
+#define HSH_TRAIT_TEMPLATE_PARMS template<typename ResTp>
+#define HSH_TRAIT_TEMPLATE_REFS <ResTp>
+#define HSH_SINGLE_TRAIT ResourceFactory
 #include "trait.def"
 };
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
@@ -571,16 +1139,18 @@ struct uniform_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
   template <typename... Args>
-  explicit uniform_buffer_typeless(const char *UniqueId, Args... args)
-  : UniqueId(UniqueId), Binding(args...) {}
+  explicit uniform_buffer_typeless(const char *UniqueId, Args&&... args)
+  : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit uniform_buffer_typeless(
       const char *UniqueId, uniform_buffer_typeless other)
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit uniform_buffer_typeless(Args... args) : Binding(args...) {}
+  explicit uniform_buffer_typeless(Args&&... args) : Binding(std::forward<Args>(args)...) {}
 #endif
   detail::ActiveTargetTraits::UniformBufferBinding Binding;
+  template <typename T>
+  explicit uniform_buffer_typeless(uniform_buffer<T> other) : Binding(other.Binding) {}
   template <typename T>
   uniform_buffer<T> cast() const;
   template <typename T>
@@ -590,16 +1160,18 @@ struct dynamic_uniform_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
   template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(const char *UniqueId, Args... args)
-      : UniqueId(UniqueId), Binding(args...) {}
+  explicit dynamic_uniform_buffer_typeless(const char *UniqueId, Args&&... args)
+      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit dynamic_uniform_buffer_typeless(
       const char *UniqueId, dynamic_uniform_buffer_typeless other)
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(Args... args) : Binding(args...) {}
+  explicit dynamic_uniform_buffer_typeless(Args&&... args) : Binding(std::forward<Args>(args)...) {}
 #endif
   detail::ActiveTargetTraits::DynamicUniformBufferBinding Binding;
+  template <typename T>
+  explicit dynamic_uniform_buffer_typeless(dynamic_uniform_buffer<T> other) : Binding(other.Binding) {}
   template <typename T>
   dynamic_uniform_buffer<T> cast() const;
   template <typename T>
@@ -609,16 +1181,18 @@ struct vertex_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
   template <typename... Args>
-  explicit vertex_buffer_typeless(const char *UniqueId, Args... args)
-      : UniqueId(UniqueId), Binding(args...) {}
+  explicit vertex_buffer_typeless(const char *UniqueId, Args&&... args)
+      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit vertex_buffer_typeless(
       const char *UniqueId, vertex_buffer_typeless other)
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit vertex_buffer_typeless(Args... args) : Binding(args...) {}
+  explicit vertex_buffer_typeless(Args&&... args) : Binding(std::forward<Args>(args)...) {}
 #endif
   detail::ActiveTargetTraits::VertexBufferBinding Binding;
+  template <typename T>
+  explicit vertex_buffer_typeless(vertex_buffer<T> other) : Binding(other.Binding) {}
   template <typename T>
   vertex_buffer<T> cast() const;
   template <typename T>
@@ -628,16 +1202,18 @@ struct dynamic_vertex_buffer_typeless : base_buffer {
 #ifndef NDEBUG
   const char *UniqueId;
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(const char *UniqueId, Args... args)
-      : UniqueId(UniqueId), Binding(args...) {}
+  explicit dynamic_vertex_buffer_typeless(const char *UniqueId, Args&&... args)
+      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit dynamic_vertex_buffer_typeless(
       const char *UniqueId, dynamic_vertex_buffer_typeless other)
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(Args... args) : Binding(args...) {}
+  explicit dynamic_vertex_buffer_typeless(Args&&... args) : Binding(std::forward<Args>(args)...) {}
 #endif
   detail::ActiveTargetTraits::DynamicVertexBufferBinding Binding;
+  template <typename T>
+  explicit dynamic_vertex_buffer_typeless(dynamic_vertex_buffer<T> other) : Binding(other.Binding) {}
   template <typename T>
   dynamic_vertex_buffer<T> cast() const;
   template <typename T>
@@ -647,17 +1223,19 @@ struct dynamic_vertex_buffer_typeless : base_buffer {
 #ifndef NDEBUG
 #define HSH_CASTABLE_BUFFER(derived) \
 template <typename T> struct derived : derived##_typeless { \
+using MappedType = T; \
 static constexpr char StaticUniqueId{}; \
 template <typename... Args> \
-explicit derived(Args... args) : derived##_typeless(&StaticUniqueId, args...) {} \
+explicit derived(Args&&... args) : derived##_typeless(&StaticUniqueId, std::forward<Args>(args)...) {} \
 const T *operator->() const { assert(false && "Not to be used from host!"); return nullptr; } \
 const T &operator*() const { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
 };
 #else
 #define HSH_CASTABLE_BUFFER(derived) \
 template <typename T> struct derived : derived##_typeless { \
+using MappedType = T; \
 template <typename... Args> \
-explicit derived(Args... args) : derived##_typeless(args...) {} \
+explicit derived(Args&&... args) : derived##_typeless(std::forward<Args>(args)...) {} \
 const T *operator->() const { assert(false && "Not to be used from host!"); return nullptr; } \
 const T &operator*() const { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
 };
@@ -968,17 +1546,32 @@ using scalar_to_vector_t = typename scalar_to_vector<T, N>::type;
 
 struct base_texture {};
 
+template <typename T> struct texture1d;
+template <typename T> struct texture1d_array;
+template <typename T> struct texture2d;
+template <typename T> struct texture2d_array;
+template <typename T> struct texture3d;
+template <typename T> struct texturecube;
+template <typename T> struct texturecube_array;
+
 struct texture_typeless : base_texture {
 #ifndef NDEBUG
   const char *UniqueId;
   template <typename... Args>
-  explicit texture_typeless(const char *UniqueId, Args... args)
-      : UniqueId(UniqueId), Binding(args...) {}
+  explicit texture_typeless(const char *UniqueId, Args&&... args)
+      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
 #else
   template <typename... Args>
-  explicit texture_typeless(Args... args) : Binding(args...) {}
+  explicit texture_typeless(Args&&... args) : Binding(std::forward<Args>(args)...) {}
 #endif
   detail::ActiveTargetTraits::TextureBinding Binding;
+  template <typename T> explicit texture_typeless(texture1d<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texture1d_array<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texture2d<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texture2d_array<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texture3d<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texturecube<T> other) : Binding(other.Binding) {}
+  template <typename T> explicit texture_typeless(texturecube_array<T> other) : Binding(other.Binding) {}
   template <typename T>
   T cast() const {
     assert(UniqueId == &T::StaticUniqueId && "bad cast");
@@ -993,14 +1586,15 @@ struct texture_typeless : base_texture {
 template <typename T> struct derived : texture_typeless { \
 static constexpr char StaticUniqueId{}; \
 template <typename... Args> \
-explicit derived(Args... args) : texture_typeless(&StaticUniqueId, args...) {} \
+explicit derived(Args&&... args) : texture_typeless(&StaticUniqueId, std::forward<Args>(args)...) {} \
 scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const { return {}; } \
 };
 #else
 #define HSH_CASTABLE_TEXTURE(derived, coordt) \
 template <typename T> struct derived : texture_typeless { \
+using MappedType = void; \
 template <typename... Args> \
-explicit derived(Args... args) : texture_typeless(args...) {} \
+explicit derived(Args&&... args) : texture_typeless(std::forward<Args>(args)...) {} \
 scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const { return {}; } \
 };
 #endif
@@ -1013,13 +1607,14 @@ HSH_CASTABLE_TEXTURE(texturecube, float3)
 HSH_CASTABLE_TEXTURE(texturecube_array, float4)
 #undef HSH_CASTABLE_TEXTURE
 
-template <typename T>
-struct resource_owner {
-  typename decltype(T::Binding)::Owner Owner;
-  T get() const { return T(Owner); }
-  operator T() const { return get(); }
-  void *map() noexcept { return Owner.map(); }
-  void unmap() noexcept { Owner.unmap(); }
+struct render_texture2d {
+  using MappedType = void;
+  detail::ActiveTargetTraits::RenderTextureBinding Binding;
+};
+
+struct surface {
+  using MappedType = void;
+  detail::ActiveTargetTraits::SurfaceBinding Binding;
 };
 
 float dot(const float2 &a, const float2 &b) {
@@ -1150,6 +1745,37 @@ enum ColorComponentFlags : std::uint8_t {
   Alpha = 8
 };
 
+enum Format : std::uint8_t {
+  R8_UNORM,
+  RG8_UNORM,
+  RGB8_UNORM,
+  RGBA8_UNORM,
+  R16_UNORM,
+  RG16_UNORM,
+  RGB16_UNORM,
+  RGBA16_UNORM,
+  R32_UINT,
+  RG32_UINT,
+  RGB32_UINT,
+  RGBA32_UINT,
+  R8_SNORM,
+  RG8_SNORM,
+  RGB8_SNORM,
+  RGBA8_SNORM,
+  R16_SNORM,
+  RG16_SNORM,
+  RGB16_SNORM,
+  RGBA16_SNORM,
+  R32_SINT,
+  RG32_SINT,
+  RGB32_SINT,
+  RGBA32_SINT,
+  R32_SFLOAT,
+  RG32_SFLOAT,
+  RGB32_SFLOAT,
+  RGBA32_SFLOAT,
+};
+
 namespace pipeline {
 template <bool CA = false, bool InShader = false> struct base_attribute {
   static constexpr bool is_ca = CA;
@@ -1232,36 +1858,78 @@ struct VertexBinding {
       : Stride(Stride), Binding(Binding), InputRate(InputRate) {}
 };
 
-enum Format : std::uint8_t {
-  R8_UNORM,
-  RG8_UNORM,
-  RGB8_UNORM,
-  RGBA8_UNORM,
-  R16_UNORM,
-  RG16_UNORM,
-  RGB16_UNORM,
-  RGBA16_UNORM,
-  R32_UINT,
-  RG32_UINT,
-  RGB32_UINT,
-  RGBA32_UINT,
-  R8_SNORM,
-  RG8_SNORM,
-  RGB8_SNORM,
-  RGBA8_SNORM,
-  R16_SNORM,
-  RG16_SNORM,
-  RGB16_SNORM,
-  RGBA16_SNORM,
-  R32_SINT,
-  RG32_SINT,
-  RGB32_SINT,
-  RGBA32_SINT,
-  R32_SFLOAT,
-  RG32_SFLOAT,
-  RGB32_SFLOAT,
-  RGBA32_SFLOAT,
-};
+constexpr std::size_t HshFormatToTexelSize(Format format) {
+  switch (format) {
+  case R8_UNORM:
+    return 1;
+  case RG8_UNORM:
+    return 2;
+  case RGB8_UNORM:
+    return 3;
+  case RGBA8_UNORM:
+    return 4;
+  case R16_UNORM:
+    return 2;
+  case RG16_UNORM:
+    return 4;
+  case RGB16_UNORM:
+    return 6;
+  case RGBA16_UNORM:
+    return 8;
+  case R32_UINT:
+    return 4;
+  case RG32_UINT:
+    return 8;
+  case RGB32_UINT:
+    return 12;
+  case RGBA32_UINT:
+    return 16;
+  case R8_SNORM:
+    return 1;
+  case RG8_SNORM:
+    return 2;
+  case RGB8_SNORM:
+    return 3;
+  case RGBA8_SNORM:
+    return 4;
+  case R16_SNORM:
+    return 2;
+  case RG16_SNORM:
+    return 4;
+  case RGB16_SNORM:
+    return 6;
+  case RGBA16_SNORM:
+    return 8;
+  case R32_SINT:
+    return 4;
+  case RG32_SINT:
+    return 8;
+  case RGB32_SINT:
+    return 12;
+  case RGBA32_SINT:
+    return 16;
+  case R32_SFLOAT:
+    return 4;
+  case RG32_SFLOAT:
+    return 8;
+  case RGB32_SFLOAT:
+    return 12;
+  case RGBA32_SFLOAT:
+    return 16;
+  }
+}
+
+constexpr bool HshFormatIsInteger(Format format) {
+  switch (format) {
+  default:
+    return true;
+  case R32_SFLOAT:
+  case RG32_SFLOAT:
+  case RGB32_SFLOAT:
+  case RGBA32_SFLOAT:
+    return false;
+  }
+}
 
 /* Holds constant vertex attribute binding information */
 struct VertexAttribute {
@@ -1362,6 +2030,24 @@ struct PipelineBuilder {
     assert(false && "unimplemented pipeline builder");
   }
 };
+
+namespace buffer_math {
+constexpr std::size_t MipSize2D(std::size_t width, std::size_t height,
+                                std::size_t texelSize, bool NotZero) {
+  return NotZero ? (width * height * texelSize) : 0;
+}
+template <std::size_t... Idx>
+constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
+                                  std::size_t texelSize, std::size_t Mip,
+                                  std::index_sequence<Idx...>) {
+  return (MipSize2D(width >> Idx, height >> Idx, texelSize, Idx < Mip) + ...);
+}
+constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
+                                  std::size_t texelSize, std::size_t Mip) {
+  return MipOffset2D(width, height, texelSize, Mip,
+                     std::make_index_sequence<MaxMipCount>());
+}
+} // namespace buffer_math
 
 #if HSH_ENABLE_VULKAN
 constexpr vk::Format HshToVkFormat(Format Format) {
@@ -1597,6 +2283,19 @@ constexpr vk::ColorComponentFlagBits HshToVkColorComponentFlags(enum ColorCompon
       (Comps & Green ? unsigned(vk::ColorComponentFlagBits::eG) : 0u) |
       (Comps & Blue ? unsigned(vk::ColorComponentFlagBits::eB) : 0u) |
       (Comps & Alpha ? unsigned(vk::ColorComponentFlagBits::eA) : 0u));
+}
+
+constexpr vk::ComponentSwizzle HshToVkComponentSwizzle(ColorComponentFlags flag) {
+  switch (flag) {
+  case Red:
+    return vk::ComponentSwizzle::eR;
+  case Green:
+    return vk::ComponentSwizzle::eG;
+  case Blue:
+    return vk::ComponentSwizzle::eB;
+  case Alpha:
+    return vk::ComponentSwizzle::eA;
+  }
 }
 
 template <> struct ShaderCode<VULKAN_SPIRV> {
@@ -1847,34 +2546,183 @@ struct ShaderData<VULKAN_SPIRV, NStages, NSamplers> {
 
 template <> struct PipelineBuilder<VULKAN_SPIRV> {
   template <typename B>
-  static constexpr std::size_t get_num_stages(bool NotZero) {
+  static constexpr std::size_t GetNumStages(bool NotZero) {
     return NotZero ? B::template cdata<VULKAN_SPIRV>.StageCodes.size() : 0;
   }
   template <typename... B, std::size_t... BSeq>
-  static constexpr std::size_t stage_info_start(std::size_t BIdx,
-                                                std::index_sequence<BSeq...>) {
-    return (get_num_stages<B>(BSeq < BIdx) + ...);
+  static constexpr std::size_t StageInfoStart(std::size_t BIdx,
+                                              std::index_sequence<BSeq...>) {
+    return (GetNumStages<B>(BSeq < BIdx) + ...);
   }
-  template <typename B> static void set_pipeline(vk::Pipeline data) {
+  template <typename B> static void SetPipeline(vk::Pipeline data) {
     vk::ObjectDestroy<vk::Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> deleter(
         vulkan::Globals.Device, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
-    B::template data<VULKAN_SPIRV>.Pipeline =
-        vk::UniquePipeline(data, deleter);
+    B::template data<VULKAN_SPIRV>.Pipeline = vk::UniquePipeline(data, deleter);
   }
   template <typename... B, std::size_t... BSeq>
   static void build_pipelines(std::index_sequence<BSeq...> seq) {
-    std::array<VkPipelineShaderStageCreateInfo,
-               (get_num_stages<B>(true) + ...)>
+    std::array<VkPipelineShaderStageCreateInfo, (GetNumStages<B>(true) + ...)>
         ShaderStageInfos;
     std::array<vk::GraphicsPipelineCreateInfo, sizeof...(B)> Infos{
         B::template cdata<VULKAN_SPIRV>.template getPipelineInfo<B>(
-          ShaderStageInfos.data() + stage_info_start<B...>(BSeq, seq))...};
+            ShaderStageInfos.data() + StageInfoStart<B...>(BSeq, seq))...};
     std::array<vk::Pipeline, sizeof...(B)> Pipelines;
     VULKAN_HPP_ASSERT(vulkan::Globals.Device.createGraphicsPipelines(
                           {}, Infos.size(), Infos.data(), nullptr,
                           Pipelines.data()) == vk::Result::eSuccess);
-    (set_pipeline<B>(Pipelines[BSeq]), ...);
+    (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
+};
+
+namespace buffer_math::vulkan {
+template <std::size_t... Idx>
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
+             vk::ImageAspectFlagBits aspect, std::index_sequence<Idx...>) {
+  return {vk::BufferImageCopy(
+      MipOffset2D(width, height, texelSize, Idx), width >> Idx, height >> Idx,
+      {aspect, Idx, 0, 1}, {},
+      {uint32_t(width >> Idx), uint32_t(height >> Idx), 1})...};
+}
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
+             vk::ImageAspectFlagBits aspect) {
+  return MakeCopies2D(width, height, texelSize, aspect,
+                      std::make_index_sequence<MaxMipCount>());
+}
+} // namespace buffer_math::vulkan
+
+template <typename T>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
+  template <typename CopyFunc> static auto Create(CopyFunc copyFunc) {
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(sizeof(T));
+    copyFunc(UploadBuffer.getMappedData(), sizeof(T));
+
+    TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
+        vulkan::AllocateStaticBuffer(sizeof(T),
+                                     vk::BufferUsageFlagBits::eUniformBuffer);
+
+    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
+                                   vk::BufferCopy(0, 0, sizeof(T)));
+
+    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
+
+    return Ret;
+  }
+};
+
+template <typename T>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_uniform_buffer<T>> {
+  static auto Create() {
+    return vulkan::AllocateDynamicBuffer(
+        sizeof(T), vk::BufferUsageFlagBits::eUniformBuffer);
+  }
+};
+
+template <typename T>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
+  template <typename CopyFunc>
+  static auto Create(std::size_t Count, CopyFunc copyFunc) {
+    std::size_t Size = sizeof(T) * Count;
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(Size);
+    copyFunc(UploadBuffer.getMappedData(), Size);
+
+    TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
+        vulkan::AllocateStaticBuffer(Size,
+                                     vk::BufferUsageFlagBits::eVertexBuffer);
+
+    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
+                                   vk::BufferCopy(0, 0, Size));
+
+    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
+
+    return Ret;
+  }
+};
+
+template <typename T>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_vertex_buffer<T>> {
+  static auto Create(std::size_t Count) {
+    return vulkan::AllocateDynamicBuffer(
+        sizeof(T) * Count, vk::BufferUsageFlagBits::eVertexBuffer);
+  }
+};
+
+template <typename TexelType>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
+  template <typename CopyFunc>
+  static auto Create(uint32_t width, uint32_t height, Format format,
+                     uint32_t numMips, CopyFunc copyFunc,
+                     ColorComponentFlags redSwizzle = Red,
+                     ColorComponentFlags greenSwizzle = Green,
+                     ColorComponentFlags blueSwizzle = Blue,
+                     ColorComponentFlags alphaSwizzle = Alpha) {
+    auto TexelSize = HshFormatToTexelSize(format);
+    std::array<vk::BufferImageCopy, MaxMipCount> Copies =
+        buffer_math::vulkan::MakeCopies2D(width, height, TexelSize,
+                                          vk::ImageAspectFlagBits::eColor);
+    auto BufferSize =
+        buffer_math::MipOffset2D(width, height, TexelSize, numMips);
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(BufferSize);
+    copyFunc(UploadBuffer.getMappedData(), BufferSize);
+
+    TargetTraits<VULKAN_SPIRV>::TextureOwner Ret{
+        vulkan::AllocateTexture(vk::ImageCreateInfo(
+            {}, vk::ImageType::e2D, HshToVkFormat(format), {width, height, 1},
+            numMips, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eSampled |
+                vk::ImageUsageFlagBits::eTransferDst,
+            {}, {}, {}, vk::ImageLayout::eUndefined))};
+    Ret.ImageView =
+        vulkan::Globals.Device
+            .createImageViewUnique(vk::ImageViewCreateInfo(
+                {}, Ret.Allocation.getImage(), vk::ImageViewType::e2D,
+                HshToVkFormat(format),
+                vk::ComponentMapping(HshToVkComponentSwizzle(redSwizzle),
+                                     HshToVkComponentSwizzle(greenSwizzle),
+                                     HshToVkComponentSwizzle(blueSwizzle),
+                                     HshToVkComponentSwizzle(alphaSwizzle)),
+                vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                          numMips, 0, 1)))
+            .value;
+    Ret.NumMips = numMips;
+    Ret.Integer = HshFormatIsInteger(format);
+
+    vulkan::Globals.Cmd.copyBufferToImage(
+        UploadBuffer.getBuffer(), Ret.Allocation.getImage(),
+        vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
+
+    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
+
+    return Ret;
+  }
+};
+
+template <>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
+  static auto Create(surface Surf, uint32_t NumColorBindings,
+                     uint32_t NumDepthBindings) {
+    return TargetTraits<VULKAN_SPIRV>::RenderTextureOwner{
+        std::make_unique<vulkan::RenderTextureAllocation>(
+            vulkan::Globals.RenderTextureHead,
+            Surf.Binding.get_VULKAN_SPIRV().Allocation, NumColorBindings,
+            NumDepthBindings)};
+  }
+};
+
+template <>
+struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
+#ifdef VK_USE_PLATFORM_XCB_KHR
+  static auto Create(xcb_connection_t *Conn, xcb_window_t Window) {
+    auto Surface = vulkan::Globals.Instance
+                       .createXcbSurfaceKHRUnique(
+                           vk::XcbSurfaceCreateInfoKHR({}, Conn, Window))
+                       .value;
+    return TargetTraits<VULKAN_SPIRV>::SurfaceOwner{
+        std::make_unique<vulkan::SurfaceAllocation>(vulkan::Globals.SurfaceHead,
+                                                    std::move(Surface))};
+  }
+#endif
 };
 #endif
 
@@ -1909,6 +2757,162 @@ struct PipelineCoordinator {
 } // namespace detail
 
 #define HSH_PROFILE_MODE 1
+
+template <typename T>
+struct resource_owner {
+  typename decltype(T::Binding)::Owner Owner;
+  using MappedType = typename T::MappedType;
+
+  resource_owner(const resource_owner& other) = delete;
+  resource_owner &operator=(const resource_owner& other) = delete;
+  resource_owner(resource_owner &&other) = default;
+  resource_owner &operator=(resource_owner&& other) = default;
+
+  T get() const { return T(typename decltype(Owner)::Binding(Owner)); }
+  operator T() const { return get(); }
+  MappedType *map() noexcept {
+    return reinterpret_cast<MappedType *>(Owner.map());
+  }
+  void unmap() noexcept { Owner.unmap(); }
+  template <typename LoadType = MappedType,
+            typename std::enable_if_t<!std::is_void_v<LoadType>, int> = 0>
+  void load(const LoadType &obj) {
+    auto *ptr = map();
+    std::memcpy(ptr, &obj, sizeof(LoadType));
+    unmap();
+  }
+  template <typename LoadType = MappedType,
+            typename std::enable_if_t<
+                !std::is_void_v<LoadType> &&
+                    std::is_base_of_v<dynamic_vertex_buffer_typeless, T>,
+                int> = 0>
+  void load(detail::ArrayProxy<LoadType> obj) {
+    auto *ptr = map();
+    std::memcpy(ptr, obj.data(), sizeof(LoadType) * obj.size());
+    unmap();
+  }
+  template <typename LoadType = MappedType, std::size_t N,
+            typename std::enable_if_t<
+                !std::is_void_v<LoadType> &&
+                    std::is_base_of_v<dynamic_vertex_buffer_typeless, T>,
+                int> = 0>
+  void load(const std::array<LoadType, N> &Arr) {
+    load(detail::ArrayProxy<T>(Arr));
+  }
+};
+
+template <typename T, typename... Args>
+inline resource_owner<T> create_resource(Args... args) {
+  if constexpr (detail::NumStaticallyActiveTargets == 1) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  return resource_owner<T>{                                                    \
+      decltype(detail::ActiveTargetTraits::ResourceFactory<                    \
+               T>::_##Enumeration)::Create(args...)};
+#include "targets.def"
+  } else {
+    switch (detail::ActiveTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Enumeration:                                                            \
+    return resource_owner<T>{                                                  \
+        decltype(detail::ActiveTargetTraits::ResourceFactory<                  \
+                 T>::_##Enumeration)::Create(args...)};
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+    return {};
+  }
+}
+
+template <typename T, typename CopyFunc>
+inline resource_owner<uniform_buffer<T>>
+create_uniform_buffer(CopyFunc copyFunc) {
+  return create_resource<uniform_buffer<T>>(copyFunc);
+}
+
+template <typename T>
+inline resource_owner<uniform_buffer<T>> create_uniform_buffer(const T &data) {
+  return create_resource<uniform_buffer<T>>(
+      [&](void *buf, std::size_t size) { std::memcpy(buf, &data, sizeof(T)); });
+}
+
+template <typename T>
+inline resource_owner<dynamic_uniform_buffer<T>>
+create_dynamic_uniform_buffer() {
+  return create_resource<dynamic_uniform_buffer<T>>();
+}
+
+template <typename T>
+inline resource_owner<dynamic_uniform_buffer<T>>
+create_dynamic_uniform_buffer(const T &data) {
+  auto ret = create_resource<dynamic_uniform_buffer<T>>();
+  ret.load(data);
+  return ret;
+}
+
+template <typename T>
+inline resource_owner<vertex_buffer<T>>
+create_vertex_buffer(detail::ArrayProxy<T> data) {
+  return create_resource<vertex_buffer<T>>(
+      data.size(), [&](void *buf, std::size_t size) {
+        std::memcpy(buf, data.data(), sizeof(T) * data.size());
+      });
+}
+
+template <typename T, std::size_t N>
+inline resource_owner<vertex_buffer<T>>
+create_vertex_buffer(const std::array<T, N> &Arr) {
+  return create_vertex_buffer(detail::ArrayProxy<T>(Arr));
+}
+
+template <typename T>
+inline resource_owner<dynamic_vertex_buffer<T>>
+create_dynamic_vertex_buffer() {
+  return create_resource<dynamic_vertex_buffer<T>>();
+}
+
+template <typename T>
+inline resource_owner<dynamic_vertex_buffer<T>>
+create_dynamic_vertex_buffer(detail::ArrayProxy<T> data) {
+  auto ret = create_resource<dynamic_vertex_buffer<T>>();
+  ret.load(data);
+  return ret;
+}
+
+template <typename T, std::size_t N>
+inline resource_owner<dynamic_vertex_buffer<T>>
+create_dynamic_vertex_buffer(const std::array<T, N> &Arr) {
+  auto ret = create_resource<dynamic_vertex_buffer<T>>();
+  ret.load(Arr);
+  return ret;
+}
+
+template <typename TexelType, typename CopyFunc>
+inline resource_owner<texture2d<TexelType>>
+create_texture2d(uint32_t width, uint32_t height, Format format,
+                 uint32_t numMips, CopyFunc copyFunc,
+                 ColorComponentFlags redSwizzle = Red,
+                 ColorComponentFlags greenSwizzle = Green,
+                 ColorComponentFlags blueSwizzle = Blue,
+                 ColorComponentFlags alphaSwizzle = Alpha) {
+  return create_resource<texture2d<TexelType>>(
+      width, height, format, numMips, copyFunc, redSwizzle, greenSwizzle,
+      blueSwizzle, alphaSwizzle);
+}
+
+inline resource_owner<render_texture2d>
+create_render_texture2d(surface Surf, uint32_t NumColorBindings,
+                        uint32_t NumDepthBindings) {
+  return create_resource<render_texture2d>(Surf, NumColorBindings,
+                                           NumDepthBindings);
+}
+
+#ifdef VK_USE_PLATFORM_XCB_KHR
+inline resource_owner<surface>
+create_surface(xcb_connection_t* Conn, xcb_window_t Window) {
+  return create_resource<surface>(Conn, Window);
+}
+#endif
 
 class binding_typeless {
 protected:

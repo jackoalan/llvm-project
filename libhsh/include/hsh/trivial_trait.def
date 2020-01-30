@@ -1,0 +1,75 @@
+#ifndef HSH_TRAIT_TEMPLATE_PARMS
+#define HSH_TRAIT_TEMPLATE_PARMS
+#endif
+#ifndef HSH_TRAIT_TEMPLATE_REFS
+#define HSH_TRAIT_TEMPLATE_REFS
+#endif
+#define HSH_XSTR(s) HSH_STR(s)
+#define HSH_STR(s) #s
+#ifdef HSH_TRAIT_BINDING
+struct HSH_TRAIT_BINDING;
+#endif
+#ifdef HSH_MULTI_TRAIT
+HSH_TRAIT_TEMPLATE_PARMS
+struct HSH_MULTI_TRAIT {
+#ifdef HSH_TRAIT_OWNER
+  using Owner = HSH_TRAIT_OWNER;
+#endif
+#ifdef HSH_TRAIT_BINDING
+  using Binding = HSH_TRAIT_BINDING;
+  operator Binding() const {
+#define HSH_ACTIVE_TARGET(Enumeration) assert(ActiveTarget == Enumeration && "bad cast"); return Binding(get_##Enumeration());
+#include "targets.def"
+  }
+#endif
+#define HSH_ACTIVE_TARGET(Enumeration) static_assert(std::is_trivially_copyable_v<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits<" #Enumeration ">::" HSH_XSTR(HSH_MULTI_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable");
+#include "targets.def"
+  std::aligned_union_t<0
+#define HSH_ACTIVE_TARGET(Enumeration) , TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
+#include "targets.def"
+    > _Storage;
+HSH_MULTI_TRAIT() : _Storage{} {}
+#define HSH_ACTIVE_TARGET(Enumeration) \
+HSH_MULTI_TRAIT(const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &Obj) { new (std::addressof(_Storage)) TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS(Obj); } \
+operator TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+operator const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); }
+#include "targets.def"
+};
+#undef HSH_MULTI_TRAIT
+#endif
+
+#ifdef HSH_SINGLE_TRAIT
+HSH_TRAIT_TEMPLATE_PARMS
+struct HSH_SINGLE_TRAIT {
+#ifdef HSH_TRAIT_OWNER
+  using Owner = HSH_TRAIT_OWNER;
+#endif
+#ifdef HSH_TRAIT_BINDING
+  using Binding = HSH_TRAIT_BINDING;
+  operator Binding() const {
+#define HSH_ACTIVE_TARGET(Enumeration) return Binding(get_##Enumeration());
+#include "targets.def"
+  }
+#endif
+HSH_SINGLE_TRAIT() : _Storage{} {}
+#define HSH_ACTIVE_TARGET(Enumeration) \
+static_assert(std::is_trivially_copyable_v<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits::" HSH_XSTR(HSH_SINGLE_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable"); \
+std::aligned_storage_t<sizeof(TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS), alignof(TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS)> _Storage; \
+HSH_SINGLE_TRAIT(const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &Obj) { new (std::addressof(_Storage)) TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS(Obj); } \
+operator TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() { return *reinterpret_cast<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() { return *reinterpret_cast<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+operator const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const { return *reinterpret_cast<const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const { return *reinterpret_cast<const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); }
+#include "targets.def"
+  };
+#undef HSH_SINGLE_TRAIT
+#endif
+
+#undef HSH_TRAIT_TEMPLATE_PARMS
+#undef HSH_TRAIT_TEMPLATE_REFS
+#undef HSH_TRAIT_OWNER
+#undef HSH_TRAIT_BINDING
+#undef HSH_XSTR
+#undef HSH_STR

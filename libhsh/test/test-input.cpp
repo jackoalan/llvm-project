@@ -11,8 +11,6 @@ enum class PostMode {
 struct MyFormat {
   hsh::float3 position;
   hsh::float3 normal;
-  constexpr MyFormat(hsh::float3 position, hsh::float3 normal)
-      : position(position), normal(normal) {}
 };
 
 struct UniformData {
@@ -96,5 +94,25 @@ hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typ
   return hsh_DrawSomethingTemplated(DrawSomethingTemplated<false, AlphaTraits<AMode>>(u, v, tex0));
 }
 #endif
+
+inline auto test_factory() {
+  auto uni = hsh::create_dynamic_uniform_buffer<UniformData>();
+  UniformData UniData{};
+  UniData.xf[0][0] = 1.f;
+  UniData.xf[1][1] = 1.f;
+  UniData.xf[2][2] = 1.f;
+  UniData.xf[3][3] = 1.f;
+  uni.load(UniData);
+  std::array<MyFormat, 3> VtxData{
+      MyFormat{hsh::float3{0.f, 0.f, 0.f}, {}},
+      MyFormat{hsh::float3{1.f, 0.f, 0.f}, {}},
+      MyFormat{hsh::float3{1.f, 1.f, 0.f}, {}}
+  };
+  auto vtx = hsh::create_vertex_buffer(VtxData);
+  auto tex = hsh::create_texture2d<float>(
+      1024, 1024, hsh::Format::RGBA8_UNORM, 10,
+      [](void *buf, std::size_t size) { std::memset(buf, 0, size); });
+  return BindDrawSomething(uni, vtx, tex);
+}
 
 }

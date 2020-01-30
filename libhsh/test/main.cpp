@@ -490,8 +490,7 @@ int main(int argc, char** argv) {
 
       uint32_t CurBufferIdx = Frame & 1u;
       vk::CommandBuffer CurBuffer = CommandBuffers[CurBufferIdx].get();
-      hsh::detail::vulkan::Globals.DynamicBufferIndex = CurBufferIdx;
-      hsh::detail::vulkan::Globals.DynamicBufferMask = CurBufferIdx ? ~VkDeviceSize(0) : 0;
+      hsh::detail::vulkan::Globals.setBufferIndex(CurBufferIdx);
       hsh::detail::vulkan::Globals.Cmd = CurBuffer;
       CurBuffer.begin(MyCommandBufferBeginInfo());
       CurBuffer.beginRenderPass(vk::RenderPassBeginInfo(RenderPass.get(),))
