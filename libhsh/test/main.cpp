@@ -1,7 +1,10 @@
 #define VMA_IMPLEMENTATION
 #include <hsh/hsh.h>
 #include <string_view>
+#include <chrono>
 using namespace std::literals;
+
+#include "test-input.h"
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
@@ -41,13 +44,17 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
   }
 
   static constexpr std::string_view WantedLayers[] = {
+#if !defined(NDEBUG)
       "VK_LAYER_LUNARG_standard_validation"sv,
+#endif
   };
 
   static constexpr std::string_view WantedExtensions[] = {
       "VK_KHR_surface"sv,
       "VK_KHR_xcb_surface"sv,
-      "VK_EXT_debug_utils"sv
+#if !defined(NDEBUG)
+      "VK_EXT_debug_utils"sv,
+#endif
   };
 
   MyInstanceCreateInfo() : vk::InstanceCreateInfo({}, &AppInfo) {
@@ -100,7 +107,9 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
   }
 
   static constexpr std::string_view WantedLayers[] = {
+#if !defined(NDEBUG)
       "VK_LAYER_LUNARG_standard_validation"sv,
+#endif
   };
 
   static constexpr std::string_view WantedExtensions[] = {
@@ -156,6 +165,8 @@ struct MyDebugUtilsMessengerCreateInfo : vk::DebugUtilsMessengerCreateInfoEXT {
            void *pUserData) {
     std::cerr << to_string(messageSeverity) << " " << to_string(messageTypes)
               << " " << pCallbackData->pMessage << "\n";
+    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+      std::abort();
     return VK_FALSE;
   }
 
@@ -264,44 +275,6 @@ XcbWindow::~XcbWindow() {
   xcb_destroy_window(Connection, Window);
 }
 
-struct MyXcbSurfaceCreateInfo : vk::XcbSurfaceCreateInfoKHR {
-  MyXcbSurfaceCreateInfo(const XcbWindow &Window)
-      : vk::XcbSurfaceCreateInfoKHR({}, Window.Connection, Window.Window) {}
-};
-
-struct MySwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
-  explicit MySwapchainCreateInfo(vk::PhysicalDevice PD, vk::SurfaceKHR Surface, vk::Format &FmtOut)
-  : vk::SwapchainCreateInfoKHR({}, Surface) {
-    auto Capabilities = PD.getSurfaceCapabilitiesKHR(Surface).value;
-    setMinImageCount(std::max(2u, Capabilities.minImageCount));
-    vk::SurfaceFormatKHR UseFormat;
-    for (auto &Format : PD.getSurfaceFormatsKHR(Surface).value) {
-      if (Format.format == vk::Format::eB8G8R8A8Unorm) {
-        FmtOut = vk::Format::eB8G8R8A8Unorm;
-        UseFormat = Format;
-        break;
-      }
-    }
-    VULKAN_HPP_ASSERT(UseFormat.format != vk::Format::eUndefined);
-    setImageFormat(UseFormat.format).setImageColorSpace(UseFormat.colorSpace);
-    setImageExtent(Capabilities.currentExtent);
-    setImageArrayLayers(1);
-    constexpr auto WantedUsage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment;
-    VULKAN_HPP_ASSERT((Capabilities.supportedUsageFlags & WantedUsage) == WantedUsage);
-    setImageUsage(WantedUsage);
-    setPresentMode(vk::PresentModeKHR::eFifo);
-  }
-};
-
-struct MyPresentInfo : vk::PresentInfoKHR {
-  vk::Semaphore Semaphore_;
-  vk::SwapchainKHR Swapchain_;
-  uint32_t ImageIndex_;
-  MyPresentInfo(vk::Semaphore Semaphore, vk::SwapchainKHR Swapchain, uint32_t ImageIndex) noexcept
-  : vk::PresentInfoKHR(1, &Semaphore_, 1, &Swapchain_, &ImageIndex_), Semaphore_(Semaphore),
-    Swapchain_(Swapchain), ImageIndex_(ImageIndex) {}
-};
-
 struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
   std::array<vk::DescriptorSetLayoutBinding, hsh::detail::MaxUniforms +
                                                  hsh::detail::MaxImages +
@@ -311,6 +284,8 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
   constexpr MyDescriptorSetLayoutCreateInfo(
       std::index_sequence<USeq...>, std::index_sequence<ISeq...>,
       std::index_sequence<SSeq...>) noexcept
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
       : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
         Bindings{vk::DescriptorSetLayoutBinding(
                      USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
@@ -323,6 +298,7 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
                      hsh::detail::MaxUniforms + hsh::detail::MaxImages + SSeq,
                      vk::DescriptorType::eSampler, 1,
                      vk::ShaderStageFlagBits::eAllGraphics)...} {}
+#pragma GCC diagnostic pop
   constexpr MyDescriptorSetLayoutCreateInfo() noexcept
       : MyDescriptorSetLayoutCreateInfo(
             std::make_index_sequence<hsh::detail::MaxUniforms>(),
@@ -332,37 +308,11 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
 
 struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
   std::array<vk::DescriptorSetLayout, 1> Layouts;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
   constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
   : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()), Layouts{layout} {}
-};
-
-struct MyRenderPassCreateInfo : vk::RenderPassCreateInfo {
-  std::array<vk::AttachmentDescription, 2> Attachments;
-  std::array<vk::SubpassDescription, 1> Subpasses;
-  vk::AttachmentReference ColorRef{0, vk::ImageLayout::eColorAttachmentOptimal};
-  vk::AttachmentReference DepthRef{1, vk::ImageLayout::eDepthAttachmentOptimal};
-  constexpr MyRenderPassCreateInfo(
-      vk::Format colorFormat, vk::SampleCountFlagBits colorSamples,
-      vk::SampleCountFlagBits depthSamples) noexcept
-      : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
-                                 Subpasses.size(), Subpasses.data()),
-        Attachments{
-            vk::AttachmentDescription(
-                {}, colorFormat, colorSamples, vk::AttachmentLoadOp::eLoad,
-                vk::AttachmentStoreOp::eStore, vk::AttachmentLoadOp::eDontCare,
-                vk::AttachmentStoreOp::eDontCare,
-                vk::ImageLayout::eColorAttachmentOptimal,
-                vk::ImageLayout::eColorAttachmentOptimal),
-            vk::AttachmentDescription(
-                {}, vk::Format::eD32Sfloat, depthSamples,
-                vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
-                vk::AttachmentLoadOp::eDontCare,
-                vk::AttachmentStoreOp::eDontCare,
-                vk::ImageLayout::eDepthAttachmentOptimal,
-                vk::ImageLayout::eDepthAttachmentOptimal)},
-        Subpasses{vk::SubpassDescription({}, vk::PipelineBindPoint::eGraphics,
-                                         {}, {}, 1, &ColorRef, {}, &DepthRef)} {
-  }
+#pragma GCC diagnostic pop
 };
 
 struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
@@ -374,11 +324,6 @@ struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
 struct MyCommandBufferAllocateInfo : vk::CommandBufferAllocateInfo {
   constexpr MyCommandBufferAllocateInfo(vk::CommandPool cmdPool)
       : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary, 2) {}
-};
-
-struct MyCommandBufferBeginInfo : vk::CommandBufferBeginInfo {
-  constexpr MyCommandBufferBeginInfo()
-      : vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit) {}
 };
 
 struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
@@ -403,6 +348,8 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
             VK_API_VERSION_1_1} {
 #define COPY_FUNC(funcName) \
     Funcs.funcName = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
+#define COPY_1_1_FUNC(funcName) \
+    Funcs.funcName##KHR = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
     COPY_FUNC(vkGetPhysicalDeviceProperties);
     COPY_FUNC(vkGetPhysicalDeviceMemoryProperties);
     COPY_FUNC(vkAllocateMemory);
@@ -420,18 +367,13 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
     COPY_FUNC(vkCreateImage);
     COPY_FUNC(vkDestroyImage);
     COPY_FUNC(vkCmdCopyBuffer);
-#if VMA_DEDICATED_ALLOCATION || VMA_VULKAN_VERSION >= 1001000
-    COPY_FUNC(vkGetBufferMemoryRequirements2KHR);
-    COPY_FUNC(vkGetImageMemoryRequirements2KHR);
-#endif
-#if VMA_BIND_MEMORY2 || VMA_VULKAN_VERSION >= 1001000
-    COPY_FUNC(vkBindBufferMemory2KHR);
-    COPY_FUNC(vkBindImageMemory2KHR);
-#endif
-#if VMA_MEMORY_BUDGET
-    COPY_FUNC(vkGetPhysicalDeviceMemoryProperties2KHR);
-#endif
+    COPY_1_1_FUNC(vkGetBufferMemoryRequirements2);
+    COPY_1_1_FUNC(vkGetImageMemoryRequirements2);
+    COPY_1_1_FUNC(vkBindBufferMemory2);
+    COPY_1_1_FUNC(vkBindImageMemory2);
+    COPY_1_1_FUNC(vkGetPhysicalDeviceMemoryProperties2);
 #undef COPY_FUNC
+#undef COPY_1_1_FUNC
   }
 };
 
@@ -449,59 +391,73 @@ int main(int argc, char** argv) {
   VULKAN_HPP_DEFAULT_DISPATCHER.init(*Instance);
   hsh::detail::vulkan::Globals.Instance = Instance.get();
 
+#if !defined(NDEBUG)
   auto Messenger = Instance->createDebugUtilsMessengerEXTUnique(MyDebugUtilsMessengerCreateInfo()).value;
+#endif
 
   auto PhysDevices = Instance->enumeratePhysicalDevices().value;
   for (auto PD : PhysDevices) {
+    hsh::detail::vulkan::Globals.PhysDevice = PD;
     uint32_t QFIdx = 0;
     bool HasExtMemoryBudget = false;
     auto Device = PD.createDeviceUnique(MyDeviceCreateInfo(PD, QFIdx, HasExtMemoryBudget)).value;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*Device);
     hsh::detail::vulkan::Globals.Device = Device.get();
+    hsh::detail::vulkan::Globals.QueueFamilyIdx = QFIdx;
 
     auto VmaAllocator =
     vk::createVmaAllocatorUnique(MyVmaAllocatorCreateInfo(Instance.get(), PD, Device.get(),
                                                           HasExtMemoryBudget)).value;
     hsh::detail::vulkan::Globals.Allocator = VmaAllocator.get();
 
-    auto Surface = Instance->createXcbSurfaceKHR(MyXcbSurfaceCreateInfo(Window)).value;
-    vk::Format ColorFormat;
-    auto Swapchain = Device->createSwapchainKHRUnique(MySwapchainCreateInfo(PD, Surface, ColorFormat)).value;
-    auto SwapchainImages = Device->getSwapchainImagesKHR(*Swapchain).value;
+    auto Surface = hsh::create_surface(Window.Connection, Window.Window);
+    auto RenderTexture = hsh::create_render_texture2d(Surface);
     auto DescriptorSetLayout = Device->createDescriptorSetLayoutUnique(MyDescriptorSetLayoutCreateInfo()).value;
-    hsh::detail::vulkan::Globals.setDescriptorSetLayout(DescriptorSetLayout.get());
+    hsh::detail::vulkan::Globals.SetDescriptorSetLayout(DescriptorSetLayout.get());
     auto PipelineLayout = Device->createPipelineLayoutUnique(MyPipelineLayoutCreateInfo(DescriptorSetLayout.get())).value;
     hsh::detail::vulkan::Globals.PipelineLayout = PipelineLayout.get();
     hsh::detail::vulkan::DescriptorPoolChain DescriptorPoolChain;
     hsh::detail::vulkan::Globals.DescriptorPoolChain = &DescriptorPoolChain;
-    auto DescriptorUpdateTemplate = Device->createDescriptorUpdateTemplateUnique(hsh::detail::vulkan::DescriptorUpdateTemplateCreateInfo()).value;
-    hsh::detail::vulkan::Globals.DescriptorUpdateTemplate = DescriptorUpdateTemplate.get();
-    auto RenderPass = Device->createRenderPassUnique(MyRenderPassCreateInfo(ColorFormat, vk::SampleCountFlagBits::e1, vk::SampleCountFlagBits::e1)).value;
-    hsh::detail::vulkan::Globals.RenderPass = RenderPass.get();
-    auto Queue = Device->getQueue(QFIdx, 0);
+    hsh::detail::vulkan::Globals.Queue = Device->getQueue(QFIdx, 0);
     auto CommandPool = Device->createCommandPoolUnique(MyCommandPoolCreateInfo(QFIdx)).value;
     auto CommandBuffers = Device->allocateCommandBuffersUnique(MyCommandBufferAllocateInfo(CommandPool.get())).value;
-    auto PresentCompleteSem = Device->createSemaphoreUnique({}).value;
+    hsh::detail::vulkan::Globals.CommandBuffers = &CommandBuffers;
+    std::array<vk::UniqueFence, 2> CommandFences{
+      Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{})).value,
+      Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{})).value,
+    };
+    hsh::detail::vulkan::Globals.CommandFences = &CommandFences;
+    auto ImageAcquireSem = Device->createSemaphoreUnique({}).value;
+    hsh::detail::vulkan::Globals.ImageAcquireSem = ImageAcquireSem.get();
+    auto RenderCompleteSem = Device->createSemaphoreUnique({}).value;
+    hsh::detail::vulkan::Globals.RenderCompleteSem = RenderCompleteSem.get();
 
-    uint32_t Frame = 0;
+    for (auto *Node = hsh::detail::GlobalListNode::Head; Node; Node = Node->Next)
+      Node->Func[hsh::VULKAN_SPIRV]();
+
+    MyNS::Binding PipelineBind;
+
     Connection.runloop([&]() {
-      uint32_t Index;
-      auto Res = Device->acquireNextImageKHR(*Swapchain, 500000000, *PresentCompleteSem, {}, &Index);
-
-      uint32_t CurBufferIdx = Frame & 1u;
-      vk::CommandBuffer CurBuffer = CommandBuffers[CurBufferIdx].get();
-      hsh::detail::vulkan::Globals.setBufferIndex(CurBufferIdx);
-      hsh::detail::vulkan::Globals.Cmd = CurBuffer;
-      CurBuffer.begin(MyCommandBufferBeginInfo());
-      CurBuffer.beginRenderPass(vk::RenderPassBeginInfo(RenderPass.get(),))
-
-      std::cerr << "SC " << vk::to_string(Res) << " " << Index << " " << Frame++ << "\n";
-
-      CurBuffer.endRenderPass();
-      CurBuffer.end();
-      Queue.presentKHR(MyPresentInfo(*PresentCompleteSem, *Swapchain, Index));
+      //auto start = std::chrono::steady_clock::now();
+      hsh::detail::vulkan::Globals.PreRender();
+      if (!PipelineBind.Binding)
+        PipelineBind = MyNS::BuildPipeline();
+      Surface.acquireNextImage();
+      RenderTexture.attach();
+      hsh::detail::vulkan::Globals.Cmd.clearAttachments(
+          vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
+                              vk::ClearValue(vk::ClearColorValue())),
+          vk::ClearRect(vk::Rect2D({}, {512, 512}), 0, 1));
+      PipelineBind.Binding.draw(0, 3);
+      RenderTexture.resolveSurface(Surface.get());
+      hsh::detail::vulkan::Globals.PostRender();
+      //std::cerr << std::chrono::duration_cast<std::chrono::microseconds>(
+      //    std::chrono::steady_clock::now() - start)
+      //    .count() << std::endl;
       return true;
     });
+
+    Device->waitIdle();
 
     break;
   }

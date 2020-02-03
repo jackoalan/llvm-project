@@ -12,7 +12,7 @@
 
 namespace clang::hshgen {
 
-enum HshTarget {
+enum HshTarget : int {
   HT_GLSL,
   HT_HLSL,
   HT_DXBC,

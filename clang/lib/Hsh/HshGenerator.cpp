@@ -34,7 +34,7 @@
 #define XSTR(X) #X
 #define STR(X) XSTR(X)
 
-#define ENABLE_DUMP 1
+#define ENABLE_DUMP 0
 
 namespace llvm {
 
@@ -69,6 +69,25 @@ template <> struct DenseMapInfo<clang::SourceLocation> {
 
   static bool isEqual(const clang::SourceLocation &LHS,
                       const clang::SourceLocation &RHS) {
+    return LHS == RHS;
+  }
+};
+
+template <> struct DenseMapInfo<clang::hshgen::HshTarget> {
+  static clang::hshgen::HshTarget getEmptyKey() {
+    return clang::hshgen::HshTarget(DenseMapInfo<int>::getEmptyKey());
+  }
+
+  static clang::hshgen::HshTarget getTombstoneKey() {
+    return clang::hshgen::HshTarget(DenseMapInfo<int>::getTombstoneKey());
+  }
+
+  static unsigned getHashValue(const clang::hshgen::HshTarget &Val) {
+    return DenseMapInfo<int>::getHashValue(int(Val));
+  }
+
+  static bool isEqual(const clang::hshgen::HshTarget &LHS,
+                      const clang::hshgen::HshTarget &RHS) {
     return LHS == RHS;
   }
 };
@@ -964,17 +983,6 @@ private:
   std::array<const CXXMethodDecl *, HBM_Max> Methods{};
   std::array<std::pair<const FieldDecl *, HshStage>, HPF_Max> PipelineFields{};
   ClassTemplateDecl *StdArrayType = nullptr;
-
-  static void printEnumeratorString(raw_ostream &Out,
-                                    const PrintingPolicy &Policy,
-                                    const EnumDecl *ED, const APSInt &Val) {
-    for (const EnumConstantDecl *ECD : ED->enumerators()) {
-      if (llvm::APSInt::isSameValue(ECD->getInitVal(), Val)) {
-        ECD->printQualifiedName(Out, Policy);
-        return;
-      }
-    }
-  }
 
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
@@ -1895,23 +1903,38 @@ public:
     return CTD;
   }
 
-  VarTemplateDecl *getConstDataVarTemplate(ASTContext &Context, DeclContext *DC,
-                                           uint32_t NumStages,
-                                           uint32_t NumBindings,
-                                           uint32_t NumAttributes,
-                                           uint32_t NumSamplers,
-                                           uint32_t NumColorAttachments) const {
-    NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
-        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"_ll),
-        QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
-    auto *TPL =
-        TemplateParameterList::Create(Context, {}, {}, TargetParm, {}, nullptr);
-    auto *PExpr =
-        DeclRefExpr::Create(Context, {}, {}, TargetParm, false,
-                            SourceLocation{}, TargetParm->getType(), VK_XValue);
+  static void printEnumeratorString(raw_ostream &Out,
+                                    const PrintingPolicy &Policy,
+                                    const EnumDecl *ED, const APSInt &Val) {
+    for (const EnumConstantDecl *ECD : ED->enumerators()) {
+      if (llvm::APSInt::isSameValue(ECD->getInitVal(), Val)) {
+        ECD->printQualifiedName(Out, Policy);
+        return;
+      }
+    }
+  }
+
+  static const EnumConstantDecl *lookupEnumConstantDecl(const EnumDecl *ED,
+                                                        const APSInt &Val) {
+    for (const EnumConstantDecl *ECD : ED->enumerators())
+      if (llvm::APSInt::isSameValue(ECD->getInitVal(), Val))
+        return ECD;
+    return nullptr;
+  }
+
+  VarDecl *getConstDataVar(ASTContext &Context, DeclContext *DC,
+                           HshTarget Target, uint32_t NumStages,
+                           uint32_t NumBindings, uint32_t NumAttributes,
+                           uint32_t NumSamplers,
+                           uint32_t NumColorAttachments) const {
+    auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
+    assert(ECD);
+
     TemplateArgumentListInfo TemplateArgs;
-    TemplateArgs.addArgument(
-        TemplateArgumentLoc(TemplateArgument{PExpr}, PExpr));
+    TemplateArgs.addArgument(TemplateArgumentLoc(
+        TemplateArgument{Context, APSInt::get(Target),
+                         QualType{EnumTarget->getTypeForDecl(), 0}},
+        (Expr *)nullptr));
     TemplateArgs.addArgument(
         TemplateArgumentLoc(TemplateArgument{Context, APSInt::get(NumStages),
                                              Context.UnsignedIntTy},
@@ -1935,30 +1958,27 @@ public:
     TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
         Context, ShaderConstDataTemplateType, TemplateArgs);
 
-    auto *VD =
-        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("cdata"_ll),
-                        TSI->getType(), nullptr, SC_Static);
+    auto *VD = VarDecl::Create(
+        Context, DC, {}, {},
+        &Context.Idents.get(llvm::Twine("cdata_", ECD->getName()).str()),
+        TSI->getType(), nullptr, SC_Static);
     VD->setConstexpr(true);
     VD->setInitStyle(VarDecl::ListInit);
     VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
-    return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
-                                   VD);
+    VD->InitHshTarget = Target;
+    return VD;
   }
 
-  VarTemplateDecl *getDataVarTemplate(ASTContext &Context, DeclContext *DC,
-                                      uint32_t NumStages,
-                                      uint32_t NumSamplers) const {
-    NonTypeTemplateParmDecl *TargetParm = NonTypeTemplateParmDecl::Create(
-        Context, DC, {}, {}, 0, 0, &Context.Idents.get("T"_ll),
-        QualType{EnumTarget->getTypeForDecl(), 0}, false, nullptr);
-    auto *TPL =
-        TemplateParameterList::Create(Context, {}, {}, TargetParm, {}, nullptr);
-    auto *PExpr =
-        DeclRefExpr::Create(Context, {}, {}, TargetParm, false,
-                            SourceLocation{}, TargetParm->getType(), VK_XValue);
+  VarDecl *getDataVar(ASTContext &Context, DeclContext *DC, HshTarget Target,
+                      uint32_t NumStages, uint32_t NumSamplers) const {
+    auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
+    assert(ECD);
+
     TemplateArgumentListInfo TemplateArgs;
-    TemplateArgs.addArgument(
-        TemplateArgumentLoc(TemplateArgument{PExpr}, PExpr));
+    TemplateArgs.addArgument(TemplateArgumentLoc(
+        TemplateArgument{Context, APSInt::get(Target),
+                         QualType{EnumTarget->getTypeForDecl(), 0}},
+        (Expr *)nullptr));
     TemplateArgs.addArgument(
         TemplateArgumentLoc(TemplateArgument{Context, APSInt::get(NumStages),
                                              Context.UnsignedIntTy},
@@ -1970,13 +1990,10 @@ public:
     TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
         Context, ShaderDataTemplateType, TemplateArgs);
 
-    auto *VD =
-        VarDecl::Create(Context, DC, {}, {}, &Context.Idents.get("data"_ll),
-                        TSI->getType(), nullptr, SC_Static);
-    VD->setInitStyle(VarDecl::ListInit);
-    VD->setInit(new (Context) InitListExpr(Stmt::EmptyShell{}));
-    return VarTemplateDecl::Create(Context, DC, {}, VD->getIdentifier(), TPL,
-                                   VD);
+    return VarDecl::Create(
+        Context, DC, {}, {},
+        &Context.Idents.get(llvm::Twine("data_", ECD->getName()).str()),
+        TSI->getType(), nullptr, SC_Static);
   }
 
   void printBuiltinEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
@@ -1992,6 +2009,11 @@ public:
   void printTargetEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
                              HshTarget Target) const {
     printEnumeratorString(Out, Policy, EnumTarget, APSInt::get(Target));
+  }
+
+  void printTargetEnumName(raw_ostream &Out, HshTarget Target) const {
+    if (auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target)))
+      ECD->printName(Out);
   }
 
   void printStageEnumString(raw_ostream &Out, const PrintingPolicy &Policy,
@@ -2184,6 +2206,16 @@ struct HostPrintingPolicy final : PrintingCallbacks, PrintingPolicy {
     SilentNullStatement = true;
     NeverSuppressScope = true;
     UseStdOffsetOf = true;
+  }
+
+  mutable llvm::unique_function<bool(VarDecl *, raw_ostream &)> VarInitPrint;
+  void setVarInitPrint(
+      llvm::unique_function<bool(VarDecl *, raw_ostream &)> &&Func) {
+    VarInitPrint = std::move(Func);
+  }
+  void resetVarInitPrint() { VarInitPrint = decltype(VarInitPrint){}; }
+  bool overrideVarInitPrint(VarDecl *D, raw_ostream &OS) const override {
+    return VarInitPrint(D, OS);
   }
 };
 
@@ -3477,10 +3509,11 @@ public:
     DxcLibrary::EnsureSharedInstance(ResourceDir, Diags);
     Compiler = DxcLibrary::SharedInstance->MakeCompiler();
 
-    assert(std::swprintf(TShiftArg, 4, L"%u", Builtins.getMaxUniforms()) >= 0);
-    assert(std::swprintf(SShiftArg, 4, L"%u",
-                         Builtins.getMaxUniforms() + Builtins.getMaxImages()) >=
-           0);
+    int res = std::swprintf(TShiftArg, 4, L"%u", Builtins.getMaxUniforms());
+    assert(res >= 0);
+    res = std::swprintf(SShiftArg, 4, L"%u",
+                        Builtins.getMaxUniforms() + Builtins.getMaxImages());
+    assert(res >= 0);
   }
 };
 
@@ -5147,8 +5180,11 @@ public:
         CXXConstructorDecl *BindingCtor = CXXConstructorDecl::Create(
             Context, Specialization, {},
             {Context.DeclarationNames.getCXXConstructorName(CDType), {}},
-            Context.getFunctionType(CDType, ConstructorArgs, {}), {},
-            {nullptr, ExplicitSpecKind::ResolvedTrue}, false, false,
+            Context.getFunctionType(
+                CDType, ConstructorArgs,
+                FunctionProtoType::ExtProtoInfo().withExceptionSpec(
+                    EST_BasicNoexcept)),
+            {}, {nullptr, ExplicitSpecKind::ResolvedTrue}, false, false,
             CSK_unspecified);
         BindingCtor->setParams(ConstructorParms);
         BindingCtor->setAccess(AS_public);
@@ -5162,46 +5198,42 @@ public:
         Specialization->addDecl(BindingCtor);
       }
 
-      // Add shader data var template
-      Specialization->addDecl(Builtins.getConstDataVarTemplate(
-          Context, Specialization, Builder.getNumStages(),
-          Builder.getNumBindings(), Builder.getNumAttributes(),
-          Builder.getNumSamplers(), ColorAttachmentArgs.size()));
-      Specialization->addDecl(Builtins.getDataVarTemplate(
-          Context, Specialization, Builder.getNumStages(),
-          Builder.getNumSamplers()));
+      // Add per-target shader data vars
+      for (auto Target : Targets) {
+        Specialization->addDecl(Builtins.getConstDataVar(
+            Context, Specialization, Target, Builder.getNumStages(),
+            Builder.getNumBindings(), Builder.getNumAttributes(),
+            Builder.getNumSamplers(), ColorAttachmentArgs.size()));
+        Specialization->addDecl(Builtins.getDataVar(
+            Context, Specialization, Target, Builder.getNumStages(),
+            Builder.getNumSamplers()));
+      }
 
       Specialization->completeDefinition();
 
-      // Emit shader record
-      Specialization->print(AnonOS, HostPolicy);
-      AnonOS << ";\n";
-
       SmallVector<uint64_t, 8> SamplerHashes;
+      DenseMap<HshTarget, StageBinaries> BinaryMap;
+      BinaryMap.reserve(Targets.size());
 
-      // Emit shader data
-      for (auto Target : Targets) {
+      // Emit shader record while interjecting with data initializers
+      HostPolicy.setVarInitPrint([&](VarDecl *D, raw_ostream &InitOS) {
+        if (D->InitHshTarget == -1)
+          return false;
+        auto Target = HshTarget(D->InitHshTarget);
+
         auto Policy =
             MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
         auto Sources = Builder.printResults(*Policy);
         auto &Compiler = getCompiler(Target);
         if (Context.getDiagnostics().hasErrorOccurred())
-          return;
-        auto Binaries = Compiler.compile(Sources);
+          return true;
+        auto &Binaries =
+            BinaryMap.insert(std::make_pair(Target, Compiler.compile(Sources)))
+                .first->second;
         auto SourceIt = Sources.begin();
         int StageIt = HshVertexStage;
 
-        AnonOS << "template <> constexpr "
-                  "hsh::detail::ShaderConstData<";
-        Builtins.printTargetEnumString(AnonOS, HostPolicy, Target);
-        AnonOS << ", " << Builder.getNumStages() << ", "
-               << Builder.getNumBindings() << ", " << Builder.getNumAttributes()
-               << ", " << Builder.getNumSamplers() << ", "
-               << ColorAttachmentArgs.size() << "> ";
-        T.print(AnonOS, HostPolicy);
-        AnonOS << "::cdata<";
-        Builtins.printTargetEnumString(AnonOS, HostPolicy, Target);
-        AnonOS << ">{\n  {\n";
+        InitOS << "{\n    {\n";
 
         for (auto &[Data, Hash] : Binaries) {
           auto &Source = *SourceIt++;
@@ -5209,11 +5241,11 @@ public:
           if (Data.empty())
             continue;
           auto HashStr = MakeHashString(Hash);
-          AnonOS << "    hsh::detail::ShaderCode<";
-          Builtins.printTargetEnumString(AnonOS, HostPolicy, Target);
-          AnonOS << ">{";
-          Builtins.printStageEnumString(AnonOS, HostPolicy, Stage);
-          AnonOS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}},\n";
+          InitOS << "      hsh::detail::ShaderCode<";
+          Builtins.printTargetEnumString(InitOS, HostPolicy, Target);
+          InitOS << ">{";
+          Builtins.printStageEnumString(InitOS, HostPolicy, Stage);
+          InitOS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}},\n";
           if (SeenHashes.find(Hash) != SeenHashes.end())
             continue;
           SeenHashes.insert(Hash);
@@ -5237,31 +5269,31 @@ public:
           *OS << "> _hsho_" << HashStr << ";\n\n";
         }
 
-        AnonOS << "  },\n  {\n";
+        InitOS << "    },\n    {\n";
 
         for (const auto &Binding : Builder.getBindings()) {
-          AnonOS << "    hsh::detail::VertexBinding{" << Binding.Binding << ", "
+          InitOS << "      hsh::detail::VertexBinding{" << Binding.Binding << ", "
                  << Binding.Stride << ", ";
-          Builtins.printInputRateEnumString(AnonOS, HostPolicy,
+          Builtins.printInputRateEnumString(InitOS, HostPolicy,
                                             Binding.InputRate);
-          AnonOS << "},\n";
+          InitOS << "},\n";
         }
 
-        AnonOS << "  },\n  {\n";
+        InitOS << "    },\n    {\n";
 
         for (const auto &Attribute : Builder.getAttributes()) {
-          AnonOS << "    hsh::detail::VertexAttribute{" << Attribute.Binding
+          InitOS << "      hsh::detail::VertexAttribute{" << Attribute.Binding
                  << ", ";
-          Builtins.printFormatEnumString(AnonOS, HostPolicy, Attribute.Format);
-          AnonOS << ", " << Attribute.Offset << "},\n";
+          Builtins.printFormatEnumString(InitOS, HostPolicy, Attribute.Format);
+          InitOS << ", " << Attribute.Offset << "},\n";
         }
 
-        AnonOS << "  },\n  {\n";
+        InitOS << "    },\n    {\n";
 
         if (SamplerHashes.empty()) {
           SamplerHashes.reserve(Builder.getNumSamplers());
           for (const auto &Sampler : Builder.getSamplers()) {
-            AnonOS << "    hsh::sampler{";
+            InitOS << "      hsh::sampler{";
             std::string SamplerParams;
             raw_string_ostream SPO(SamplerParams);
             unsigned FieldIdx = 0;
@@ -5286,57 +5318,64 @@ public:
               }
             }
             SamplerHashes.push_back(xxHash64(SPO.str()));
-            AnonOS << SPO.str() << "},\n";
+            InitOS << SPO.str() << "},\n";
           }
         }
 
-        AnonOS << "  },\n  {\n";
+        InitOS << "    },\n    {\n";
 
         auto PrintArguments = [&](const auto &Args) {
           bool NeedsComma = false;
           for (const auto &Arg : Args) {
             if (NeedsComma)
-              AnonOS << ", ";
+              InitOS << ", ";
             else
               NeedsComma = true;
             if (Arg.getKind() == TemplateArgument::Integral &&
                 Builtins.identifyBuiltinType(Arg.getIntegralType()) ==
                     HBT_ColorComponentFlags) {
-              AnonOS << "hsh::ColorComponentFlags(";
+              InitOS << "hsh::ColorComponentFlags(";
               Builtins.printColorComponentFlagExpr(
-                  AnonOS, HostPolicy,
+                  InitOS, HostPolicy,
                   ColorComponentFlags(Arg.getAsIntegral().getZExtValue()));
-              AnonOS << ")";
+              InitOS << ")";
             } else {
-              Arg.print(HostPolicy, AnonOS);
+              Arg.print(HostPolicy, InitOS);
             }
           }
         };
 
         for (const auto &Attachment : ColorAttachmentArgs) {
-          AnonOS << "    hsh::detail::ColorAttachment{";
+          InitOS << "      hsh::detail::ColorAttachment{";
           PrintArguments(Attachment);
-          AnonOS << "},\n";
+          InitOS << "},\n";
         }
 
-        AnonOS << "  },\n";
+        InitOS << "    },\n";
 
-        AnonOS << "  hsh::detail::PipelineInfo{";
+        InitOS << "    hsh::detail::PipelineInfo{";
         PrintArguments(PipelineArgs);
-        AnonOS << "}\n";
+        InitOS << "}\n";
 
-        AnonOS << "};\n";
+        InitOS << "  }";
+        return true;
+      });
+      Specialization->print(AnonOS, HostPolicy);
+      HostPolicy.resetVarInitPrint();
+      AnonOS << ";\n";
 
-        AnonOS << "template <> hsh::detail::ShaderData<";
+      // Emit shader data
+      for (auto Target : Targets) {
+        AnonOS << "hsh::detail::ShaderData<";
         Builtins.printTargetEnumString(AnonOS, HostPolicy, Target);
         AnonOS << ", " << Builder.getNumStages() << ", "
                << Builder.getNumSamplers() << "> ";
         T.print(AnonOS, HostPolicy);
-        AnonOS << "::data<";
-        Builtins.printTargetEnumString(AnonOS, HostPolicy, Target);
-        AnonOS << ">{\n  {\n";
+        AnonOS << "::data_";
+        Builtins.printTargetEnumName(AnonOS, Target);
+        AnonOS << "{\n  {\n";
 
-        for (auto &[Data, Hash] : Binaries) {
+        for (auto &[Data, Hash] : BinaryMap[Target]) {
           if (Data.empty())
             continue;
           AnonOS << "    _hsho_" << MakeHashString(Hash) << ",\n";
@@ -5403,7 +5442,7 @@ public:
     SmallVector<NonConstExpr, 8> NonConstExprs;
     if (CheckConstexprTemplateSpecialization(
             Context, Expansion.Construct->getType(), &NonConstExprs)) {
-      *OS << "(Res... Resources) {\n"
+      *OS << "(Res... Resources) noexcept {\n"
              "  return ::"
           << BindingName
           << "(Resources...);\n"
@@ -5419,7 +5458,7 @@ public:
       SmallString<32> ProfName(Expansion.Name);
       assert(ProfName.size() >= 3);
       ProfName.insert(ProfName.begin() + 3, {'p', 'r', 'o', 'f'});
-      *OS << "Res... Resources) {\n"
+      *OS << "Res... Resources) noexcept {\n"
              "#if HSH_PROFILE_MODE\n"
              "hsh::profile_context::instance\n"
              ".get(\""

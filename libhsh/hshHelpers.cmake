@@ -123,7 +123,7 @@ function(target_hsh target)
     if("${CMAKE_GENERATOR}" STREQUAL "Ninja")
       list(APPEND depfile_args DEPFILE "${CMAKE_BINARY_DIR}/${out_rel}.d")
     endif()
-    add_custom_command(OUTPUT "${out_path}" COMMAND "$<TARGET_FILE:hshgen>"
+    add_custom_command(OUTPUT "${out_path}" COMMAND "/home/jacko/llvm-project/llvm/cmake-build-release/bin/hshgen"
             ARGS ${_hsh_args} "${src_path}" "${out_rel}"
             -MD -MT "${out_rel}" -MF "${out_rel}.d"
             DEPENDS hshgen "${src_path}" IMPLICIT_DEPENDS CXX "${src_path}"

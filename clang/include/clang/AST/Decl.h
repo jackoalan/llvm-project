@@ -1526,6 +1526,8 @@ public:
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K >= firstVar && K <= lastVar; }
+
+  int InitHshTarget = -1;
 };
 
 class ImplicitParamDecl : public VarDecl {

@@ -4,7 +4,16 @@
 #define HSH_VMA_IMPLEMENTATION
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnested-anon-types"
+#pragma GCC diagnostic ignored "-Wcovered-switch-default"
+#pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-private-field"
 #include "vk_mem_alloc.h"
+#pragma GCC diagnostic pop
 
 /**
 @param[out] pBuffer Buffer that was created.
@@ -73,15 +82,16 @@ VMA_CALL_PRE VkResult VMA_CALL_POST vmaCreateDoubleBuffer(
 #endif
 
 namespace VULKAN_HPP_NAMESPACE {
-template <> struct ObjectDestroy<VmaAllocator, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
-public:
-  ObjectDestroy() = default;
-  ObjectDestroy(
-      Optional<const AllocationCallbacks> allocationCallbacks,
-      VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {}
-protected:
-  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT {
-    vmaDestroyAllocator(t);
+struct VmaAllocator {
+  ::VmaAllocator Allocator = VK_NULL_HANDLE;
+  operator ::VmaAllocator() const VULKAN_HPP_NOEXCEPT { return Allocator; }
+  VmaAllocator & operator=( std::nullptr_t ) VULKAN_HPP_NOEXCEPT {
+    Allocator = VK_NULL_HANDLE;
+    return *this;
+  }
+  template<typename Dispatch>
+  void destroy(Optional<const AllocationCallbacks> allocator, Dispatch const &d) VULKAN_HPP_NOEXCEPT {
+    ::vmaDestroyAllocator(Allocator);
   }
 };
 template <typename Dispatch> class UniqueHandleTraits<VmaAllocator, Dispatch> { public: using deleter = ObjectDestroy<NoParent, Dispatch>; };
@@ -89,10 +99,11 @@ using UniqueVmaAllocator = UniqueHandle<VmaAllocator, VULKAN_HPP_DEFAULT_DISPATC
 template<typename Dispatch = VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>
 VULKAN_HPP_INLINE typename ResultValueType<UniqueHandle<VmaAllocator,Dispatch>>::type createVmaAllocatorUnique( const VmaAllocatorCreateInfo& pCreateInfo, Optional<const AllocationCallbacks> allocator = nullptr, Dispatch const &d = VULKAN_HPP_DEFAULT_DISPATCHER )
 {
-  VmaAllocator vmaAllocator;
+  ::VmaAllocator vmaAllocator;
   Result result = static_cast<Result>( ::vmaCreateAllocator(&pCreateInfo, &vmaAllocator) );
+  VmaAllocator vmaAllocatorObj{vmaAllocator};
 
   ObjectDestroy<NoParent,Dispatch> deleter( allocator, d );
-  return createResultValue<VmaAllocator,Dispatch>( result, vmaAllocator, VULKAN_HPP_NAMESPACE_STRING"::createVmaAllocatorUnique", deleter );
+  return createResultValue<VmaAllocator,Dispatch>( result, vmaAllocatorObj, VULKAN_HPP_NAMESPACE_STRING"::createVmaAllocatorUnique", deleter );
 }
 }

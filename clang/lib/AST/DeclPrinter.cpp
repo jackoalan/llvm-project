@@ -903,7 +903,8 @@ void DeclPrinter::VisitVarDecl(VarDecl *D) {
       PrintingPolicy SubPolicy(Policy);
       SubPolicy.SuppressSpecifiers = false;
       SubPolicy.IncludeTagDefinition = false;
-      Init->printPretty(Out, nullptr, SubPolicy, Indentation);
+      if (!Policy.Callbacks || !Policy.Callbacks->overrideVarInitPrint(D, Out))
+        Init->printPretty(Out, nullptr, SubPolicy, Indentation);
       if ((D->getInitStyle() == VarDecl::CallInit) && !isa<ParenListExpr>(Init))
         Out << ")";
     }

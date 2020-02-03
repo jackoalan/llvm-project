@@ -30,6 +30,7 @@ class MemberExpr;
 class SourceManager;
 class Stmt;
 class TagDecl;
+class VarDecl;
 
 class PrinterHelper {
 public:
@@ -113,6 +114,11 @@ public:
   virtual void
   printCompoundStatementAfter(const std::function<raw_ostream &()> &Indent,
                               CompoundStmt *CS) const {}
+
+  /// Opportunity to print a specially formatted VarDecl init
+  virtual bool overrideVarInitPrint(VarDecl *D, raw_ostream &OS) const {
+    return false;
+  }
 };
 
 /// Describes how types, statements, expressions, and declarations should be

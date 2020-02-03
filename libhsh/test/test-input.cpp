@@ -1,36 +1,4 @@
-#include <hsh/hsh.h>
-
-namespace MyNS {
-enum class PostMode {
-  Nothing,
-  AddDynamicColor,
-  AddDynamicColor2,
-  MultiplyDynamicColor
-};
-
-struct MyFormat {
-  hsh::float3 position;
-  hsh::float3 normal;
-};
-
-struct UniformData {
-  hsh::float4x4 xf;
-  hsh::float3 lightDir;
-  float afloat;
-  hsh::aligned_float3x3 dynColor;
-  float bfloat;
-};
-
-enum AlphaMode {
-  AM_NoAlpha, AM_Alpha
-};
-
-template <AlphaMode AM>
-struct AlphaTraits {
-  static constexpr AlphaMode Mode = AM;
-};
-}
-
+#include "test-input.h"
 #include "test-input.cpp.hshhead"
 
 namespace MyNS {
@@ -95,7 +63,7 @@ hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typ
 }
 #endif
 
-inline auto test_factory() {
+Binding BuildPipeline() {
   auto uni = hsh::create_dynamic_uniform_buffer<UniformData>();
   UniformData UniData{};
   UniData.xf[0][0] = 1.f;
@@ -110,9 +78,10 @@ inline auto test_factory() {
   };
   auto vtx = hsh::create_vertex_buffer(VtxData);
   auto tex = hsh::create_texture2d<float>(
-      1024, 1024, hsh::Format::RGBA8_UNORM, 10,
+      {1024, 1024}, hsh::Format::RGBA8_UNORM, 10,
       [](void *buf, std::size_t size) { std::memset(buf, 0, size); });
-  return BindDrawSomething(uni, vtx, tex);
+  auto bind = BindDrawSomething(uni, vtx, tex);
+  return {std::move(uni), std::move(vtx), std::move(tex), std::move(bind)};
 }
 
 }
