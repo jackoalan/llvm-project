@@ -1,38 +1,80 @@
 #pragma once
 
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
-#include <type_traits>
-#include <utility>
 #include <iostream>
-#include <cassert>
 #include <list>
 #include <map>
-#include <unordered_map>
 #include <sstream>
-#include <fstream>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
 
 #if !defined(NDEBUG)
-#if __has_include(<experimental/source_location>)
-#include <experimental/source_location>
-#define HSH_SOURCE_LOCATION std::experimental::source_location
-#define HSH_SOURCE_LOCATION_ENABLED 1
-#elif __has_include(<source_location>)
+#if __has_include(<source_location>)
 #include <source_location>
-#define HSH_SOURCE_LOCATION std::source_location
+#define HSH_SOURCE_LOCATION_REP std::source_location
+#elif __has_include(<experimental/source_location>)
+#include <experimental/source_location>
+#define HSH_SOURCE_LOCATION_REP std::experimental::source_location
+#endif
+#endif
+#ifdef HSH_SOURCE_LOCATION_REP
+namespace hsh {
+class SourceLocation {
+  HSH_SOURCE_LOCATION_REP m_location;
+  const char *m_field = nullptr;
+  std::uint32_t m_fieldIdx = UINT32_MAX;
+
+public:
+  SourceLocation(const HSH_SOURCE_LOCATION_REP &location,
+                 const char *field = nullptr,
+                 std::uint32_t fieldIdx = UINT32_MAX) noexcept
+      : m_location(location), m_field(field), m_fieldIdx(fieldIdx) {}
+  SourceLocation with_field(const char *f, std::uint32_t idx = UINT32_MAX) const
+      noexcept {
+    return SourceLocation(m_location, f, idx);
+  }
+  static SourceLocation current(const char *f = nullptr,
+                                std::uint32_t idx = UINT32_MAX) noexcept {
+    return SourceLocation(HSH_SOURCE_LOCATION_REP::current(), f, idx);
+  }
+  const char *file_name() const noexcept { return m_location.file_name(); }
+  std::uint_least32_t line() const noexcept { return m_location.line(); }
+  const char *function_name() const noexcept {
+    return m_location.function_name();
+  }
+  bool has_field() const noexcept { return m_field != nullptr; }
+  const char *field() const noexcept { return m_field; }
+  bool has_field_idx() const noexcept { return m_fieldIdx != UINT32_MAX; }
+  std::uint32_t field_idx() const noexcept { return m_fieldIdx; }
+
+  std::string to_string() const noexcept {
+    std::ostringstream ss;
+    ss << file_name() << ':' << line() << ' ' << function_name();
+    if (has_field()) {
+      ss << " (" << field() << ')';
+      if (has_field_idx())
+        ss << '[' << field_idx() << ']';
+    }
+    return ss.str();
+  }
+};
+} // namespace hsh
+#undef HSH_SOURCE_LOCATION_REP
 #define HSH_SOURCE_LOCATION_ENABLED 1
-#endif
-#endif
-#ifndef HSH_SOURCE_LOCATION
-namespace hsh::detail {
-struct SourceLocation {
+#else
+namespace hsh {
+class SourceLocation {
+public:
   static SourceLocation current() noexcept { return {}; }
 };
-}
-#define HSH_SOURCE_LOCATION hsh::detail::SourceLocation
+} // namespace hsh
 #define HSH_SOURCE_LOCATION_ENABLED 0
 #endif
 
@@ -87,8 +129,7 @@ template <typename T> class ArrayProxy {
 public:
   constexpr ArrayProxy(std::nullptr_t) noexcept : Data(nullptr), Length(0) {}
 
-  ArrayProxy(const T &OneElt) noexcept
-      : Data(&OneElt), Length(1) {}
+  ArrayProxy(const T &OneElt) noexcept : Data(&OneElt), Length(1) {}
 
   ArrayProxy(const T *data, size_t length) noexcept
       : Data(data), Length(length) {}
@@ -96,7 +137,7 @@ public:
   ArrayProxy(const T *begin, const T *end) noexcept
       : Data(begin), Length(end - begin) {}
 
-  template<typename A>
+  template <typename A>
   ArrayProxy(const std::vector<T, A> &Vec) noexcept
       : Data(Vec.data()), Length(Vec.size()) {}
 
@@ -108,7 +149,7 @@ public:
   constexpr ArrayProxy(const T (&Arr)[N]) noexcept : Data(Arr), Length(N) {}
 
   ArrayProxy(const std::initializer_list<T> &Vec) noexcept
-      : Data(Vec.begin() == Vec.end() ? (T*)nullptr : Vec.begin()),
+      : Data(Vec.begin() == Vec.end() ? (T *)nullptr : Vec.begin()),
         Length(Vec.size()) {}
 
   const T *begin() const noexcept { return Data; }
@@ -135,25 +176,29 @@ private:
   const T *Data = nullptr;
   std::size_t Length = 0;
 };
-}
+} // namespace hsh::detail
 
 #define HSH_ENABLE_LOG 1
 #define HSH_ENABLE_VULKAN 1
 
 #if HSH_ENABLE_VULKAN
-inline void hshVkAssert(const char* pred) noexcept {
+inline void hshVkAssert(const char *pred) noexcept {
   std::cerr << pred << " failed\n";
   std::abort();
 }
 #define VK_NO_PROTOTYPES
 #define VULKAN_HPP_NO_EXCEPTIONS
 #define VK_USE_PLATFORM_XCB_KHR
-#define VULKAN_HPP_ASSERT(pred) if (!(pred)) hshVkAssert(#pred)
+#define VULKAN_HPP_ASSERT(pred)                                                \
+  if (!(pred))                                                                 \
+  hshVkAssert(#pred)
 #include <vulkan/vulkan.hpp>
 
 #define VMA_USE_STL_CONTAINERS 1
 #define VMA_USE_STL_SHARED_MUTEX 1
-#define VMA_ASSERT(pred) if (!(pred)) hshVkAssert(#pred)
+#define VMA_ASSERT(pred)                                                       \
+  if (!(pred))                                                                 \
+  hshVkAssert(#pred)
 #include "vk_mem_alloc_hsh.h"
 
 namespace hsh {
@@ -180,7 +225,7 @@ struct Rect2D {
   operator vk::Rect2D() const noexcept { return vk::Rect2D(offset, extent); }
 #endif
 };
-}
+} // namespace hsh
 
 namespace VULKAN_HPP_NAMESPACE {
 template <> struct ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
@@ -207,23 +252,26 @@ protected:
 
 namespace hsh::detail::vulkan {
 class BufferAllocation {
-protected:
+  friend class DeletedBufferAllocation;
   friend BufferAllocation
-  AllocateStaticBuffer(const HSH_SOURCE_LOCATION &location, vk::DeviceSize size,
+  AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
                        vk::BufferUsageFlags usage) noexcept;
+
+protected:
   vk::Buffer Buffer;
   VmaAllocation Allocation = VK_NULL_HANDLE;
   BufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation) noexcept
       : Buffer(Buffer), Allocation(Allocation) {}
+
 public:
   BufferAllocation() noexcept = default;
-  BufferAllocation(const BufferAllocation& other) = delete;
-  BufferAllocation &operator=(const BufferAllocation& other) = delete;
+  BufferAllocation(const BufferAllocation &other) = delete;
+  BufferAllocation &operator=(const BufferAllocation &other) = delete;
   BufferAllocation(BufferAllocation &&other) noexcept {
     std::swap(Buffer, other.Buffer);
     std::swap(Allocation, other.Allocation);
   }
-  BufferAllocation &operator=(BufferAllocation&& other) noexcept {
+  BufferAllocation &operator=(BufferAllocation &&other) noexcept {
     std::swap(Buffer, other.Buffer);
     std::swap(Allocation, other.Allocation);
     return *this;
@@ -240,6 +288,7 @@ class DynamicBufferBinding {
   vk::DeviceSize SecondOffset;
   DynamicBufferBinding(vk::Buffer Buffer, vk::DeviceSize SecondOffset) noexcept
       : Buffer(Buffer), SecondOffset(SecondOffset) {}
+
 public:
   DynamicBufferBinding() noexcept = default;
   vk::Buffer getBuffer() const noexcept { return Buffer; }
@@ -249,8 +298,7 @@ public:
 
 class DynamicBufferAllocation : public BufferAllocation {
   friend DynamicBufferAllocation
-  AllocateDynamicBuffer(const HSH_SOURCE_LOCATION &location,
-                        vk::DeviceSize size,
+  AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                         vk::BufferUsageFlags usage) noexcept;
   void *MappedData = nullptr;
   vk::DeviceSize SecondOffset = 0;
@@ -265,22 +313,20 @@ public:
   DynamicBufferBinding getBinding() const noexcept {
     return DynamicBufferBinding(Buffer, SecondOffset);
   }
-  operator DynamicBufferBinding() const noexcept {
-    return getBinding();
-  }
+  operator DynamicBufferBinding() const noexcept { return getBinding(); }
   inline vk::DeviceSize getOffset() const noexcept;
   vk::DescriptorBufferInfo getDescriptorBufferInfo() const noexcept {
     return {Buffer, 0, SecondOffset};
   }
   void *map() noexcept {
-    return reinterpret_cast<uint8_t*>(MappedData) + getOffset();
+    return reinterpret_cast<uint8_t *>(MappedData) + getOffset();
   }
   inline void unmap() noexcept;
 };
 
 class UploadBufferAllocation : public BufferAllocation {
   friend UploadBufferAllocation
-  AllocateUploadBuffer(const HSH_SOURCE_LOCATION &location,
+  AllocateUploadBuffer(const SourceLocation &location,
                        vk::DeviceSize size) noexcept;
   void *MappedData;
   UploadBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation,
@@ -292,36 +338,39 @@ public:
 };
 
 struct TextureAllocation {
+  friend class DeletedTextureAllocation;
   friend TextureAllocation
-  AllocateTexture(const HSH_SOURCE_LOCATION &location,
+  AllocateTexture(const SourceLocation &location,
                   const vk::ImageCreateInfo &CreateInfo,
                   bool Dedicated) noexcept;
+
 protected:
   vk::Image Image;
   VmaAllocation Allocation = VK_NULL_HANDLE;
   TextureAllocation(vk::Image Image, VmaAllocation Allocation) noexcept
       : Image(Image), Allocation(Allocation) {}
+
 public:
   TextureAllocation() noexcept = default;
-  TextureAllocation(const TextureAllocation& other) = delete;
-  TextureAllocation &operator=(const TextureAllocation& other) = delete;
+  TextureAllocation(const TextureAllocation &other) = delete;
+  TextureAllocation &operator=(const TextureAllocation &other) = delete;
   TextureAllocation(TextureAllocation &&other) noexcept {
     std::swap(Image, other.Image);
     std::swap(Allocation, other.Allocation);
   }
-  TextureAllocation &operator=(TextureAllocation&& other) noexcept {
+  TextureAllocation &operator=(TextureAllocation &&other) noexcept {
     std::swap(Image, other.Image);
     std::swap(Allocation, other.Allocation);
     return *this;
   }
   inline ~TextureAllocation() noexcept;
-  vk::Image getImage() const noexcept { return Image; }
+  vk::Image GetImage() const noexcept { return Image; }
 };
 
 class SurfaceAllocation {
   friend class RenderTextureAllocation;
   SurfaceAllocation *Prev = nullptr, *Next = nullptr;
-  const HSH_SOURCE_LOCATION Location;
+  SourceLocation Location;
   vk::UniqueSurfaceKHR Surface;
   vk::UniqueSwapchainKHR Swapchain;
   vk::UniqueRenderPass OwnedRenderPass;
@@ -329,21 +378,27 @@ class SurfaceAllocation {
   vk::Extent2D Extent;
   vk::Format ColorFormat = vk::Format::eUndefined;
   uint32_t NextImage = UINT32_MAX;
+
 public:
   inline ~SurfaceAllocation() noexcept;
-  inline explicit SurfaceAllocation(const HSH_SOURCE_LOCATION &location,
+  inline explicit SurfaceAllocation(const SourceLocation &location,
                                     vk::UniqueSurfaceKHR &&Surface) noexcept;
+  SurfaceAllocation(const SurfaceAllocation &other) = delete;
+  SurfaceAllocation &operator=(const SurfaceAllocation &other) = delete;
+  SurfaceAllocation(SurfaceAllocation &&other) noexcept = delete;
+  SurfaceAllocation &operator=(SurfaceAllocation &&other) noexcept = delete;
   inline bool PreRender() noexcept;
   inline bool AcquireNextImage() noexcept;
   inline void PostRender() noexcept;
-  const vk::Extent2D &getExtent() const noexcept { return Extent; }
-  vk::Format getColorFormat() const noexcept { return ColorFormat; }
-  SurfaceAllocation *getNext() const noexcept { return Next; }
+  const vk::Extent2D &GetExtent() const noexcept { return Extent; }
+  vk::Format GetColorFormat() const noexcept { return ColorFormat; }
+  SurfaceAllocation *GetNext() const noexcept { return Next; }
 };
 
 class RenderTextureAllocation {
+  friend class DeletedRenderTextureAllocation;
   RenderTextureAllocation *Prev = nullptr, *Next = nullptr;
-  const HSH_SOURCE_LOCATION Location;
+  SourceLocation Location;
   SurfaceAllocation *Surface;
   vk::Extent2D Extent;
   vk::Format ColorFormat = vk::Format::eUndefined;
@@ -356,15 +411,16 @@ class RenderTextureAllocation {
   struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
     std::array<vk::ClearValue, 2> ClearValues;
     RenderPassBeginInfo() = default;
-    RenderPassBeginInfo(vk::RenderPass RenderPass,
-                        vk::Framebuffer Framebuffer, vk::Extent2D Extent) noexcept
+    RenderPassBeginInfo(vk::RenderPass RenderPass, vk::Framebuffer Framebuffer,
+                        vk::Extent2D Extent) noexcept
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
         : vk::RenderPassBeginInfo(RenderPass, Framebuffer,
                                   vk::Rect2D({}, Extent), ClearValues.size(),
                                   ClearValues.data()),
 #pragma GCC diagnostic pop
-          ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {}
+          ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {
+    }
   } RenderPassBegin;
   struct Binding {
     TextureAllocation Texture;
@@ -384,30 +440,38 @@ class RenderTextureAllocation {
 
 public:
   inline ~RenderTextureAllocation() noexcept;
-  inline explicit RenderTextureAllocation(const HSH_SOURCE_LOCATION &location,
+  inline explicit RenderTextureAllocation(const SourceLocation &location,
                                           SurfaceAllocation *Surface,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
-  inline explicit RenderTextureAllocation(const HSH_SOURCE_LOCATION &location,
+  inline explicit RenderTextureAllocation(const SourceLocation &location,
                                           Extent2D extent,
                                           vk::Format colorFormat,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
+  RenderTextureAllocation(const RenderTextureAllocation &other) = delete;
+  RenderTextureAllocation &operator=(const TextureAllocation &other) = delete;
+  RenderTextureAllocation(RenderTextureAllocation &&other) noexcept = delete;
+  RenderTextureAllocation &
+  operator=(RenderTextureAllocation &&other) noexcept = delete;
   void PreRender() noexcept {
     if (Surface) {
       auto &SurfAlloc = *Surface;
-      if (SurfAlloc.getExtent() != Extent ||
-          SurfAlloc.getColorFormat() != ColorFormat) {
-        Extent = SurfAlloc.getExtent();
-        ColorFormat = SurfAlloc.getColorFormat();
+      if (SurfAlloc.GetExtent() != Extent ||
+          SurfAlloc.GetColorFormat() != ColorFormat) {
+        Extent = SurfAlloc.GetExtent();
+        ColorFormat = SurfAlloc.GetColorFormat();
         Prepare();
       }
     }
   }
   inline void BeginRenderPass() noexcept;
-  inline void ResolveSurface(SurfaceAllocation *Surface, bool Reattach) noexcept;
-  inline void ResolveColorBinding(uint32_t Idx, Rect2D Region, bool Reattach) noexcept;
-  inline void ResolveDepthBinding(uint32_t Idx, Rect2D Region, bool Reattach) noexcept;
+  inline void ResolveSurface(SurfaceAllocation *Surface,
+                             bool Reattach) noexcept;
+  inline void ResolveColorBinding(uint32_t Idx, Rect2D Region,
+                                  bool Reattach) noexcept;
+  inline void ResolveDepthBinding(uint32_t Idx, Rect2D Region,
+                                  bool Reattach) noexcept;
   vk::ImageView GetColorBindingView(uint32_t Idx) const noexcept {
     assert(Idx < NumColorBindings);
     return ColorBindings[Idx].ImageView.get();
@@ -417,7 +481,131 @@ public:
     return DepthBindings[Idx].ImageView.get();
   }
   inline void Attach() noexcept;
-  RenderTextureAllocation *getNext() const noexcept { return Next; }
+  RenderTextureAllocation *GetNext() const noexcept { return Next; }
+};
+
+class DeletedBufferAllocation {
+  vk::Buffer Buffer;
+  VmaAllocation Allocation = VK_NULL_HANDLE;
+
+public:
+  explicit DeletedBufferAllocation(BufferAllocation &&Obj) noexcept {
+    std::swap(Buffer, Obj.Buffer);
+    std::swap(Allocation, Obj.Allocation);
+  }
+  DeletedBufferAllocation &operator=(BufferAllocation &&Obj) noexcept {
+    std::swap(Buffer, Obj.Buffer);
+    std::swap(Allocation, Obj.Allocation);
+    return *this;
+  }
+  DeletedBufferAllocation(const DeletedBufferAllocation &other) = delete;
+  DeletedBufferAllocation &
+  operator=(const DeletedBufferAllocation &other) = delete;
+  DeletedBufferAllocation(DeletedBufferAllocation &&other) noexcept {
+    std::swap(Buffer, other.Buffer);
+    std::swap(Allocation, other.Allocation);
+  }
+  DeletedBufferAllocation &operator=(DeletedBufferAllocation &&other) noexcept {
+    std::swap(Buffer, other.Buffer);
+    std::swap(Allocation, other.Allocation);
+    return *this;
+  }
+  inline ~DeletedBufferAllocation() noexcept;
+};
+
+class DeletedTextureAllocation {
+  vk::Image Image;
+  VmaAllocation Allocation = VK_NULL_HANDLE;
+
+public:
+  DeletedTextureAllocation(TextureAllocation &&other) noexcept {
+    std::swap(Image, other.Image);
+    std::swap(Allocation, other.Allocation);
+  }
+  DeletedTextureAllocation(const DeletedTextureAllocation &other) = delete;
+  DeletedTextureAllocation &
+  operator=(const DeletedTextureAllocation &other) = delete;
+  DeletedTextureAllocation(DeletedTextureAllocation &&other) noexcept {
+    std::swap(Image, other.Image);
+    std::swap(Allocation, other.Allocation);
+  }
+  DeletedTextureAllocation &
+  operator=(DeletedTextureAllocation &&other) noexcept {
+    std::swap(Image, other.Image);
+    std::swap(Allocation, other.Allocation);
+    return *this;
+  }
+  inline ~DeletedTextureAllocation() noexcept;
+};
+
+class DeletedRenderTextureAllocation {
+  DeletedTextureAllocation ColorTexture;
+  vk::UniqueImageView ColorView;
+  DeletedTextureAllocation DepthTexture;
+  vk::UniqueImageView DepthView;
+  vk::UniqueFramebuffer Framebuffer;
+  struct Binding {
+    DeletedTextureAllocation Texture;
+    vk::UniqueImageView ImageView;
+    Binding(RenderTextureAllocation::Binding &&Obj) noexcept
+        : Texture(std::move(Obj.Texture)), ImageView(std::move(Obj.ImageView)) {
+    }
+  };
+  std::array<Binding, MaxRenderTextureBindings> ColorBindings;
+  std::array<Binding, MaxRenderTextureBindings> DepthBindings;
+
+public:
+  template <std::size_t... CSeq, std::size_t... DSeq>
+  explicit DeletedRenderTextureAllocation(RenderTextureAllocation &&Obj,
+                                          std::index_sequence<CSeq...>,
+                                          std::index_sequence<DSeq...>) noexcept
+      : ColorTexture(std::move(Obj.ColorTexture)),
+        ColorView(std::move(Obj.ColorView)),
+        DepthTexture(std::move(Obj.DepthTexture)),
+        DepthView(std::move(Obj.DepthView)),
+        Framebuffer(std::move(Obj.Framebuffer)),
+        ColorBindings{std::move(Obj.ColorBindings[CSeq])...},
+        DepthBindings{std::move(Obj.DepthBindings[DSeq])...} {}
+  explicit DeletedRenderTextureAllocation(
+      RenderTextureAllocation &&Obj) noexcept
+      : DeletedRenderTextureAllocation(
+            std::move(Obj),
+            std::make_index_sequence<MaxRenderTextureBindings>(),
+            std::make_index_sequence<MaxRenderTextureBindings>()) {}
+
+  DeletedRenderTextureAllocation(const DeletedRenderTextureAllocation &other) =
+      delete;
+  DeletedRenderTextureAllocation &
+  operator=(const DeletedRenderTextureAllocation &other) = delete;
+  DeletedRenderTextureAllocation(
+      DeletedRenderTextureAllocation &&other) noexcept = default;
+  DeletedRenderTextureAllocation &
+  operator=(DeletedRenderTextureAllocation &&other) noexcept = default;
+};
+
+class DeletedResources {
+  std::vector<DeletedBufferAllocation> Buffers;
+  std::vector<DeletedTextureAllocation> Textures;
+  std::vector<DeletedRenderTextureAllocation> RenderTextures;
+
+public:
+  void DeleteLater(BufferAllocation &&Obj) noexcept {
+    Buffers.emplace_back(std::move(Obj));
+  }
+  void DeleteLater(TextureAllocation &&Obj) noexcept {
+    Textures.emplace_back(std::move(Obj));
+  }
+  void DeleteLater(RenderTextureAllocation &&Obj) noexcept {
+    RenderTextures.emplace_back(std::move(Obj));
+  }
+  void Purge() noexcept {
+    Buffers.clear();
+    Textures.clear();
+    RenderTextures.clear();
+  }
+  DeletedResources() noexcept = default;
+  DeletedResources(const DeletedResources &) = delete;
+  DeletedResources &operator=(const DeletedResources &) = delete;
 };
 
 struct VulkanGlobals {
@@ -447,7 +635,8 @@ struct VulkanGlobals {
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
   uint64_t Frame = 0;
 
-  std::vector<UploadBufferAllocation> PendingUploadBuffers;
+  std::array<DeletedResources, 2> *DeletedResourcesArr;
+  DeletedResources *DeletedResources = nullptr;
   SurfaceAllocation *SurfaceHead = nullptr;
   RenderTextureAllocation *RenderTextureHead = nullptr;
 
@@ -458,10 +647,12 @@ struct VulkanGlobals {
     Device.waitForFences(CmdFence, VK_TRUE, 500000000);
     DynamicBufferIndex = CurBufferIdx;
     DynamicBufferMask = CurBufferIdx ? ~VkDeviceSize(0) : 0;
+    DeletedResources = &(*DeletedResourcesArr)[CurBufferIdx];
+    DeletedResources->Purge();
 
-    for (auto *Surf = SurfaceHead; Surf; Surf = Surf->getNext())
+    for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PreRender();
-    for (auto *RT = RenderTextureHead; RT; RT = RT->getNext())
+    for (auto *RT = RenderTextureHead; RT; RT = RT->GetNext())
       RT->PreRender();
 
     Cmd.begin(vk::CommandBufferBeginInfo(
@@ -476,13 +667,14 @@ struct VulkanGlobals {
     BoundPipeline = vk::Pipeline{};
     BoundDescriptorSet = vk::DescriptorSet{};
     Cmd.end();
+
     vk::PipelineStageFlags pipeStageFlags =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
     Device.resetFences(CmdFence);
     Queue.submit(vk::SubmitInfo(1, &ImageAcquireSem, &pipeStageFlags, 1, &Cmd,
                                 1, &RenderCompleteSem),
                  CmdFence);
-    for (auto *Surf = SurfaceHead; Surf; Surf = Surf->getNext())
+    for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
     ++Frame;
   }
@@ -503,17 +695,19 @@ struct VulkanGlobals {
 
 #if HSH_SOURCE_LOCATION_ENABLED
   template <typename T>
-  void SetDebugObjectName(const HSH_SOURCE_LOCATION &location,
-                          T handle) noexcept {
-    std::ostringstream ss;
-    ss << location.file_name() << ':' << location.line() << ' '
-       << location.function_name();
+  void SetDebugObjectName(const char *location, T handle) noexcept {
     Device.setDebugUtilsObjectNameEXT(vk::DebugUtilsObjectNameInfoEXT(
-        T::objectType, uint64_t(typename T::CType(handle)), ss.str().c_str()));
+        T::objectType, uint64_t(typename T::CType(handle)), location));
+  }
+  template <typename T>
+  void SetDebugObjectName(const SourceLocation &location, T handle) noexcept {
+    SetDebugObjectName(location.to_string().c_str(), handle);
   }
 #else
   template <typename T>
-  static void SetDebugObjectName(const HSH_SOURCE_LOCATION &location,
+  static void SetDebugObjectName(const char *location, T handle) noexcept {}
+  template <typename T>
+  static void SetDebugObjectName(const SourceLocation &location,
                                  T handle) noexcept {}
 #endif
 };
@@ -560,11 +754,12 @@ bool SurfaceAllocation::PreRender() noexcept {
                         Globals.PhysDevice, Capabilities, Surface.get(),
                         ColorFormat, Swapchain.get()))
                     .value;
-    Globals.SetDebugObjectName(Location, Swapchain.get());
+    Globals.SetDebugObjectName(Location.with_field("Swapchain"),
+                               Swapchain.get());
     SwapchainImages = Globals.Device.getSwapchainImagesKHR(*Swapchain).value;
     Extent = Capabilities.currentExtent;
     VULKAN_HPP_ASSERT((!Next || ColorFormat == Next->ColorFormat) &&
-                        "Subsequent surfaces must have the same color format");
+                      "Subsequent surfaces must have the same color format");
     return true;
   }
   return false;
@@ -585,10 +780,20 @@ void SurfaceAllocation::PostRender() noexcept {
 }
 
 BufferAllocation::~BufferAllocation() noexcept {
+  if (Buffer)
+    Globals.DeletedResources->DeleteLater(std::move(*this));
+}
+
+DeletedBufferAllocation::~DeletedBufferAllocation() noexcept {
   vmaDestroyBuffer(Globals.Allocator, Buffer, Allocation);
 }
 
 TextureAllocation::~TextureAllocation() noexcept {
+  if (Image)
+    Globals.DeletedResources->DeleteLater(std::move(*this));
+}
+
+DeletedTextureAllocation::~DeletedTextureAllocation() noexcept {
   vmaDestroyImage(Globals.Allocator, Image, Allocation);
 }
 
@@ -610,7 +815,7 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
     Next->Prev = Prev;
 }
 
-SurfaceAllocation::SurfaceAllocation(const HSH_SOURCE_LOCATION &location,
+SurfaceAllocation::SurfaceAllocation(const SourceLocation &location,
                                      vk::UniqueSurfaceKHR &&Surface) noexcept
     : Next(Globals.SurfaceHead), Location(location),
       Surface(std::move(Surface)) {
@@ -657,10 +862,11 @@ SurfaceAllocation::SurfaceAllocation(const HSH_SOURCE_LOCATION &location,
     };
     OwnedRenderPass = Globals.Device
                           .createRenderPassUnique(RenderPassCreateInfo(
-                              getColorFormat(),
+                              GetColorFormat(),
                               Globals.MultisampleState.rasterizationSamples))
                           .value;
-    Globals.SetDebugObjectName(location, OwnedRenderPass.get());
+    Globals.SetDebugObjectName(location.with_field("OwnedRenderPass"),
+                               OwnedRenderPass.get());
     Globals.RenderPass = OwnedRenderPass.get();
   }
 }
@@ -672,12 +878,12 @@ RenderTextureAllocation::~RenderTextureAllocation() noexcept {
     Globals.RenderTextureHead = Next;
   if (Next)
     Next->Prev = Prev;
+  Globals.DeletedResources->DeleteLater(std::move(*this));
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
-    const HSH_SOURCE_LOCATION &location,
-    SurfaceAllocation *Surface, uint32_t NumColorBindings,
-    uint32_t NumDepthBindings) noexcept
+    const SourceLocation &location, SurfaceAllocation *Surface,
+    uint32_t NumColorBindings, uint32_t NumDepthBindings) noexcept
     : Next(Globals.RenderTextureHead), Location(location), Surface(Surface),
       NumColorBindings(NumColorBindings), NumDepthBindings(NumDepthBindings) {
   Globals.RenderTextureHead = this;
@@ -689,8 +895,7 @@ RenderTextureAllocation::RenderTextureAllocation(
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
-    const HSH_SOURCE_LOCATION &location,
-    Extent2D extent, vk::Format colorFormat,
+    const SourceLocation &location, Extent2D extent, vk::Format colorFormat,
     uint32_t NumColorBindings, uint32_t NumDepthBindings) noexcept
     : Next(Globals.RenderTextureHead), Location(location), Extent(extent),
       ColorFormat(colorFormat), NumColorBindings(NumColorBindings),
@@ -710,7 +915,7 @@ vk::DeviceSize DynamicBufferAllocation::getOffset() const noexcept {
 void DynamicBufferAllocation::unmap() noexcept {
   vmaFlushAllocation(Globals.Allocator, Allocation, getOffset(), SecondOffset);
 }
-}
+} // namespace hsh::detail::vulkan
 
 namespace VULKAN_HPP_NAMESPACE {
 ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::ObjectDestroy(
@@ -746,6 +951,11 @@ enum Target : std::uint8_t {
 #include "targets.def"
   TARGET_MAX
 };
+enum ActiveTarget : std::uint8_t {
+#define HSH_ACTIVE_TARGET(Enumeration) ACTIVE_##Enumeration,
+#include "targets.def"
+  ACTIVE_TARGET_MAX
+};
 struct uniform_buffer_typeless;
 struct dynamic_uniform_buffer_typeless;
 struct vertex_buffer_typeless;
@@ -763,11 +973,11 @@ namespace hsh::detail::vulkan {
 struct DescriptorPoolCreateInfo : vk::DescriptorPoolCreateInfo {
   std::array<vk::DescriptorPoolSize, 3> PoolSizes{
       vk::DescriptorPoolSize{vk::DescriptorType::eUniformBufferDynamic,
-                             MaxUniforms * MaxDescriptorPoolSets},
+                             MaxUniforms *MaxDescriptorPoolSets},
       vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage,
-                             MaxImages * MaxDescriptorPoolSets},
+                             MaxImages *MaxDescriptorPoolSets},
       vk::DescriptorPoolSize{vk::DescriptorType::eSampler,
-                             MaxSamplers * MaxDescriptorPoolSets}};
+                             MaxSamplers *MaxDescriptorPoolSets}};
   constexpr DescriptorPoolCreateInfo() noexcept
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
@@ -780,16 +990,15 @@ struct UniqueDescriptorSet {
   vk::DescriptorSet Set;
   std::uint64_t Index = UINT64_MAX;
   UniqueDescriptorSet() noexcept = default;
-  UniqueDescriptorSet(vk::DescriptorSet Set,
-                      std::size_t Index) noexcept
+  UniqueDescriptorSet(vk::DescriptorSet Set, std::size_t Index) noexcept
       : Set(Set), Index(Index) {}
-  UniqueDescriptorSet(const UniqueDescriptorSet&) = delete;
-  UniqueDescriptorSet &operator=(const UniqueDescriptorSet&) = delete;
-  UniqueDescriptorSet(UniqueDescriptorSet&& Other) noexcept {
+  UniqueDescriptorSet(const UniqueDescriptorSet &) = delete;
+  UniqueDescriptorSet &operator=(const UniqueDescriptorSet &) = delete;
+  UniqueDescriptorSet(UniqueDescriptorSet &&Other) noexcept {
     Set = Other.Set;
     std::swap(Index, Other.Index);
   }
-  UniqueDescriptorSet &operator=(UniqueDescriptorSet&& Other) noexcept {
+  UniqueDescriptorSet &operator=(UniqueDescriptorSet &&Other) noexcept {
     Set = Other.Set;
     std::swap(Index, Other.Index);
     return *this;
@@ -885,8 +1094,8 @@ UniqueDescriptorSet::~UniqueDescriptorSet() noexcept {
     Globals.DescriptorPoolChain->free(Index);
 }
 
-inline VkResult vmaCreateAllocator(const VmaAllocatorCreateInfo& pCreateInfo,
-                                   VmaAllocator* pAllocator) noexcept {
+inline VkResult vmaCreateAllocator(const VmaAllocatorCreateInfo &pCreateInfo,
+                                   VmaAllocator *pAllocator) noexcept {
   return ::vmaCreateAllocator(
       reinterpret_cast<const VmaAllocatorCreateInfo *>(&pCreateInfo),
       pAllocator);
@@ -904,12 +1113,12 @@ vmaCreateBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
       pBuffer, pAllocation, pAllocationInfo);
 }
 
-inline VkResult vmaCreateDoubleBuffer(const vk::BufferCreateInfo& pBufferCreateInfo,
-                                      const VmaAllocationCreateInfo& pAllocationCreateInfo,
-                                      VkBuffer* pBuffer,
-                                      VmaAllocation* pAllocation,
-                                      VmaAllocationInfo* pAllocationInfo,
-                                      vk::DeviceSize* secondOffset) noexcept {
+inline VkResult
+vmaCreateDoubleBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
+                      const VmaAllocationCreateInfo &pAllocationCreateInfo,
+                      VkBuffer *pBuffer, VmaAllocation *pAllocation,
+                      VmaAllocationInfo *pAllocationInfo,
+                      vk::DeviceSize *secondOffset) noexcept {
   return ::vmaCreateDoubleBuffer(
       Globals.Allocator,
       reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
@@ -917,9 +1126,38 @@ inline VkResult vmaCreateDoubleBuffer(const vk::BufferCreateInfo& pBufferCreateI
       pBuffer, pAllocation, pAllocationInfo, secondOffset);
 }
 
+#if HSH_SOURCE_LOCATION_ENABLED
+class VmaLocationStrSetter {
+  std::string LocationStr;
+
+public:
+  VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
+                       const SourceLocation &Location) noexcept
+      : LocationStr(Location.to_string()) {
+    CreateInfo.flags |= VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
+    CreateInfo.pUserData = (void *)LocationStr.c_str();
+  }
+  operator const char *() const noexcept { return LocationStr.c_str(); }
+  VmaLocationStrSetter(const VmaLocationStrSetter &) = delete;
+  VmaLocationStrSetter &operator=(const VmaLocationStrSetter &) = delete;
+  VmaLocationStrSetter(VmaLocationStrSetter &&) = delete;
+  VmaLocationStrSetter &operator=(VmaLocationStrSetter &&) = delete;
+};
+#else
+class VmaLocationStrSetter {
+public:
+  VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
+                       const SourceLocation &Location) noexcept {}
+  operator const char *() const noexcept { return nullptr; }
+  VmaLocationStrSetter(const VmaLocationStrSetter &) = delete;
+  VmaLocationStrSetter &operator=(const VmaLocationStrSetter &) = delete;
+  VmaLocationStrSetter(VmaLocationStrSetter &&) = delete;
+  VmaLocationStrSetter &operator=(VmaLocationStrSetter &&) = delete;
+};
+#endif
+
 inline BufferAllocation
-AllocateStaticBuffer(const HSH_SOURCE_LOCATION &location,
-                     vk::DeviceSize size,
+AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
                      vk::BufferUsageFlags usage) noexcept {
   struct StaticUniformBufferAllocationCreateInfo : VmaAllocationCreateInfo {
     constexpr StaticUniformBufferAllocationCreateInfo() noexcept
@@ -933,18 +1171,17 @@ AllocateStaticBuffer(const HSH_SOURCE_LOCATION &location,
   };
   VkBuffer Buffer;
   VmaAllocation Allocation;
+  StaticUniformBufferAllocationCreateInfo CreateInfo;
+  VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result = vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
-                                StaticUniformBufferAllocationCreateInfo(),
-                                &Buffer, &Allocation,
-                                nullptr);
+                                CreateInfo, &Buffer, &Allocation, nullptr);
   VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
-  Globals.SetDebugObjectName(location, vk::Buffer(Buffer));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return BufferAllocation(Buffer, Allocation);
 }
 
 inline DynamicBufferAllocation
-AllocateDynamicBuffer(const HSH_SOURCE_LOCATION &location,
-                      vk::DeviceSize size,
+AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                       vk::BufferUsageFlags usage) noexcept {
   struct DynamicUniformBufferAllocationCreateInfo : VmaAllocationCreateInfo {
     constexpr DynamicUniformBufferAllocationCreateInfo() noexcept
@@ -960,18 +1197,19 @@ AllocateDynamicBuffer(const HSH_SOURCE_LOCATION &location,
   VmaAllocation Allocation;
   VmaAllocationInfo AllocInfo;
   VkDeviceSize SecondOffset;
+  DynamicUniformBufferAllocationCreateInfo CreateInfo;
+  VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result =
-      vmaCreateDoubleBuffer(vk::BufferCreateInfo({}, size, usage),
-                            DynamicUniformBufferAllocationCreateInfo(), &Buffer,
-                            &Allocation, &AllocInfo, &SecondOffset);
+      vmaCreateDoubleBuffer(vk::BufferCreateInfo({}, size, usage), CreateInfo,
+                            &Buffer, &Allocation, &AllocInfo, &SecondOffset);
   VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
-  Globals.SetDebugObjectName(location, vk::Buffer(Buffer));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return DynamicBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
                                  SecondOffset);
 }
 
 inline UploadBufferAllocation
-AllocateUploadBuffer(const HSH_SOURCE_LOCATION &location,
+AllocateUploadBuffer(const SourceLocation &location,
                      vk::DeviceSize size) noexcept {
   struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
     constexpr UploadBufferAllocationCreateInfo() noexcept
@@ -986,15 +1224,17 @@ AllocateUploadBuffer(const HSH_SOURCE_LOCATION &location,
   VkBuffer Buffer;
   VmaAllocation Allocation;
   VmaAllocationInfo AllocInfo;
+  UploadBufferAllocationCreateInfo CreateInfo;
+  VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result = vmaCreateBuffer(
       vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
-      UploadBufferAllocationCreateInfo(), &Buffer, &Allocation, &AllocInfo);
+      CreateInfo, &Buffer, &Allocation, &AllocInfo);
   VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
-  Globals.SetDebugObjectName(location, vk::Buffer(Buffer));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
 }
 
-inline TextureAllocation AllocateTexture(const HSH_SOURCE_LOCATION &location,
+inline TextureAllocation AllocateTexture(const SourceLocation &location,
                                          const vk::ImageCreateInfo &CreateInfo,
                                          bool Dedicated = false) noexcept {
   struct TextureAllocationCreateInfo : VmaAllocationCreateInfo {
@@ -1011,56 +1251,66 @@ inline TextureAllocation AllocateTexture(const HSH_SOURCE_LOCATION &location,
   } AllocationCreateInfo{Dedicated};
   VkImage Image;
   VmaAllocation Allocation;
+  VmaLocationStrSetter LocationStr(AllocationCreateInfo, location);
   auto Result =
       vmaCreateImage(Globals.Allocator,
                      reinterpret_cast<const VkImageCreateInfo *>(&CreateInfo),
                      &AllocationCreateInfo, &Image, &Allocation, nullptr);
   VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
-  Globals.SetDebugObjectName(location, vk::Image(Image));
+  Globals.SetDebugObjectName(LocationStr, vk::Image(Image));
   return TextureAllocation(Image, Allocation);
 }
 
 void RenderTextureAllocation::Prepare() noexcept {
   Globals.Device.waitIdle();
-  ColorTexture = AllocateTexture(Location, vk::ImageCreateInfo(
-      {}, vk::ImageType::e2D, ColorFormat, vk::Extent3D(Extent, 1),
-      1, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
-      vk::ImageUsageFlagBits::eColorAttachment |
-      vk::ImageUsageFlagBits::eTransferSrc,
-      {}, {}, {}, vk::ImageLayout::eUndefined), true);
+  ColorTexture = AllocateTexture(
+      Location.with_field("ColorTexture"),
+      vk::ImageCreateInfo(
+          {}, vk::ImageType::e2D, ColorFormat, vk::Extent3D(Extent, 1), 1, 1,
+          vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+          vk::ImageUsageFlagBits::eColorAttachment |
+              vk::ImageUsageFlagBits::eTransferSrc,
+          {}, {}, {}, vk::ImageLayout::eUndefined),
+      true);
   ColorView = vulkan::Globals.Device
                   .createImageViewUnique(vk::ImageViewCreateInfo(
-                      {}, ColorTexture.getImage(), vk::ImageViewType::e2D,
+                      {}, ColorTexture.GetImage(), vk::ImageViewType::e2D,
                       ColorFormat, {},
                       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor,
                                                 0, 1, 0, 1)))
                   .value;
-  Globals.SetDebugObjectName(Location, ColorView.get());
-  DepthTexture = AllocateTexture(Location, vk::ImageCreateInfo(
-      {}, vk::ImageType::e2D, vk::Format::eD32Sfloat, vk::Extent3D(Extent, 1),
-      1, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
-      vk::ImageUsageFlagBits::eDepthStencilAttachment |
-      vk::ImageUsageFlagBits::eTransferSrc,
-      {}, {}, {}, vk::ImageLayout::eUndefined), true);
+  Globals.SetDebugObjectName(Location.with_field("ColorView"), ColorView.get());
+  DepthTexture = AllocateTexture(
+      Location.with_field("DepthTexture"),
+      vk::ImageCreateInfo({}, vk::ImageType::e2D, vk::Format::eD32Sfloat,
+                          vk::Extent3D(Extent, 1), 1, 1,
+                          vk::SampleCountFlagBits::e1,
+                          vk::ImageTiling::eOptimal,
+                          vk::ImageUsageFlagBits::eDepthStencilAttachment |
+                              vk::ImageUsageFlagBits::eTransferSrc,
+                          {}, {}, {}, vk::ImageLayout::eUndefined),
+      true);
   DepthView = vulkan::Globals.Device
                   .createImageViewUnique(vk::ImageViewCreateInfo(
-                      {}, DepthTexture.getImage(), vk::ImageViewType::e2D,
+                      {}, DepthTexture.GetImage(), vk::ImageViewType::e2D,
                       vk::Format::eD32Sfloat, {},
                       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth,
                                                 0, 1, 0, 1)))
                   .value;
-  Globals.SetDebugObjectName(Location, DepthView.get());
-  vk::ImageView Views[] = { ColorView.get(), DepthView.get() };
+  Globals.SetDebugObjectName(Location.with_field("DepthView"), DepthView.get());
+  vk::ImageView Views[] = {ColorView.get(), DepthView.get()};
   auto RenderPass = Globals.GetRenderPass();
   Framebuffer =
       Globals.Device
           .createFramebufferUnique(vk::FramebufferCreateInfo(
               {}, RenderPass, 2, Views, Extent.width, Extent.height, 1))
           .value;
-  Globals.SetDebugObjectName(Location, Framebuffer.get());
+  Globals.SetDebugObjectName(Location.with_field("Framebuffer"),
+                             Framebuffer.get());
   RenderPassBegin = RenderPassBeginInfo(RenderPass, Framebuffer.get(), Extent);
   for (uint32_t i = 0; i < NumColorBindings; ++i) {
-    ColorBindings[i].Texture = AllocateTexture(Location,
+    ColorBindings[i].Texture = AllocateTexture(
+        Location.with_field("ColorBindings", i),
         vk::ImageCreateInfo(
             {}, vk::ImageType::e2D, ColorFormat, vk::Extent3D(Extent, 1), 1, 1,
             vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
@@ -1071,15 +1321,17 @@ void RenderTextureAllocation::Prepare() noexcept {
     ColorBindings[i].ImageView =
         vulkan::Globals.Device
             .createImageViewUnique(vk::ImageViewCreateInfo(
-                {}, ColorBindings[i].Texture.getImage(), vk::ImageViewType::e2D,
+                {}, ColorBindings[i].Texture.GetImage(), vk::ImageViewType::e2D,
                 ColorFormat, {},
                 vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1,
                                           0, 1)))
             .value;
-    Globals.SetDebugObjectName(Location, ColorBindings[i].ImageView.get());
+    Globals.SetDebugObjectName(Location.with_field("ColorBindings", i),
+                               ColorBindings[i].ImageView.get());
   }
   for (uint32_t i = 0; i < NumDepthBindings; ++i) {
-    DepthBindings[i].Texture = AllocateTexture(Location,
+    DepthBindings[i].Texture = AllocateTexture(
+        Location.with_field("DepthBindings", i),
         vk::ImageCreateInfo({}, vk::ImageType::e2D, vk::Format::eD32Sfloat,
                             vk::Extent3D(Extent, 1), 1, 1,
                             vk::SampleCountFlagBits::e1,
@@ -1091,12 +1343,13 @@ void RenderTextureAllocation::Prepare() noexcept {
     DepthBindings[i].ImageView =
         vulkan::Globals.Device
             .createImageViewUnique(vk::ImageViewCreateInfo(
-                {}, DepthBindings[i].Texture.getImage(), vk::ImageViewType::e2D,
+                {}, DepthBindings[i].Texture.GetImage(), vk::ImageViewType::e2D,
                 vk::Format::eD32Sfloat, {},
                 vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1,
                                           0, 1)))
             .value;
-    Globals.SetDebugObjectName(Location, DepthBindings[i].ImageView.get());
+    Globals.SetDebugObjectName(Location.with_field("DepthBindings", i),
+                               DepthBindings[i].ImageView.get());
   }
   FirstAttach = false;
 }
@@ -1111,10 +1364,11 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                                        vk::Extent3D Extent) noexcept {
   vulkan::Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eColorAttachmentOutput,
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::DependencyFlagBits::eByRegion, {}, {},
+      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+      {}, {},
       vk::ImageMemoryBarrier(
-          vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eTransferRead,
+          vk::AccessFlagBits::eColorAttachmentWrite,
+          vk::AccessFlagBits::eTransferRead,
           vk::ImageLayout::eColorAttachmentOptimal,
           vk::ImageLayout::eTransferSrcOptimal, VK_QUEUE_FAMILY_IGNORED,
           VK_QUEUE_FAMILY_IGNORED, SrcImage,
@@ -1142,7 +1396,8 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
       vk::PipelineStageFlagBits::eColorAttachmentOutput,
       vk::DependencyFlagBits::eByRegion, {}, {},
       vk::ImageMemoryBarrier(
-          vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eColorAttachmentWrite,
+          vk::AccessFlagBits::eTransferRead,
+          vk::AccessFlagBits::eColorAttachmentWrite,
           vk::ImageLayout::eTransferSrcOptimal,
           vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
           VK_QUEUE_FAMILY_IGNORED, SrcImage,
@@ -1169,8 +1424,8 @@ void RenderTextureAllocation::Resolve(vk::Image SrcImage, vk::Image DstImage,
   }
 }
 
-void RenderTextureAllocation::ResolveSurface(
-    SurfaceAllocation *Surface, bool Reattach) noexcept {
+void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
+                                             bool Reattach) noexcept {
   assert(Surface->NextImage != UINT32_MAX &&
          "acquireNextImage not called on surface for this frame");
   assert(Surface->Extent == Extent &&
@@ -1181,28 +1436,25 @@ void RenderTextureAllocation::ResolveSurface(
   auto DstImage = Surface->SwapchainImages[Surface->NextImage];
   vulkan::Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::DependencyFlagBits::eByRegion, {}, {},
+      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+      {}, {},
       vk::ImageMemoryBarrier(
           vk::AccessFlagBits::eMemoryRead, vk::AccessFlagBits::eTransferWrite,
-          vk::ImageLayout::eUndefined,
-          vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED,
-          VK_QUEUE_FAMILY_IGNORED, DstImage,
+          vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage,
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
-  _Resolve(ColorTexture.getImage(), DstImage,
-           vk::ImageAspectFlagBits::eColor, vk::Offset3D(),
-           vk::Extent3D(Extent, 1));
+  _Resolve(ColorTexture.GetImage(), DstImage, vk::ImageAspectFlagBits::eColor,
+           vk::Offset3D(), vk::Extent3D(Extent, 1));
   vulkan::Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::DependencyFlagBits::eByRegion, {}, {},
+      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+      {}, {},
       vk::ImageMemoryBarrier(
           vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eMemoryRead,
-          vk::ImageLayout::eTransferDstOptimal,
-          vk::ImageLayout::ePresentSrcKHR, VK_QUEUE_FAMILY_IGNORED,
-          VK_QUEUE_FAMILY_IGNORED, DstImage,
+          vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage,
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
@@ -1214,20 +1466,18 @@ void RenderTextureAllocation::ResolveSurface(
   }
 }
 
-void RenderTextureAllocation::ResolveColorBinding(uint32_t Idx,
-                                                  Rect2D region,
+void RenderTextureAllocation::ResolveColorBinding(uint32_t Idx, Rect2D region,
                                                   bool Reattach) noexcept {
   assert(Idx < NumColorBindings);
-  Resolve(ColorTexture.getImage(), ColorBindings[Idx].Texture.getImage(),
+  Resolve(ColorTexture.GetImage(), ColorBindings[Idx].Texture.GetImage(),
           vk::ImageAspectFlagBits::eColor, vk::Offset3D(region.offset),
           vk::Extent3D(region.extent, 1), Reattach);
 }
 
-void RenderTextureAllocation::ResolveDepthBinding(uint32_t Idx,
-                                                  Rect2D region,
+void RenderTextureAllocation::ResolveDepthBinding(uint32_t Idx, Rect2D region,
                                                   bool Reattach) noexcept {
   assert(Idx < NumDepthBindings);
-  Resolve(DepthTexture.getImage(), DepthBindings[Idx].Texture.getImage(),
+  Resolve(DepthTexture.GetImage(), DepthBindings[Idx].Texture.GetImage(),
           vk::ImageAspectFlagBits::eDepth, vk::Offset3D(region.offset),
           vk::Extent3D(region.extent, 1), Reattach);
 }
@@ -1242,29 +1492,32 @@ void RenderTextureAllocation::Attach() noexcept {
   if (!FirstAttach) {
     FirstAttach = true;
     vulkan::Globals.Cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
-      vk::DependencyFlagBits::eByRegion, {}, {},
-       vk::ImageMemoryBarrier(
-         vk::AccessFlagBits(0), vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-         vk::ImageLayout::eUndefined,
-         vk::ImageLayout::eDepthStencilAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
-         VK_QUEUE_FAMILY_IGNORED, DepthTexture.getImage(),
-         vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0,
-                                   VK_REMAINING_MIP_LEVELS, 0,
-                                   VK_REMAINING_ARRAY_LAYERS)));
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eEarlyFragmentTests |
+            vk::PipelineStageFlagBits::eLateFragmentTests,
+        vk::DependencyFlagBits::eByRegion, {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits(0),
+            vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eDepthStencilAttachmentOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+            DepthTexture.GetImage(),
+            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0,
+                                      VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
     vulkan::Globals.Cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eColorAttachmentOutput,
-      vk::DependencyFlagBits::eByRegion, {}, {},
-      vk::ImageMemoryBarrier(
-        vk::AccessFlagBits(0), vk::AccessFlagBits::eColorAttachmentWrite,
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
-        VK_QUEUE_FAMILY_IGNORED, ColorTexture.getImage(),
-        vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                  VK_REMAINING_MIP_LEVELS, 0,
-                                  VK_REMAINING_ARRAY_LAYERS)));
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::DependencyFlagBits::eByRegion, {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits(0), vk::AccessFlagBits::eColorAttachmentWrite,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, ColorTexture.GetImage(),
+            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                      VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
   }
 
   BeginRenderPass();
@@ -1272,7 +1525,7 @@ void RenderTextureAllocation::Attach() noexcept {
       0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
   Globals.Cmd.setScissor(0, vk::Rect2D({}, {Extent.width, Extent.height}));
 }
-}
+} // namespace hsh::detail::vulkan
 #endif
 
 #if 0
@@ -1300,24 +1553,23 @@ LogPrinter &logger() {
 
 namespace hsh {
 namespace detail {
-template <typename T>
-struct ClassWrapper {};
+template <typename T> struct ClassWrapper {};
 
 struct SamplerBinding;
 
 constexpr unsigned NumStaticallyActiveTargets = 0
-#define HSH_TARGET(Enumeration, Active) + unsigned(!!(Active))
+#define HSH_TARGET(Enumeration, Active) +unsigned(!!(Active))
 #include "targets.def"
-;
-static_assert(NumStaticallyActiveTargets != 0, "No hsh targets are statically active");
+    ;
+static_assert(NumStaticallyActiveTargets != 0,
+              "No hsh targets are statically active");
 constexpr enum Target FirstStaticallyActiveTarget() noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration) return Enumeration;
 #include "targets.def"
 }
 inline enum Target ActiveTarget = FirstStaticallyActiveTarget();
 
-template <Target T>
-struct TargetTraits {
+template <Target T> struct TargetTraits {
   struct UniformBufferOwner {};
   struct UniformBufferBinding {};
   struct DynamicUniformBufferOwner {};
@@ -1333,12 +1585,10 @@ struct TargetTraits {
   struct SurfaceOwner {};
   struct SurfaceBinding {};
   struct PipelineBinding {};
-  template <typename ResTp>
-  struct ResourceFactory {};
+  template <typename ResTp> struct ResourceFactory {};
 };
 #if HSH_ENABLE_VULKAN
-template <>
-struct TargetTraits<VULKAN_SPIRV> {
+template <> struct TargetTraits<VULKAN_SPIRV> {
   struct BufferWrapper {
     vk::Buffer Buffer;
     BufferWrapper() noexcept = default;
@@ -1367,19 +1617,17 @@ struct TargetTraits<VULKAN_SPIRV> {
     std::uint8_t NumMips : 7;
     std::uint8_t Integer : 1;
     TextureOwner() noexcept = default;
-    TextureOwner(const TextureOwner& other) = delete;
-    TextureOwner &operator=(const TextureOwner& other) = delete;
+    TextureOwner(const TextureOwner &other) = delete;
+    TextureOwner &operator=(const TextureOwner &other) = delete;
     TextureOwner(TextureOwner &&other) noexcept = default;
-    TextureOwner &operator=(TextureOwner&& other) noexcept = default;
+    TextureOwner &operator=(TextureOwner &&other) noexcept = default;
 
     bool isValid() const noexcept { return ImageView.operator bool(); }
 
     TextureBinding getBinding() const noexcept {
       return TextureBinding{ImageView.get(), NumMips, Integer};
     }
-    operator TextureBinding() const noexcept {
-      return getBinding();
-    }
+    operator TextureBinding() const noexcept { return getBinding(); }
   };
   struct RenderTextureBinding {
     vulkan::RenderTextureAllocation *Allocation = nullptr;
@@ -1405,10 +1653,11 @@ struct TargetTraits<VULKAN_SPIRV> {
   };
   struct RenderTextureOwner {
     std::unique_ptr<vulkan::RenderTextureAllocation> Allocation;
-    RenderTextureOwner(const RenderTextureOwner& other) = delete;
-    RenderTextureOwner &operator=(const RenderTextureOwner& other) = delete;
+    RenderTextureOwner(const RenderTextureOwner &other) = delete;
+    RenderTextureOwner &operator=(const RenderTextureOwner &other) = delete;
     RenderTextureOwner(RenderTextureOwner &&other) noexcept = default;
-    RenderTextureOwner &operator=(RenderTextureOwner&& other) noexcept = default;
+    RenderTextureOwner &
+    operator=(RenderTextureOwner &&other) noexcept = default;
 
     bool isValid() const noexcept { return Allocation.operator bool(); }
 
@@ -1433,19 +1682,17 @@ struct TargetTraits<VULKAN_SPIRV> {
   };
   struct SurfaceOwner {
     std::unique_ptr<vulkan::SurfaceAllocation> Allocation;
-    SurfaceOwner(const SurfaceOwner& other) = delete;
-    SurfaceOwner &operator=(const SurfaceOwner& other) = delete;
+    SurfaceOwner(const SurfaceOwner &other) = delete;
+    SurfaceOwner &operator=(const SurfaceOwner &other) = delete;
     SurfaceOwner(SurfaceOwner &&other) noexcept = default;
-    SurfaceOwner &operator=(SurfaceOwner&& other) noexcept = default;
+    SurfaceOwner &operator=(SurfaceOwner &&other) noexcept = default;
 
     bool isValid() const noexcept { return Allocation.operator bool(); }
 
     SurfaceBinding getBinding() const noexcept {
       return SurfaceBinding{Allocation.get()};
     }
-    operator SurfaceBinding() const noexcept {
-      return getBinding();
-    }
+    operator SurfaceBinding() const noexcept { return getBinding(); }
     bool acquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
   };
   struct PipelineBinding {
@@ -1476,7 +1723,7 @@ struct TargetTraits<VULKAN_SPIRV> {
             VertexBufferBegin(Binding.VertexBuffers.begin()),
             VertexBufferIt(Binding.VertexBuffers.begin()),
             VertexOffsetIt(Binding.VertexOffsets.begin()),
-            RenderTextureIt(Binding.RenderTextures.begin()){}
+            RenderTextureIt(Binding.RenderTextures.begin()) {}
 
       inline void add(uniform_buffer_typeless uniform) noexcept;
       inline void add(dynamic_uniform_buffer_typeless uniform) noexcept;
@@ -1549,12 +1796,10 @@ struct TargetTraits<VULKAN_SPIRV> {
     }
   };
 
-  template <typename ResTp>
-  struct ResourceFactory {};
+  template <typename ResTp> struct ResourceFactory {};
 };
 #endif
-template <unsigned NSTs>
-struct SelectTargetTraits {
+template <unsigned NSTs> struct SelectTargetTraits {
 #define HSH_SURFACE_OWNER
 #define HSH_TRAIT_BINDING SurfaceBinding
 #define HSH_MULTI_TRAIT SurfaceOwner
@@ -1618,14 +1863,14 @@ struct SelectTargetTraits {
 #define HSH_MULTI_TRAIT PipelineBinding
 #include "trait.def"
 
-#define HSH_TRAIT_TEMPLATE_PARMS template<typename ResTp>
+#define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
 #define HSH_TRAIT_TEMPLATE_REFS <ResTp>
 #define HSH_MULTI_TRAIT ResourceFactory
 #include "trait.def"
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const HSH_SOURCE_LOCATION &location, Args... args) {
+  CreateResource(const SourceLocation &location, Args... args) {
     switch (detail::ActiveTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   case Enumeration:                                                            \
@@ -1638,8 +1883,7 @@ struct SelectTargetTraits {
     return {};
   }
 };
-template <>
-struct SelectTargetTraits<1> {
+template <> struct SelectTargetTraits<1> {
   using TargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
 #define HSH_SURFACE_OWNER
 #define HSH_TRAIT_BINDING SurfaceBinding
@@ -1704,14 +1948,14 @@ struct SelectTargetTraits<1> {
 #define HSH_SINGLE_TRAIT PipelineBinding
 #include "trait.def"
 
-#define HSH_TRAIT_TEMPLATE_PARMS template<typename ResTp>
+#define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
 #define HSH_TRAIT_TEMPLATE_REFS <ResTp>
 #define HSH_SINGLE_TRAIT ResourceFactory
 #include "trait.def"
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const HSH_SOURCE_LOCATION &location, Args... args) {
+  CreateResource(const SourceLocation &location, Args... args) {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   return decltype(ResourceFactory<T>::_##Enumeration)::Create(location,        \
                                                               args...);
@@ -1719,122 +1963,147 @@ struct SelectTargetTraits<1> {
   }
 };
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
-}
+} // namespace detail
 
 struct base_buffer {};
 
-template <typename T>
-struct uniform_buffer;
-template <typename T>
-struct dynamic_uniform_buffer;
-template <typename T>
-struct vertex_buffer;
-template <typename T>
-struct dynamic_vertex_buffer;
+template <typename T> struct uniform_buffer;
+template <typename T> struct dynamic_uniform_buffer;
+template <typename T> struct vertex_buffer;
+template <typename T> struct dynamic_vertex_buffer;
 
 struct uniform_buffer_typeless : base_buffer {
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit uniform_buffer_typeless(std::size_t UniqueId, Args&&... args) noexcept
-  : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
-  explicit uniform_buffer_typeless(
-      std::size_t UniqueId, uniform_buffer_typeless other) noexcept
+  explicit uniform_buffer_typeless(std::size_t UniqueId,
+                                   Args &&... args) noexcept
+      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
+  explicit uniform_buffer_typeless(std::size_t UniqueId,
+                                   uniform_buffer_typeless other) noexcept
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit uniform_buffer_typeless(Args&&... args) noexcept : Binding(std::forward<Args>(args)...) {}
+  explicit uniform_buffer_typeless(Args &&... args) noexcept
+      : Binding(std::forward<Args>(args)...) {}
   template <typename T>
-  explicit uniform_buffer_typeless(uniform_buffer<T> other) noexcept : Binding(other.Binding) {}
+  explicit uniform_buffer_typeless(uniform_buffer<T> other) noexcept
+      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::UniformBufferBinding Binding;
-  template <typename T>
-  uniform_buffer<T> cast() const noexcept;
-  template <typename T>
-  operator uniform_buffer<T>() const noexcept { return cast<T>(); }
+  template <typename T> uniform_buffer<T> cast() const noexcept;
+  template <typename T> operator uniform_buffer<T>() const noexcept {
+    return cast<T>();
+  }
 };
 struct dynamic_uniform_buffer_typeless : base_buffer {
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(std::size_t UniqueId, Args&&... args) noexcept
+  explicit dynamic_uniform_buffer_typeless(std::size_t UniqueId,
+                                           Args &&... args) noexcept
       : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit dynamic_uniform_buffer_typeless(
       std::size_t UniqueId, dynamic_uniform_buffer_typeless other) noexcept
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(Args&&... args) noexcept : Binding(std::forward<Args>(args)...) {}
+  explicit dynamic_uniform_buffer_typeless(Args &&... args) noexcept
+      : Binding(std::forward<Args>(args)...) {}
   template <typename T>
-  explicit dynamic_uniform_buffer_typeless(dynamic_uniform_buffer<T> other) noexcept : Binding(other.Binding) {}
+  explicit dynamic_uniform_buffer_typeless(
+      dynamic_uniform_buffer<T> other) noexcept
+      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::DynamicUniformBufferBinding Binding;
-  template <typename T>
-  dynamic_uniform_buffer<T> cast() const noexcept;
-  template <typename T>
-  operator dynamic_uniform_buffer<T>() const noexcept { return cast<T>(); }
+  template <typename T> dynamic_uniform_buffer<T> cast() const noexcept;
+  template <typename T> operator dynamic_uniform_buffer<T>() const noexcept {
+    return cast<T>();
+  }
 };
 struct vertex_buffer_typeless : base_buffer {
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit vertex_buffer_typeless(std::size_t UniqueId, Args&&... args) noexcept
+  explicit vertex_buffer_typeless(std::size_t UniqueId,
+                                  Args &&... args) noexcept
       : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
-  explicit vertex_buffer_typeless(
-      std::size_t UniqueId, vertex_buffer_typeless other) noexcept
+  explicit vertex_buffer_typeless(std::size_t UniqueId,
+                                  vertex_buffer_typeless other) noexcept
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit vertex_buffer_typeless(Args&&... args) noexcept : Binding(std::forward<Args>(args)...) {}
+  explicit vertex_buffer_typeless(Args &&... args) noexcept
+      : Binding(std::forward<Args>(args)...) {}
   template <typename T>
-  explicit vertex_buffer_typeless(vertex_buffer<T> other) noexcept : Binding(other.Binding) {}
+  explicit vertex_buffer_typeless(vertex_buffer<T> other) noexcept
+      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::VertexBufferBinding Binding;
-  template <typename T>
-  vertex_buffer<T> cast() const noexcept;
-  template <typename T>
-  operator vertex_buffer<T>() const noexcept { return cast<T>(); }
+  template <typename T> vertex_buffer<T> cast() const noexcept;
+  template <typename T> operator vertex_buffer<T>() const noexcept {
+    return cast<T>();
+  }
 };
 struct dynamic_vertex_buffer_typeless : base_buffer {
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(std::size_t UniqueId, Args&&... args) noexcept
+  explicit dynamic_vertex_buffer_typeless(std::size_t UniqueId,
+                                          Args &&... args) noexcept
       : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
   explicit dynamic_vertex_buffer_typeless(
       std::size_t UniqueId, dynamic_vertex_buffer_typeless other) noexcept
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(Args&&... args) noexcept : Binding(std::forward<Args>(args)...) {}
+  explicit dynamic_vertex_buffer_typeless(Args &&... args) noexcept
+      : Binding(std::forward<Args>(args)...) {}
   template <typename T>
-  explicit dynamic_vertex_buffer_typeless(dynamic_vertex_buffer<T> other) noexcept : Binding(other.Binding) {}
+  explicit dynamic_vertex_buffer_typeless(
+      dynamic_vertex_buffer<T> other) noexcept
+      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::DynamicVertexBufferBinding Binding;
-  template <typename T>
-  dynamic_vertex_buffer<T> cast() const noexcept;
-  template <typename T>
-  operator dynamic_vertex_buffer<T>() const noexcept { return cast<T>(); }
+  template <typename T> dynamic_vertex_buffer<T> cast() const noexcept;
+  template <typename T> operator dynamic_vertex_buffer<T>() const noexcept {
+    return cast<T>();
+  }
 };
 
 #if HSH_ASSERT_CAST_ENABLED
-#define HSH_CASTABLE_BUFFER(derived) \
-template <typename T> struct derived : derived##_typeless { \
-using MappedType = T; \
-template <typename... Args> \
-explicit derived(Args&&... args) noexcept : derived##_typeless(typeid(*this).hash_code(), std::forward<Args>(args)...) {} \
-const T *operator->() const noexcept { assert(false && "Not to be used from host!"); return nullptr; } \
-const T &operator*() const noexcept { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
-};
+#define HSH_CASTABLE_BUFFER(derived)                                           \
+  template <typename T> struct derived : derived##_typeless {                  \
+    using MappedType = T;                                                      \
+    template <typename... Args>                                                \
+    explicit derived(Args &&... args) noexcept                                 \
+        : derived##_typeless(typeid(*this).hash_code(),                        \
+                             std::forward<Args>(args)...) {}                   \
+    const T *operator->() const noexcept {                                     \
+      assert(false && "Not to be used from host!");                            \
+      return nullptr;                                                          \
+    }                                                                          \
+    const T &operator*() const noexcept {                                      \
+      assert(false && "Not to be used from host!");                            \
+      return *reinterpret_cast<T *>(0);                                        \
+    }                                                                          \
+  };
 #else
-#define HSH_CASTABLE_BUFFER(derived) \
-template <typename T> struct derived : derived##_typeless { \
-using MappedType = T; \
-template <typename... Args> \
-explicit derived(Args&&... args) noexcept : derived##_typeless(std::forward<Args>(args)...) {} \
-const T *operator->() const noexcept { assert(false && "Not to be used from host!"); return nullptr; } \
-const T &operator*() const noexcept { assert(false && "Not to be used from host!"); return *reinterpret_cast<T*>(0); } \
-};
+#define HSH_CASTABLE_BUFFER(derived)                                           \
+  template <typename T> struct derived : derived##_typeless {                  \
+    using MappedType = T;                                                      \
+    template <typename... Args>                                                \
+    explicit derived(Args &&... args) noexcept                                 \
+        : derived##_typeless(std::forward<Args>(args)...) {}                   \
+    const T *operator->() const noexcept {                                     \
+      assert(false && "Not to be used from host!");                            \
+      return nullptr;                                                          \
+    }                                                                          \
+    const T &operator*() const noexcept {                                      \
+      assert(false && "Not to be used from host!");                            \
+      return *reinterpret_cast<T *>(0);                                        \
+    }                                                                          \
+  };
 #endif
 HSH_CASTABLE_BUFFER(uniform_buffer)
 HSH_CASTABLE_BUFFER(dynamic_uniform_buffer)
@@ -1842,11 +2111,11 @@ HSH_CASTABLE_BUFFER(vertex_buffer)
 HSH_CASTABLE_BUFFER(dynamic_vertex_buffer)
 #undef HSH_CASTABLE_BUFFER
 
-#define HSH_DEFINE_BUFFER_CAST(derived) \
-template <typename T> derived<T> derived##_typeless::cast() const noexcept { \
-  HSH_ASSERT_CAST(UniqueId == typeid(derived<T>).hash_code() && "bad cast"); \
-  return static_cast<derived<T>>(*this); \
-}
+#define HSH_DEFINE_BUFFER_CAST(derived)                                        \
+  template <typename T> derived<T> derived##_typeless::cast() const noexcept { \
+    HSH_ASSERT_CAST(UniqueId == typeid(derived<T>).hash_code() && "bad cast"); \
+    return static_cast<derived<T>>(*this);                                     \
+  }
 HSH_DEFINE_BUFFER_CAST(uniform_buffer)
 HSH_DEFINE_BUFFER_CAST(dynamic_uniform_buffer)
 HSH_DEFINE_BUFFER_CAST(vertex_buffer)
@@ -1858,13 +2127,27 @@ struct float2;
 struct float4 {
   float x, y, z, w;
   float4() noexcept = default;
-  constexpr float4(float x, float y, float z, float w) noexcept : x(x), y(y), z(z), w(w) {}
+  constexpr float4(float x, float y, float z, float w) noexcept
+      : x(x), y(y), z(z), w(w) {}
   constexpr explicit float4(float f) noexcept : x(f), y(f), z(f), w(f) {}
   constexpr explicit float4(const float3 &other, float w = 1.f) noexcept;
-  constexpr explicit float4(const float2 &other, float z = 0.f, float w = 1.f) noexcept;
-  void operator+=(const float4 &other) noexcept { x += other.x; y += other.y; z += other.z; w += other.w; }
-  void operator*=(const float4 &other) noexcept { x *= other.x; y *= other.y; z *= other.z; w *= other.w; }
-  float4 operator/(float other) noexcept { return float4{x / other, y / other, z / other, w / other}; }
+  constexpr explicit float4(const float2 &other, float z = 0.f,
+                            float w = 1.f) noexcept;
+  void operator+=(const float4 &other) noexcept {
+    x += other.x;
+    y += other.y;
+    z += other.z;
+    w += other.w;
+  }
+  void operator*=(const float4 &other) noexcept {
+    x *= other.x;
+    y *= other.y;
+    z *= other.z;
+    w *= other.w;
+  }
+  float4 operator/(float other) noexcept {
+    return float4{x / other, y / other, z / other, w / other};
+  }
   float &operator[](std::size_t idx) noexcept { return (&x)[0]; }
   const float &operator[](std::size_t idx) const noexcept { return (&x)[0]; }
   constexpr float3 xyz() const noexcept;
@@ -1972,7 +2255,8 @@ struct int2 {
 };
 constexpr int4::int4(const hsh::int3 &other, std::int32_t w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}
-constexpr int4::int4(const hsh::int2 &other, std::int32_t z, std::int32_t w) noexcept
+constexpr int4::int4(const hsh::int2 &other, std::int32_t z,
+                     std::int32_t w) noexcept
     : x(other.x), y(other.y), z(z), w(w) {}
 struct uint3;
 struct uint2;
@@ -2013,7 +2297,9 @@ struct float4x4 {
   float4x4() noexcept = default;
   float4 &operator[](std::size_t col) noexcept { return cols[col]; }
   const float4 &operator[](std::size_t col) const noexcept { return cols[col]; }
-  float4x4 operator*(const float4x4 &other) const noexcept { return float4x4{}; };
+  float4x4 operator*(const float4x4 &other) const noexcept {
+    return float4x4{};
+  };
   float4 operator*(const float4 &other) const noexcept { return float4{}; };
 };
 struct float3x3 {
@@ -2023,7 +2309,9 @@ struct float3x3 {
       : cols{other.cols[0].xyz(), other.cols[1].xyz(), other.cols[2].xyz()} {}
   float3 &operator[](std::size_t col) noexcept { return cols[col]; }
   const float3 &operator[](std::size_t col) const noexcept { return cols[col]; }
-  float3x3 operator*(const float3x3 &other) const noexcept { return float3x3{}; };
+  float3x3 operator*(const float3x3 &other) const noexcept {
+    return float3x3{};
+  };
   float3 operator*(const float3 &other) const noexcept { return float3{}; };
 };
 struct aligned_float3x3 {
@@ -2031,22 +2319,24 @@ struct aligned_float3x3 {
   struct col {
     col() noexcept = default;
     col(const float3 &c) noexcept : c(c) {}
-    float3 c; float p;
+    float3 c;
+    float p;
   } cols[3];
   aligned_float3x3(const float3x3 &other) noexcept
       : cols{other.cols[0], other.cols[1], other.cols[2]} {}
   aligned_float3x3(const float4x4 &other) noexcept
       : cols{other.cols[0].xyz(), other.cols[1].xyz(), other.cols[2].xyz()} {}
   float3 &operator[](std::size_t col) noexcept { return cols[col].c; }
-  const float3 &operator[](std::size_t col) const noexcept { return cols[col].c; }
-  float3x3 operator*(const float3x3 &other) const noexcept { return float3x3{}; };
+  const float3 &operator[](std::size_t col) const noexcept {
+    return cols[col].c;
+  }
+  float3x3 operator*(const float3x3 &other) const noexcept {
+    return float3x3{};
+  };
   float3 operator*(const float3 &other) const noexcept { return float3{}; };
 };
 
-enum Filter : std::uint8_t {
-  Nearest,
-  Linear
-};
+enum Filter : std::uint8_t { Nearest, Linear };
 
 enum SamplerAddressMode : std::uint8_t {
   Repeat,
@@ -2084,25 +2374,18 @@ struct sampler {
   float MipLodBias = 0.f;
   enum Compare CompareOp = Never;
   enum BorderColor BorderColor = TransparentBlack;
-  constexpr sampler(
-      enum Filter MagFilter = Linear,
-      enum Filter MinFilter = Linear,
-      enum Filter MipmapMode = Linear,
-      enum SamplerAddressMode AddressModeU = Repeat,
-      enum SamplerAddressMode AddressModeV = Repeat,
-      enum SamplerAddressMode AddressModeW = Repeat,
-      float MipLodBias = 0.f,
-      enum Compare CompareOp = Never,
-      enum BorderColor BorderColor = TransparentBlack
-  ) noexcept : MagFilter(MagFilter),
-      MinFilter(MinFilter),
-      MipmapMode(MipmapMode),
-      AddressModeU(AddressModeU),
-      AddressModeV(AddressModeV),
-      AddressModeW(AddressModeW),
-      MipLodBias(MipLodBias),
-      CompareOp(CompareOp),
-      BorderColor(BorderColor) {}
+  constexpr sampler(enum Filter MagFilter = Linear,
+                    enum Filter MinFilter = Linear,
+                    enum Filter MipmapMode = Linear,
+                    enum SamplerAddressMode AddressModeU = Repeat,
+                    enum SamplerAddressMode AddressModeV = Repeat,
+                    enum SamplerAddressMode AddressModeW = Repeat,
+                    float MipLodBias = 0.f, enum Compare CompareOp = Never,
+                    enum BorderColor BorderColor = TransparentBlack) noexcept
+      : MagFilter(MagFilter), MinFilter(MinFilter), MipmapMode(MipmapMode),
+        AddressModeU(AddressModeU), AddressModeV(AddressModeV),
+        AddressModeW(AddressModeW), MipLodBias(MipLodBias),
+        CompareOp(CompareOp), BorderColor(BorderColor) {}
 };
 
 template <typename T> struct vector_to_scalar {};
@@ -2154,45 +2437,65 @@ struct texture_typeless : base_texture {
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit texture_typeless(std::size_t UniqueId, Args&&... args) noexcept
+  explicit texture_typeless(std::size_t UniqueId, Args &&... args) noexcept
       : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
 #else
   template <typename... Args>
-  explicit texture_typeless(Args&&... args) noexcept : Binding(std::forward<Args>(args)...) {}
-  template <typename T> explicit texture_typeless(texture1d<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texture1d_array<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texture2d<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texture2d_array<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texture3d<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texturecube<T> other) noexcept : Binding(other.Binding) {}
-  template <typename T> explicit texture_typeless(texturecube_array<T> other) noexcept: Binding(other.Binding) {}
+  explicit texture_typeless(Args &&... args) noexcept
+      : Binding(std::forward<Args>(args)...) {}
+  template <typename T>
+  explicit texture_typeless(texture1d<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texture1d_array<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texture2d<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texture2d_array<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texture3d<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texturecube<T> other) noexcept
+      : Binding(other.Binding) {}
+  template <typename T>
+  explicit texture_typeless(texturecube_array<T> other) noexcept
+      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::TextureBinding Binding;
-  template <typename T>
-  T cast() const noexcept {
+  template <typename T> T cast() const noexcept {
     HSH_ASSERT_CAST(UniqueId == typeid(T).hash_code() && "bad cast");
     return static_cast<T>(*this);
   }
-  template <typename T>
-  operator T() const noexcept { return cast<T>(); }
+  template <typename T> operator T() const noexcept { return cast<T>(); }
 };
 
 #if HSH_ASSERT_CAST_ENABLED
-#define HSH_CASTABLE_TEXTURE(derived, coordt) \
-template <typename T> struct derived : texture_typeless { \
-using MappedType = void; \
-template <typename... Args> \
-explicit derived(Args&&... args) noexcept : texture_typeless(typeid(*this).hash_code(), std::forward<Args>(args)...) {} \
-scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept { return {}; } \
-};
+#define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
+  template <typename T> struct derived : texture_typeless {                    \
+    using MappedType = void;                                                   \
+    template <typename... Args>                                                \
+    explicit derived(Args &&... args) noexcept                                 \
+        : texture_typeless(typeid(*this).hash_code(),                          \
+                           std::forward<Args>(args)...) {}                     \
+    scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
+      return {};                                                               \
+    }                                                                          \
+  };
 #else
-#define HSH_CASTABLE_TEXTURE(derived, coordt) \
-template <typename T> struct derived : texture_typeless { \
-using MappedType = void; \
-template <typename... Args> \
-explicit derived(Args&&... args) noexcept : texture_typeless(std::forward<Args>(args)...) {} \
-scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept { return {}; } \
-};
+#define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
+  template <typename T> struct derived : texture_typeless {                    \
+    using MappedType = void;                                                   \
+    template <typename... Args>                                                \
+    explicit derived(Args &&... args) noexcept                                 \
+        : texture_typeless(std::forward<Args>(args)...) {}                     \
+    scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
+      return {};                                                               \
+    }                                                                          \
+  };
 #endif
 HSH_CASTABLE_TEXTURE(texture1d, float)
 HSH_CASTABLE_TEXTURE(texture1d_array, float2)
@@ -2219,27 +2522,13 @@ constexpr float dot(const float2 &a, const float2 &b) noexcept {
 constexpr float dot(const float3 &a, const float3 &b) noexcept {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
-constexpr float sqrt(float v) noexcept {
-  return std::sqrt(v);
-}
-constexpr float length(const float2 &a) noexcept {
-  return sqrt(dot(a, a));
-}
-constexpr float length(const float3 &a) noexcept {
-  return sqrt(dot(a, a));
-}
-constexpr float2 normalize(const float2 &a) noexcept {
-  return a / length(a);
-}
-constexpr float3 normalize(const float3 &a) noexcept {
-  return a / length(a);
-}
-constexpr float max(float a, float b) noexcept {
-  return std::max(a, b);
-}
-constexpr float min(float a, float b) noexcept {
-  return std::min(a, b);
-}
+constexpr float sqrt(float v) noexcept { return std::sqrt(v); }
+constexpr float length(const float2 &a) noexcept { return sqrt(dot(a, a)); }
+constexpr float length(const float3 &a) noexcept { return sqrt(dot(a, a)); }
+constexpr float2 normalize(const float2 &a) noexcept { return a / length(a); }
+constexpr float3 normalize(const float3 &a) noexcept { return a / length(a); }
+constexpr float max(float a, float b) noexcept { return std::max(a, b); }
+constexpr float min(float a, float b) noexcept { return std::min(a, b); }
 constexpr float clamp(float v, float min, float max) noexcept {
   if (v > max)
     return max;
@@ -2248,22 +2537,16 @@ constexpr float clamp(float v, float min, float max) noexcept {
   else
     return v;
 }
-constexpr float3 clamp(const float3 &v, const float3 &min, const float3 &max) noexcept {
-  return float3{
-      clamp(v[0], min[0], max[0]),
-      clamp(v[1], min[1], max[1]),
-      clamp(v[2], min[2], max[2])
-  };
+constexpr float3 clamp(const float3 &v, const float3 &min,
+                       const float3 &max) noexcept {
+  return float3{clamp(v[0], min[0], max[0]), clamp(v[1], min[1], max[1]),
+                clamp(v[2], min[2], max[2])};
 }
-constexpr float saturate(float v) noexcept {
-  return clamp(v, 0.f, 1.f);
-}
+constexpr float saturate(float v) noexcept { return clamp(v, 0.f, 1.f); }
 constexpr float3 saturate(const float3 &v) noexcept {
   return clamp(v, hsh::float3(0.f), hsh::float3(1.f));
 }
-constexpr float exp2(float v) noexcept {
-  return std::exp2(v);
-}
+constexpr float exp2(float v) noexcept { return std::exp2(v); }
 constexpr float lerp(float a, float b, float t) noexcept {
   return b * t + a * (1.f - t);
 }
@@ -2274,25 +2557,17 @@ constexpr float3 lerp(const float3 &a, const float3 &b, float t) noexcept {
       b[2] * t + a[2] * (1.f - t),
   };
 }
-constexpr float4 lerp(const float4 &a, const float4 &b, const float4 &t) noexcept {
+constexpr float4 lerp(const float4 &a, const float4 &b,
+                      const float4 &t) noexcept {
   return float4{
-      b[0] * t[0] + a[0] * (1.f - t[0]),
-      b[1] * t[1] + a[1] * (1.f - t[1]),
-      b[2] * t[2] + a[2] * (1.f - t[2]),
-      b[3] * t[3] + a[3] * (1.f - t[3])
-  };
+      b[0] * t[0] + a[0] * (1.f - t[0]), b[1] * t[1] + a[1] * (1.f - t[1]),
+      b[2] * t[2] + a[2] * (1.f - t[2]), b[3] * t[3] + a[3] * (1.f - t[3])};
 }
 constexpr float4 lerp(const float4 &a, const float4 &b, float t) noexcept {
-  return float4{
-      b[0] * t + a[0] * (1.f - t),
-      b[1] * t + a[1] * (1.f - t),
-      b[2] * t + a[2] * (1.f - t),
-      b[3] * t + a[3] * (1.f - t)
-  };
+  return float4{b[0] * t + a[0] * (1.f - t), b[1] * t + a[1] * (1.f - t),
+                b[2] * t + a[2] * (1.f - t), b[3] * t + a[3] * (1.f - t)};
 }
-constexpr float abs(float v) noexcept {
-  return std::abs(v);
-}
+constexpr float abs(float v) noexcept { return std::abs(v); }
 constexpr void discard() noexcept {}
 
 enum Stage : std::uint8_t {
@@ -2391,32 +2666,27 @@ template <bool CA = false, bool InShader = false> struct base_attribute {
   static constexpr bool is_ca = CA;
 };
 template <BlendFactor SrcColorBlendFactor = One,
-    BlendFactor DstColorBlendFactor = Zero,
-    BlendOp ColorBlendOp = Add,
-    BlendFactor SrcAlphaBlendFactor = SrcColorBlendFactor,
-    BlendFactor DstAlphaBlendFactor = DstColorBlendFactor,
-    BlendOp AlphaBlendOp = ColorBlendOp,
-    ColorComponentFlags ColorWriteComponents =
-    ColorComponentFlags(CC_Red | CC_Green | CC_Blue | CC_Alpha)>
+          BlendFactor DstColorBlendFactor = Zero, BlendOp ColorBlendOp = Add,
+          BlendFactor SrcAlphaBlendFactor = SrcColorBlendFactor,
+          BlendFactor DstAlphaBlendFactor = DstColorBlendFactor,
+          BlendOp AlphaBlendOp = ColorBlendOp,
+          ColorComponentFlags ColorWriteComponents =
+              ColorComponentFlags(CC_Red | CC_Green | CC_Blue | CC_Alpha)>
 struct color_attachment : base_attribute<true> {};
-template <Topology T = Triangles>
-struct topology : base_attribute<> {};
-template <unsigned P = 0>
-struct patch_control_points : base_attribute<> {};
-template <CullMode CM = CullNone>
-struct cull_mode : base_attribute<> {};
-template <Compare C = Always>
-struct depth_compare : base_attribute<> {};
-template <bool W = true>
-struct depth_write : base_attribute<> {};
+template <Topology T = Triangles> struct topology : base_attribute<> {};
+template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
+template <CullMode CM = CullNone> struct cull_mode : base_attribute<> {};
+template <Compare C = Always> struct depth_compare : base_attribute<> {};
+template <bool W = true> struct depth_write : base_attribute<> {};
 template <bool E = false>
 struct early_depth_stencil : base_attribute<false, true> {};
 template <typename... Attrs> struct pipeline {
   hsh::float4 position;
-  static constexpr std::size_t color_attachment_count = ((Attrs::is_ca ? 1 : 0) + ...);
+  static constexpr std::size_t color_attachment_count =
+      ((Attrs::is_ca ? 1 : 0) + ...);
   std::array<hsh::float4, color_attachment_count> color_out;
 };
-}
+} // namespace pipeline
 
 namespace detail {
 
@@ -2463,7 +2733,8 @@ struct VertexBinding {
   std::uint32_t Stride : 24;
   std::uint8_t Binding : 7;
   enum InputRate InputRate : 1;
-  constexpr VertexBinding() noexcept : Stride(0), Binding(0), InputRate(PerVertex) {}
+  constexpr VertexBinding() noexcept
+      : Stride(0), Binding(0), InputRate(PerVertex) {}
   constexpr VertexBinding(std::uint8_t Binding, std::uint32_t Stride,
                           enum InputRate InputRate) noexcept
       : Stride(Stride), Binding(Binding), InputRate(InputRate) {}
@@ -2566,24 +2837,20 @@ struct ColorAttachment {
   constexpr bool blendEnabled() const noexcept {
     return SrcColorBlendFactor == One && DstColorBlendFactor == Zero &&
            ColorBlendOp == Add && SrcAlphaBlendFactor == One &&
-        DstAlphaBlendFactor == Zero && AlphaBlendOp == Add;
+           DstAlphaBlendFactor == Zero && AlphaBlendOp == Add;
   }
   constexpr ColorAttachment() noexcept = default;
   constexpr ColorAttachment(
       enum BlendFactor SrcColorBlendFactor,
-      enum BlendFactor DstColorBlendFactor,
-      enum BlendOp ColorBlendOp,
+      enum BlendFactor DstColorBlendFactor, enum BlendOp ColorBlendOp,
       enum BlendFactor SrcAlphaBlendFactor,
-      enum BlendFactor DstAlphaBlendFactor,
-      enum BlendOp AlphaBlendOp,
-      std::underlying_type_t<ColorComponentFlags> ColorWriteComponents
-      ) noexcept : SrcColorBlendFactor(SrcColorBlendFactor),
-          DstColorBlendFactor(DstColorBlendFactor),
-          ColorBlendOp(ColorBlendOp),
-          SrcAlphaBlendFactor(SrcAlphaBlendFactor),
-          DstAlphaBlendFactor(DstAlphaBlendFactor),
-          AlphaBlendOp(AlphaBlendOp),
-          ColorWriteComponents(ColorComponentFlags(ColorWriteComponents)) {}
+      enum BlendFactor DstAlphaBlendFactor, enum BlendOp AlphaBlendOp,
+      std::underlying_type_t<ColorComponentFlags> ColorWriteComponents) noexcept
+      : SrcColorBlendFactor(SrcColorBlendFactor),
+        DstColorBlendFactor(DstColorBlendFactor), ColorBlendOp(ColorBlendOp),
+        SrcAlphaBlendFactor(SrcAlphaBlendFactor),
+        DstAlphaBlendFactor(DstAlphaBlendFactor), AlphaBlendOp(AlphaBlendOp),
+        ColorWriteComponents(ColorComponentFlags(ColorWriteComponents)) {}
 };
 
 /* Holds constant pipeline information */
@@ -2594,13 +2861,12 @@ struct PipelineInfo {
   enum Compare DepthCompare = Always;
   bool DepthWrite = true;
   constexpr PipelineInfo() noexcept = default;
-  constexpr PipelineInfo(enum Topology Topology,
-                         unsigned PatchControlPoints,
-                         enum CullMode CullMode,
-                         enum Compare DepthCompare,
+  constexpr PipelineInfo(enum Topology Topology, unsigned PatchControlPoints,
+                         enum CullMode CullMode, enum Compare DepthCompare,
                          bool DepthWrite) noexcept
       : Topology(Topology), PatchControlPoints(PatchControlPoints),
-        CullMode(CullMode), DepthCompare(DepthCompare), DepthWrite(DepthWrite) {}
+        CullMode(CullMode), DepthCompare(DepthCompare), DepthWrite(DepthWrite) {
+  }
 };
 
 template <Target T, std::uint32_t NStages, std::uint32_t NBindings,
@@ -2624,21 +2890,22 @@ struct ShaderConstData {
         Attachments(Atts), PipelineInfo(PipelineInfo) {}
 };
 
-template <Target T, std::uint32_t NStages, std::uint32_t NSamplers> struct ShaderData {
+template <Target T, std::uint32_t NStages, std::uint32_t NSamplers>
+struct ShaderData {
   using ObjectRef = std::reference_wrapper<ShaderObject<T>>;
   std::array<ObjectRef, NStages> ShaderObjects;
   using SamplerRef = std::reference_wrapper<SamplerObject<T>>;
   std::array<SamplerRef, NSamplers> SamplerObjects;
-  constexpr ShaderData(
-      std::array<ObjectRef, NStages> S,
-      std::array<SamplerRef, NSamplers> Samps) noexcept
+  constexpr ShaderData(std::array<ObjectRef, NStages> S,
+                       std::array<SamplerRef, NSamplers> Samps) noexcept
       : ShaderObjects(S), SamplerObjects(Samps) {}
 };
 
-template <hsh::Target T>
-struct PipelineBuilder {
-  template <typename... Bindings, std::size_t... BSeq>
-  static void build_pipelines(std::index_sequence<BSeq...>) noexcept {
+template <hsh::Target T> struct PipelineBuilder {
+  template <typename... B> static void CreatePipelines() noexcept {
+    assert(false && "unimplemented pipeline builder");
+  }
+  template <typename... B> static void DestroyPipelines() noexcept {
     assert(false && "unimplemented pipeline builder");
   }
 };
@@ -2655,7 +2922,8 @@ constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
   return (MipSize2D(width >> Idx, height >> Idx, texelSize, Idx < Mip) + ...);
 }
 constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
-                                  std::size_t texelSize, std::size_t Mip) noexcept {
+                                  std::size_t texelSize,
+                                  std::size_t Mip) noexcept {
   return MipOffset2D(width, height, texelSize, Mip,
                      std::make_index_sequence<MaxMipCount>());
 }
@@ -2732,7 +3000,8 @@ constexpr vk::VertexInputRate HshToVkInputRate(InputRate InputRate) noexcept {
   }
 }
 
-constexpr vk::PrimitiveTopology HshToVkTopology(enum Topology Topology) noexcept {
+constexpr vk::PrimitiveTopology
+HshToVkTopology(enum Topology Topology) noexcept {
   switch (Topology) {
   case Points:
     return vk::PrimitiveTopology::ePointList;
@@ -2751,7 +3020,8 @@ constexpr vk::PrimitiveTopology HshToVkTopology(enum Topology Topology) noexcept
   }
 }
 
-constexpr vk::CullModeFlagBits HshToVkCullMode(enum CullMode CullMode) noexcept {
+constexpr vk::CullModeFlagBits
+HshToVkCullMode(enum CullMode CullMode) noexcept {
   switch (CullMode) {
   case CullNone:
     return vk::CullModeFlagBits::eNone;
@@ -2785,7 +3055,8 @@ constexpr vk::CompareOp HshToVkCompare(enum Compare Compare) noexcept {
   }
 }
 
-constexpr vk::BlendFactor HshToVkBlendFactor(enum BlendFactor BlendFactor) noexcept {
+constexpr vk::BlendFactor
+HshToVkBlendFactor(enum BlendFactor BlendFactor) noexcept {
   switch (BlendFactor) {
   case Zero:
     return vk::BlendFactor::eZero;
@@ -2847,7 +3118,8 @@ constexpr vk::SamplerMipmapMode HshToVkMipMode(enum Filter Filter) noexcept {
   }
 }
 
-constexpr vk::SamplerAddressMode HshToVkAddressMode(enum SamplerAddressMode AddressMode) noexcept {
+constexpr vk::SamplerAddressMode
+HshToVkAddressMode(enum SamplerAddressMode AddressMode) noexcept {
   switch (AddressMode) {
   case Repeat:
     return vk::SamplerAddressMode::eRepeat;
@@ -2862,18 +3134,23 @@ constexpr vk::SamplerAddressMode HshToVkAddressMode(enum SamplerAddressMode Addr
   }
 }
 
-constexpr vk::BorderColor HshToVkBorderColor(enum BorderColor BorderColor, bool Int) noexcept {
+constexpr vk::BorderColor HshToVkBorderColor(enum BorderColor BorderColor,
+                                             bool Int) noexcept {
   switch (BorderColor) {
   case TransparentBlack:
-    return Int ? vk::BorderColor::eIntTransparentBlack : vk::BorderColor::eFloatTransparentBlack;
+    return Int ? vk::BorderColor::eIntTransparentBlack
+               : vk::BorderColor::eFloatTransparentBlack;
   case OpaqueBlack:
-    return Int ? vk::BorderColor::eIntOpaqueBlack : vk::BorderColor::eFloatOpaqueBlack;
+    return Int ? vk::BorderColor::eIntOpaqueBlack
+               : vk::BorderColor::eFloatOpaqueBlack;
   case OpaqueWhite:
-    return Int ? vk::BorderColor::eIntOpaqueWhite : vk::BorderColor::eFloatOpaqueWhite;
+    return Int ? vk::BorderColor::eIntOpaqueWhite
+               : vk::BorderColor::eFloatOpaqueWhite;
   }
 }
 
-constexpr vk::ShaderStageFlagBits HshToVkShaderStage(enum Stage Stage) noexcept {
+constexpr vk::ShaderStageFlagBits
+HshToVkShaderStage(enum Stage Stage) noexcept {
   switch (Stage) {
   default:
   case Vertex:
@@ -2889,7 +3166,8 @@ constexpr vk::ShaderStageFlagBits HshToVkShaderStage(enum Stage Stage) noexcept 
   }
 }
 
-constexpr vk::ColorComponentFlagBits HshToVkColorComponentFlags(enum ColorComponentFlags Comps) noexcept {
+constexpr vk::ColorComponentFlagBits
+HshToVkColorComponentFlags(enum ColorComponentFlags Comps) noexcept {
   return vk::ColorComponentFlagBits(
       (Comps & CC_Red ? unsigned(vk::ColorComponentFlagBits::eR) : 0u) |
       (Comps & CC_Green ? unsigned(vk::ColorComponentFlagBits::eG) : 0u) |
@@ -2897,7 +3175,8 @@ constexpr vk::ColorComponentFlagBits HshToVkColorComponentFlags(enum ColorCompon
       (Comps & CC_Alpha ? unsigned(vk::ColorComponentFlagBits::eA) : 0u));
 }
 
-constexpr vk::ComponentSwizzle HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
+constexpr vk::ComponentSwizzle
+HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
   switch (swizzle) {
   case CS_Identity:
     return vk::ComponentSwizzle::eIdentity;
@@ -2923,17 +3202,20 @@ template <> struct ShaderCode<VULKAN_SPIRV> {
 template <> struct ShaderObject<VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
   ShaderObject() noexcept = default;
-  vk::ShaderModule get(const vk::ShaderModuleCreateInfo &Info) noexcept {
+  vk::ShaderModule Get(const vk::ShaderModuleCreateInfo &Info) noexcept {
     if (!ShaderModule)
-      ShaderModule = vulkan::Globals.Device.createShaderModuleUnique(Info).value;
+      ShaderModule =
+          vulkan::Globals.Device.createShaderModuleUnique(Info).value;
     return ShaderModule.get();
   }
+  void Destroy() noexcept { ShaderModule.reset(); }
 };
 
 template <> struct SamplerObject<VULKAN_SPIRV> {
   std::array<std::array<vk::UniqueSampler, MaxMipCount - 1>, 2> Samplers;
   SamplerObject() noexcept = default;
-  vk::Sampler get(const vk::SamplerCreateInfo &Info, bool Int, unsigned MipCount) noexcept {
+  vk::Sampler Get(const vk::SamplerCreateInfo &Info, bool Int,
+                  unsigned MipCount) noexcept {
     assert(MipCount && MipCount < MaxMipCount);
     vk::UniqueSampler &Samp = Samplers[Int][MipCount - 1];
     if (!Samp) {
@@ -2947,15 +3229,20 @@ template <> struct SamplerObject<VULKAN_SPIRV> {
     }
     return Samp.get();
   }
-  vk::Sampler get(const vk::SamplerCreateInfo &Info, texture_typeless tex) noexcept {
-    return get(Info, tex.Binding.get_VULKAN_SPIRV().Integer,
+  vk::Sampler Get(const vk::SamplerCreateInfo &Info,
+                  texture_typeless tex) noexcept {
+    return Get(Info, tex.Binding.get_VULKAN_SPIRV().Integer,
                tex.Binding.get_VULKAN_SPIRV().NumMips);
+  }
+  void Destroy() noexcept {
+    for (auto &SampI : Samplers)
+      for (auto &Samp : SampI)
+        Samp.reset();
   }
 };
 
 namespace vulkan {
-template <typename Impl>
-struct DescriptorPoolWrites {
+template <typename Impl> struct DescriptorPoolWrites {
   std::size_t NumWrites = 0;
   std::array<vk::WriteDescriptorSet, MaxUniforms + MaxImages + MaxSamplers>
       Writes;
@@ -2996,14 +3283,11 @@ struct DescriptorPoolWrites {
     decltype(Samplers)::iterator SamplerIt;
     constexpr explicit Iterators(vk::DescriptorSet DstSet,
                                  DescriptorPoolWrites &Writes) noexcept
-        : DstSet(DstSet),
-          WriteBegin(Writes.Writes.begin()),
+        : DstSet(DstSet), WriteBegin(Writes.Writes.begin()),
           UniformBegin(Writes.Uniforms.begin()),
           ImageBegin(Writes.Images.begin()),
-          SamplerBegin(Writes.Samplers.begin()),
-          WriteIt(Writes.Writes.begin()),
-          UniformIt(Writes.Uniforms.begin()),
-          ImageIt(Writes.Images.begin()),
+          SamplerBegin(Writes.Samplers.begin()), WriteIt(Writes.Writes.begin()),
+          UniformIt(Writes.Uniforms.begin()), ImageIt(Writes.Images.begin()),
           SamplerIt(Writes.Samplers.begin()) {}
     void add(uniform_buffer_typeless uniform) noexcept {
       auto UniformIdx = UniformIt - UniformBegin;
@@ -3055,7 +3339,7 @@ struct DescriptorPoolWrites {
       auto SamplerIdx = SamplerIt - SamplerBegin;
       auto &Sampler = *SamplerIt++;
       Sampler.setSampler(
-          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.idx].get().get(
+          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.idx].get().Get(
               Impl::cdata_VULKAN_SPIRV.Samplers[sampler.idx], sampler.tex));
       auto &Write = *WriteIt++;
       Write.setDstSet(DstSet);
@@ -3069,8 +3353,8 @@ struct DescriptorPoolWrites {
 } // namespace vulkan
 
 template <typename Impl, typename... Args>
-TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(ClassWrapper<Impl>,
-                                                             Args... args) noexcept
+TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
+    ClassWrapper<Impl>, Args... args) noexcept
     : Pipeline(Impl::data_VULKAN_SPIRV.Pipeline.get()),
       DescriptorSet(vulkan::Globals.DescriptorPoolChain->allocate()) {
   vulkan::DescriptorPoolWrites<Impl> Writes(DescriptorSet, args...);
@@ -3081,30 +3365,37 @@ TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(ClassWrapper<Impl>,
   NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
 }
 
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(uniform_buffer_typeless) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    uniform_buffer_typeless) noexcept {
   UniformOffsetIt++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(dynamic_uniform_buffer_typeless uniform) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    dynamic_uniform_buffer_typeless uniform) noexcept {
   *UniformOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(vertex_buffer_typeless uniform) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    vertex_buffer_typeless uniform) noexcept {
   *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV();
   VertexOffsetIt++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(dynamic_vertex_buffer_typeless uniform) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    dynamic_vertex_buffer_typeless uniform) noexcept {
   *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV().getBuffer();
   *VertexOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(texture_typeless) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    texture_typeless) noexcept {
   TextureIdx++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(render_texture2d texture) noexcept {
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    render_texture2d texture) noexcept {
   auto &RT = *RenderTextureIt++;
   RT.RenderTextureBinding = texture.Binding.get_VULKAN_SPIRV();
   RT.KnownImageView = RT.RenderTextureBinding.getImageView();
   RT.DescriptorBindingIdx = MaxUniforms + TextureIdx++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(SamplerBinding) noexcept {}
+void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+    SamplerBinding) noexcept {}
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
           std::uint32_t NAttributes, std::uint32_t NSamplers,
@@ -3127,7 +3418,8 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
   vk::PipelineColorBlendStateCreateInfo ColorBlendState;
   std::array<vk::SamplerCreateInfo, NSamplers> Samplers;
 
-  template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq, std::size_t... SampSeq, std::size_t... AttSeq>
+  template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq,
+            std::size_t... SampSeq, std::size_t... AttSeq>
   constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
                             std::array<VertexBinding, NBindings> B,
                             std::array<VertexAttribute, NAttributes> A,
@@ -3197,11 +3489,14 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
             HshToVkAddressMode(std::get<SampSeq>(Samps).AddressModeV),
             HshToVkAddressMode(std::get<SampSeq>(Samps).AddressModeW),
             std::get<SampSeq>(Samps).MipLodBias,
-            0, 0,
+            0,
+            0,
             std::get<SampSeq>(Samps).CompareOp != Never,
             HshToVkCompare(std::get<SampSeq>(Samps).CompareOp),
-            0, 0,
-            HshToVkBorderColor(std::get<SampSeq>(Samps).BorderColor, false)}...} {}
+            0,
+            0,
+            HshToVkBorderColor(std::get<SampSeq>(Samps).BorderColor,
+                               false)}...} {}
 
   constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
                             std::array<VertexBinding, NBindings> B,
@@ -3230,8 +3525,8 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
       StageInfos[i] = vk::PipelineShaderStageCreateInfo{
           {},
           StageFlags[i],
-          B::data_VULKAN_SPIRV.ShaderObjects[i].get().get(
-              StageCodes[i]), "main"};
+          B::data_VULKAN_SPIRV.ShaderObjects[i].get().Get(StageCodes[i]),
+          "main"};
 
     return vk::GraphicsPipelineCreateInfo{
         {},
@@ -3261,6 +3556,13 @@ struct ShaderData<VULKAN_SPIRV, NStages, NSamplers> {
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps) noexcept
       : ShaderObjects(S), SamplerObjects(Samps) {}
+  void Destroy() noexcept {
+    for (auto &Obj : ShaderObjects)
+      Obj.get().Destroy();
+    for (auto &Obj : SamplerObjects)
+      Obj.get().Destroy();
+    Pipeline.reset();
+  }
 };
 
 template <> struct PipelineBuilder<VULKAN_SPIRV> {
@@ -3269,8 +3571,8 @@ template <> struct PipelineBuilder<VULKAN_SPIRV> {
     return NotZero ? B::cdata_VULKAN_SPIRV.StageCodes.size() : 0;
   }
   template <typename... B, std::size_t... BSeq>
-  static constexpr std::size_t StageInfoStart(std::size_t BIdx,
-                                              std::index_sequence<BSeq...>) noexcept {
+  static constexpr std::size_t
+  StageInfoStart(std::size_t BIdx, std::index_sequence<BSeq...>) noexcept {
     return (GetNumStages<B>(BSeq < BIdx) + ...);
   }
   template <typename B> static void SetPipeline(vk::Pipeline data) noexcept {
@@ -3279,7 +3581,7 @@ template <> struct PipelineBuilder<VULKAN_SPIRV> {
     B::data_VULKAN_SPIRV.Pipeline = vk::UniquePipeline(data, deleter);
   }
   template <typename... B, std::size_t... BSeq>
-  static void build_pipelines(std::index_sequence<BSeq...> seq) noexcept {
+  static void CreatePipelines(std::index_sequence<BSeq...> seq) noexcept {
     std::array<VkPipelineShaderStageCreateInfo, (GetNumStages<B>(true) + ...)>
         ShaderStageInfos;
     std::array<vk::GraphicsPipelineCreateInfo, sizeof...(B)> Infos{
@@ -3291,13 +3593,20 @@ template <> struct PipelineBuilder<VULKAN_SPIRV> {
     VULKAN_HPP_ASSERT(Result == vk::Result::eSuccess);
     (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
+  template <typename... B> static void CreatePipelines() noexcept {
+    CreatePipelines<B...>(std::make_index_sequence<sizeof...(B)>());
+  }
+  template <typename... B> static void DestroyPipelines() noexcept {
+    (B::data_VULKAN_SPIRV.Destroy(), ...);
+  }
 };
 
 namespace buffer_math::vulkan {
 template <std::size_t... Idx>
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
 MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
-             vk::ImageAspectFlagBits aspect, std::index_sequence<Idx...>) noexcept {
+             vk::ImageAspectFlagBits aspect,
+             std::index_sequence<Idx...>) noexcept {
   return {vk::BufferImageCopy(
       MipOffset2D(width, height, texelSize, Idx), width >> Idx, height >> Idx,
       {aspect, Idx, 0, 1}, {},
@@ -3314,9 +3623,10 @@ MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
 template <typename T>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
   template <typename CopyFunc>
-  static auto Create(const HSH_SOURCE_LOCATION &location,
+  static auto Create(const SourceLocation &location,
                      CopyFunc copyFunc) noexcept {
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(location, sizeof(T));
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(
+        location.with_field("UniformBufferUpload"), sizeof(T));
     copyFunc(UploadBuffer.getMappedData(), sizeof(T));
 
     TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
@@ -3326,27 +3636,26 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
     vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
                                    vk::BufferCopy(0, 0, sizeof(T)));
 
-    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
-
     return Ret;
   }
 };
 
 template <typename T>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_uniform_buffer<T>> {
-  static auto Create(const HSH_SOURCE_LOCATION &location) noexcept {
-    return vulkan::AllocateDynamicBuffer(location,
-        sizeof(T), vk::BufferUsageFlagBits::eUniformBuffer);
+  static auto Create(const SourceLocation &location) noexcept {
+    return vulkan::AllocateDynamicBuffer(
+        location, sizeof(T), vk::BufferUsageFlagBits::eUniformBuffer);
   }
 };
 
 template <typename T>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
   template <typename CopyFunc>
-  static auto Create(const HSH_SOURCE_LOCATION &location, std::size_t Count,
+  static auto Create(const SourceLocation &location, std::size_t Count,
                      CopyFunc copyFunc) noexcept {
     std::size_t Size = sizeof(T) * Count;
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(location, Size);
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(
+        location.with_field("VertexBufferUpload"), Size);
     copyFunc(UploadBuffer.getMappedData(), Size);
 
     TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
@@ -3357,25 +3666,23 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
     vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
                                    vk::BufferCopy(0, 0, Size));
 
-    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
-
     return Ret;
   }
 };
 
 template <typename T>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_vertex_buffer<T>> {
-  static auto Create(const HSH_SOURCE_LOCATION &location,
+  static auto Create(const SourceLocation &location,
                      std::size_t Count) noexcept {
-    return vulkan::AllocateDynamicBuffer(location,
-        sizeof(T) * Count, vk::BufferUsageFlagBits::eVertexBuffer);
+    return vulkan::AllocateDynamicBuffer(
+        location, sizeof(T) * Count, vk::BufferUsageFlagBits::eVertexBuffer);
   }
 };
 
 template <typename TexelType>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
   template <typename CopyFunc>
-  static auto Create(const HSH_SOURCE_LOCATION &location, Extent2D extent,
+  static auto Create(const SourceLocation &location, Extent2D extent,
                      Format format, uint32_t numMips, CopyFunc copyFunc,
                      ColorSwizzle redSwizzle = CS_Identity,
                      ColorSwizzle greenSwizzle = CS_Identity,
@@ -3388,23 +3695,27 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
                                           vk::ImageAspectFlagBits::eColor);
     auto BufferSize =
         buffer_math::MipOffset2D(extent.w, extent.h, TexelSize, numMips);
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(location, BufferSize);
+    auto UploadBuffer = vulkan::AllocateUploadBuffer(
+        location.with_field("TextureUpload"), BufferSize);
     copyFunc(UploadBuffer.getMappedData(), BufferSize);
 
     TargetTraits<VULKAN_SPIRV>::TextureOwner Ret{
-        vulkan::AllocateTexture(location, vk::ImageCreateInfo(
-            {}, vk::ImageType::e2D, TexelFormat, {extent.w, extent.h, 1},
-            numMips, 1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
-            vk::ImageUsageFlagBits::eSampled |
-                vk::ImageUsageFlagBits::eTransferDst,
-            {}, {}, {}, vk::ImageLayout::eUndefined)),
+        vulkan::AllocateTexture(
+            location,
+            vk::ImageCreateInfo({}, vk::ImageType::e2D, TexelFormat,
+                                {extent.w, extent.h, 1}, numMips, 1,
+                                vk::SampleCountFlagBits::e1,
+                                vk::ImageTiling::eOptimal,
+                                vk::ImageUsageFlagBits::eSampled |
+                                    vk::ImageUsageFlagBits::eTransferDst,
+                                {}, {}, {}, vk::ImageLayout::eUndefined)),
         {},
         std::uint8_t(numMips),
         HshFormatIsInteger(format)};
     Ret.ImageView =
         vulkan::Globals.Device
             .createImageViewUnique(vk::ImageViewCreateInfo(
-                {}, Ret.Allocation.getImage(), vk::ImageViewType::e2D,
+                {}, Ret.Allocation.GetImage(), vk::ImageViewType::e2D,
                 TexelFormat,
                 vk::ComponentMapping(HshToVkComponentSwizzle(redSwizzle),
                                      HshToVkComponentSwizzle(greenSwizzle),
@@ -3413,22 +3724,23 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
                 vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                           numMips, 0, 1)))
             .value;
-    vulkan::Globals.SetDebugObjectName(location, Ret.ImageView.get());
+    vulkan::Globals.SetDebugObjectName(location.with_field("ImageView"),
+                                       Ret.ImageView.get());
 
     vulkan::Globals.Cmd.pipelineBarrier(
         vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::DependencyFlagBits::eByRegion, {}, {},
+        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+        {}, {},
         vk::ImageMemoryBarrier(
             vk::AccessFlagBits(0), vk::AccessFlagBits::eTransferWrite,
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED,
-            VK_QUEUE_FAMILY_IGNORED, Ret.Allocation.getImage(),
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+            Ret.Allocation.GetImage(),
             vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                       VK_REMAINING_MIP_LEVELS, 0,
                                       VK_REMAINING_ARRAY_LAYERS)));
     vulkan::Globals.Cmd.copyBufferToImage(
-        UploadBuffer.getBuffer(), Ret.Allocation.getImage(),
+        UploadBuffer.getBuffer(), Ret.Allocation.GetImage(),
         vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
     vulkan::Globals.Cmd.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
@@ -3442,12 +3754,10 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
             vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
             vk::ImageLayout::eTransferDstOptimal,
             vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED,
-            VK_QUEUE_FAMILY_IGNORED, Ret.Allocation.getImage(),
+            VK_QUEUE_FAMILY_IGNORED, Ret.Allocation.GetImage(),
             vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                       VK_REMAINING_MIP_LEVELS, 0,
                                       VK_REMAINING_ARRAY_LAYERS)));
-
-    vulkan::Globals.PendingUploadBuffers.push_back(std::move(UploadBuffer));
 
     return Ret;
   }
@@ -3455,20 +3765,21 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
 
 template <>
 struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
-  static auto Create(const HSH_SOURCE_LOCATION &location,
-                     surface Surf, uint32_t NumColorBindings = 0,
+  static auto Create(const SourceLocation &location, surface Surf,
+                     uint32_t NumColorBindings = 0,
                      uint32_t NumDepthBindings = 0) noexcept {
     return TargetTraits<VULKAN_SPIRV>::RenderTextureOwner{
-        std::make_unique<vulkan::RenderTextureAllocation>(location,
-            Surf.Binding.get_VULKAN_SPIRV().Allocation, NumColorBindings,
-            NumDepthBindings)};
+        std::make_unique<vulkan::RenderTextureAllocation>(
+            location, Surf.Binding.get_VULKAN_SPIRV().Allocation,
+            NumColorBindings, NumDepthBindings)};
   }
 };
 
 template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
-  static auto Create(const HSH_SOURCE_LOCATION &location,
+  static auto Create(const SourceLocation &location,
                      vk::UniqueSurfaceKHR Surface) noexcept {
-    vulkan::Globals.SetDebugObjectName(location, Surface.get());
+    vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
+                                       Surface.get());
     if (!vulkan::Globals.CheckSurfaceSupported(Surface.get())) {
       // TODO: make this return a detectable null object
       assert(false && "surface not supported");
@@ -3480,8 +3791,8 @@ template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
   }
 
 #ifdef VK_USE_PLATFORM_XCB_KHR
-  static auto Create(const HSH_SOURCE_LOCATION &location,
-                     xcb_connection_t *Conn, xcb_window_t Window) noexcept {
+  static auto Create(const SourceLocation &location, xcb_connection_t *Conn,
+                     xcb_window_t Window) noexcept {
     return Create(location,
                   vulkan::Globals.Instance
                       .createXcbSurfaceKHRUnique(
@@ -3494,25 +3805,42 @@ template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
 
 struct GlobalListNode {
   static GlobalListNode *Head;
-  typedef void (*RegisterFunc)() noexcept;
-  std::array<RegisterFunc, TARGET_MAX> Func;
+  typedef void (*BuildFunc)() noexcept;
+  struct FuncPair {
+    BuildFunc Create, Destroy;
+  };
+  std::array<FuncPair, ACTIVE_TARGET_MAX> Funcs;
   GlobalListNode *Next;
   template <typename... Args>
   explicit GlobalListNode(Args... Funcs) noexcept
-      : Func{Funcs...}, Next(Head) {
+      : Funcs{Funcs...}, Next(Head) {
     Head = this;
   }
 };
 inline GlobalListNode *GlobalListNode::Head = nullptr;
 
-template <typename... B>
-struct PipelineCoordinator {
-  static hsh::detail::GlobalListNode global;
-  template <hsh::Target T>
-  static void global_build() noexcept {
-    PipelineBuilder<T>::template build_pipelines<B...>(
-        std::make_index_sequence<sizeof...(B)>());
+template <template <hsh::Target> typename Impl>
+struct PipelineCoordinatorNode : GlobalListNode {
+  PipelineCoordinatorNode()
+      : GlobalListNode{
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  GlobalListNode::FuncPair{Impl<Enumeration>::Create,                          \
+                           Impl<Enumeration>::Destroy},
+#include "targets.def"
+        } {
   }
+};
+
+template <typename... B> struct PipelineCoordinator {
+  template <hsh::Target T> struct Impl {
+    static void Create() noexcept {
+      PipelineBuilder<T>::template CreatePipelines<B...>();
+    }
+    static void Destroy() noexcept {
+      PipelineBuilder<T>::template DestroyPipelines<B...>();
+    }
+  };
+  static PipelineCoordinatorNode<Impl> global;
 };
 
 /*
@@ -3563,7 +3891,8 @@ template <typename T> struct resource_owner : resource_owner_base<T> {
 template <typename T>
 struct resource_owner<dynamic_uniform_buffer<T>>
     : dynamic_resource_owner_base<dynamic_uniform_buffer<T>> {
-  using dynamic_resource_owner_base<dynamic_uniform_buffer<T>>::dynamic_resource_owner_base;
+  using dynamic_resource_owner_base<
+      dynamic_uniform_buffer<T>>::dynamic_resource_owner_base;
 };
 
 template <typename T>
@@ -3583,7 +3912,7 @@ struct resource_owner<dynamic_vertex_buffer<T>>
 };
 
 template <typename T, typename... Args>
-inline resource_owner<T> create_resource(const HSH_SOURCE_LOCATION &location,
+inline resource_owner<T> create_resource(const SourceLocation &location,
                                          Args... args) noexcept {
   return resource_owner<T>(
       detail::ActiveTargetTraits::CreateResource<T>(location, args...));
@@ -3592,49 +3921,44 @@ inline resource_owner<T> create_resource(const HSH_SOURCE_LOCATION &location,
 template <typename T, typename... Args>
 inline resource_owner<T> create_resource(Args... args) noexcept {
   return resource_owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
-      HSH_SOURCE_LOCATION::current(), args...));
+      SourceLocation::current(), args...));
 }
 
 template <typename T, typename CopyFunc>
-inline resource_owner<uniform_buffer<T>>
-create_uniform_buffer(CopyFunc copyFunc,
-                      const HSH_SOURCE_LOCATION &location =
-                          HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<uniform_buffer<T>> create_uniform_buffer(
+    CopyFunc copyFunc,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<uniform_buffer<T>>(location, copyFunc);
 }
 
 template <typename T>
-inline resource_owner<uniform_buffer<T>>
-create_uniform_buffer(const T &data,
-                      const HSH_SOURCE_LOCATION &location =
-                          HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<uniform_buffer<T>> create_uniform_buffer(
+    const T &data,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<uniform_buffer<T>>(
       location,
       [&](void *buf, std::size_t size) { std::memcpy(buf, &data, sizeof(T)); });
 }
 
 template <typename T>
-inline resource_owner<dynamic_uniform_buffer<T>>
-create_dynamic_uniform_buffer(const HSH_SOURCE_LOCATION &location =
-                                  HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<dynamic_uniform_buffer<T>> create_dynamic_uniform_buffer(
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<dynamic_uniform_buffer<T>>(location);
 }
 
 template <typename T>
-inline resource_owner<dynamic_uniform_buffer<T>>
-create_dynamic_uniform_buffer(const T &data,
-                              const HSH_SOURCE_LOCATION &location =
-                                  HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<dynamic_uniform_buffer<T>> create_dynamic_uniform_buffer(
+    const T &data,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_resource<dynamic_uniform_buffer<T>>(location);
   ret.load(data);
   return ret;
 }
 
 template <typename T>
-inline resource_owner<vertex_buffer<T>>
-create_vertex_buffer(detail::ArrayProxy<T> data,
-                     const HSH_SOURCE_LOCATION &location =
-                         HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<vertex_buffer<T>> create_vertex_buffer(
+    detail::ArrayProxy<T> data,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<vertex_buffer<T>>(
       location, data.size(), [&](void *buf, std::size_t size) {
         std::memcpy(buf, data.data(), sizeof(T) * data.size());
@@ -3642,49 +3966,44 @@ create_vertex_buffer(detail::ArrayProxy<T> data,
 }
 
 template <typename T, std::size_t N>
-inline resource_owner<vertex_buffer<T>>
-create_vertex_buffer(const std::array<T, N> &Arr,
-                     const HSH_SOURCE_LOCATION &location =
-                         HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<vertex_buffer<T>> create_vertex_buffer(
+    const std::array<T, N> &Arr,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_vertex_buffer(detail::ArrayProxy<T>(Arr), location);
 }
 
 template <typename T>
-inline resource_owner<dynamic_vertex_buffer<T>>
-create_dynamic_vertex_buffer(const HSH_SOURCE_LOCATION &location =
-                                 HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<dynamic_vertex_buffer<T>> create_dynamic_vertex_buffer(
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<dynamic_vertex_buffer<T>>(location);
 }
 
 template <typename T>
-inline resource_owner<dynamic_vertex_buffer<T>>
-create_dynamic_vertex_buffer(detail::ArrayProxy<T> data,
-                             const HSH_SOURCE_LOCATION &location =
-                                 HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<dynamic_vertex_buffer<T>> create_dynamic_vertex_buffer(
+    detail::ArrayProxy<T> data,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_resource<dynamic_vertex_buffer<T>>(location);
   ret.load(data);
   return ret;
 }
 
 template <typename T, std::size_t N>
-inline resource_owner<dynamic_vertex_buffer<T>>
-create_dynamic_vertex_buffer(const std::array<T, N> &Arr,
-                             const HSH_SOURCE_LOCATION &location =
-                                 HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<dynamic_vertex_buffer<T>> create_dynamic_vertex_buffer(
+    const std::array<T, N> &Arr,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_resource<dynamic_vertex_buffer<T>>(location);
   ret.load(Arr);
   return ret;
 }
 
 template <typename TexelType, typename CopyFunc>
-inline resource_owner<texture2d<TexelType>>
-create_texture2d(Extent2D extent, Format format, uint32_t numMips,
-                 CopyFunc copyFunc, ColorSwizzle redSwizzle = CS_Identity,
-                 ColorSwizzle greenSwizzle = CS_Identity,
-                 ColorSwizzle blueSwizzle = CS_Identity,
-                 ColorSwizzle alphaSwizzle = CS_Identity,
-                 const HSH_SOURCE_LOCATION &location =
-                     HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<texture2d<TexelType>> create_texture2d(
+    Extent2D extent, Format format, uint32_t numMips, CopyFunc copyFunc,
+    ColorSwizzle redSwizzle = CS_Identity,
+    ColorSwizzle greenSwizzle = CS_Identity,
+    ColorSwizzle blueSwizzle = CS_Identity,
+    ColorSwizzle alphaSwizzle = CS_Identity,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<texture2d<TexelType>>(
       location, extent, format, numMips, copyFunc, redSwizzle, greenSwizzle,
       blueSwizzle, alphaSwizzle);
@@ -3722,11 +4041,9 @@ template <> struct resource_owner<render_texture2d> {
   }
 };
 
-inline resource_owner<render_texture2d>
-create_render_texture2d(surface Surf, uint32_t NumColorBindings = 0,
-                        uint32_t NumDepthBindings = 0,
-                        const HSH_SOURCE_LOCATION &location =
-                            HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<render_texture2d> create_render_texture2d(
+    surface Surf, uint32_t NumColorBindings = 0, uint32_t NumDepthBindings = 0,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<render_texture2d>(location, Surf, NumColorBindings,
                                            NumDepthBindings);
 }
@@ -3739,10 +4056,9 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
 };
 
 #ifdef VK_USE_PLATFORM_XCB_KHR
-inline resource_owner<surface>
-create_surface(xcb_connection_t *Conn, xcb_window_t Window,
-               const HSH_SOURCE_LOCATION &location =
-                   HSH_SOURCE_LOCATION::current()) noexcept {
+inline resource_owner<surface> create_surface(
+    xcb_connection_t *Conn, xcb_window_t Window,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<surface>(location, Conn, Window);
 }
 #endif
@@ -3752,6 +4068,7 @@ protected:
   detail::ActiveTargetTraits::PipelineBinding Data;
   template <typename... Args>
   explicit binding_typeless(Args... args) noexcept : Data(args...) {}
+
 public:
   operator bool() const noexcept { return Data.isValid(); }
   binding_typeless() noexcept = default;
@@ -3760,12 +4077,11 @@ public:
   }
 };
 
-template <typename Impl>
-class binding : public binding_typeless {
+template <typename Impl> class binding : public binding_typeless {
 protected:
   template <typename... Args>
   explicit binding(Args... args) noexcept
-  : binding_typeless(detail::ClassWrapper<Impl>(), args...) {}
+      : binding_typeless(detail::ClassWrapper<Impl>(), args...) {}
 };
 
 #if HSH_PROFILE_MODE
@@ -3779,6 +4095,7 @@ struct value_formatter {
 class profiler {
   friend class profile_context;
   const char *source = nullptr;
+
 public:
   struct push {
     const char *name;
@@ -3786,30 +4103,27 @@ public:
   };
   struct pop {};
   struct cast_base {};
-  template <typename T>
-  struct cast : cast_base {
+  template <typename T> struct cast : cast_base {
     const char *type;
     T val;
     explicit cast(const char *type, T val) noexcept : type(type), val(val) {}
   };
+
 private:
   template <typename T>
   using EnableIfNonControlArg =
-  std::enable_if_t<!std::is_same_v<T, push> && !std::is_same_v<T, pop> &&
-                   !std::is_same_v<T, const char *> && !std::is_base_of_v<cast_base, T>,
-      int>;
+      std::enable_if_t<!std::is_same_v<T, push> && !std::is_same_v<T, pop> &&
+                           !std::is_same_v<T, const char *> &&
+                           !std::is_base_of_v<cast_base, T>,
+                       int>;
   struct node {
     std::map<std::string, node> children;
     std::string leaf;
-    node &get() noexcept {
-      return *this;
-    }
-    template <typename... Args>
-    node &get(push, Args... rest) noexcept {
+    node &get() noexcept { return *this; }
+    template <typename... Args> node &get(push, Args... rest) noexcept {
       return get(rest...);
     }
-    template <typename... Args>
-    node &get(pop, Args... rest) noexcept {
+    template <typename... Args> node &get(pop, Args... rest) noexcept {
       return get(rest...);
     }
     template <typename... Args>
@@ -3828,7 +4142,8 @@ private:
       hsh::value_formatter::format(ss, arg);
       return children[ss.str()].get(rest...);
     }
-    void write(std::ostream &out, const char *src, unsigned &idx) const noexcept {
+    void write(std::ostream &out, const char *src, unsigned &idx) const
+        noexcept {
       if (!children.empty()) {
         for (auto [key, node] : children)
           node.write(out, src, idx);
@@ -3840,9 +4155,7 @@ private:
   static void do_format_param(std::ostream &out, push p) noexcept {
     out << p.name << "<";
   }
-  static void do_format_param(std::ostream &out, pop p) noexcept {
-    out << ">";
-  }
+  static void do_format_param(std::ostream &out, pop p) noexcept { out << ">"; }
   static void do_format_param(std::ostream &out, const char *arg) noexcept {
     out << arg;
   }
@@ -3871,9 +4184,9 @@ private:
     unsigned idx = 0;
     root.write(out, source, idx);
   }
+
 public:
-  template <typename... Args>
-  void add(Args... args) noexcept {
+  template <typename... Args> void add(Args... args) noexcept {
     node &n = root.get(args...);
     std::ostringstream ss;
     ss << '<';
@@ -3889,9 +4202,11 @@ class profile_context {
     std::unordered_map<std::string, profiler> profilers;
   };
   std::unordered_map<std::string, File> files;
+
 public:
   static profile_context instance;
-  profiler &get(const char *filename, const char *fwds, const char *binding, const char *source) noexcept {
+  profiler &get(const char *filename, const char *fwds, const char *binding,
+                const char *source) noexcept {
     auto &file = files[filename];
     file.fwds = fwds;
     auto &ret = file.profilers[binding];

@@ -4892,8 +4892,8 @@ class GenerateConsumer : public ASTConsumer {
   llvm::DenseSet<uint64_t> SeenSamplerHashes;
   std::string AnonNSString;
   raw_string_ostream AnonOS{AnonNSString};
-  std::string AfterAnonNSString;
-  raw_string_ostream AfterAnonOS{AfterAnonNSString};
+  std::string CoordinatorSpecString;
+  raw_string_ostream CoordinatorSpecOS{CoordinatorSpecString};
   std::string ProfileString;
   raw_string_ostream ProfileOS{ProfileString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
@@ -4916,10 +4916,10 @@ class GenerateConsumer : public ASTConsumer {
   bool NeedsCoordinatorComma = false;
   void addCoordinatorType(QualType T) {
     if (NeedsCoordinatorComma)
-      AfterAnonOS << ",\n";
+      CoordinatorSpecOS << ",\n";
     else
       NeedsCoordinatorComma = true;
-    T.print(AfterAnonOS, HostPolicy);
+    T.print(CoordinatorSpecOS, HostPolicy);
   }
 
   class LocationNamespaceSearch
@@ -5272,8 +5272,8 @@ public:
         InitOS << "    },\n    {\n";
 
         for (const auto &Binding : Builder.getBindings()) {
-          InitOS << "      hsh::detail::VertexBinding{" << Binding.Binding << ", "
-                 << Binding.Stride << ", ";
+          InitOS << "      hsh::detail::VertexBinding{" << Binding.Binding
+                 << ", " << Binding.Stride << ", ";
           Builtins.printInputRateEnumString(InitOS, HostPolicy,
                                             Binding.InputRate);
           InitOS << "},\n";
@@ -5670,8 +5670,7 @@ public:
            "#include <hsh/hsh.h>\n\n";
 
     AnonOS << "namespace {\n\n";
-    AfterAnonOS << "template <> hsh::detail::GlobalListNode "
-                   "hsh::detail::PipelineCoordinator<\n";
+    CoordinatorSpecOS << "hsh::detail::PipelineCoordinator<\n";
 
     /*
      * Process all hsh::pipeline derivatives
@@ -5686,24 +5685,9 @@ public:
 
     AnonOS << "}\n\n";
 
-    AfterAnonOS << "\n>::global{";
-    bool NeedsComma = false;
-    for (HshTarget T = HT_GLSL; T < HT_MAX; T = HshTarget(T + 1)) {
-      if (NeedsComma)
-        AfterAnonOS << ", ";
-      else
-        NeedsComma = true;
-      if (std::find(Targets.begin(), Targets.end(), T) != Targets.end()) {
-        AfterAnonOS << "&global_build<";
-        Builtins.printTargetEnumString(AfterAnonOS, HostPolicy, T);
-        AfterAnonOS << ">";
-      } else {
-        AfterAnonOS << "nullptr";
-      }
-    }
-    AfterAnonOS << "};\n\n";
-
-    *OS << AnonOS.str() << AfterAnonOS.str();
+    *OS << AnonOS.str() << "template <> hsh::detail::PipelineCoordinatorNode<\n"
+        << CoordinatorSpecOS.str() << ">::Impl>\n"
+        << CoordinatorSpecOS.str() << ">::global{};\n\n";
 
     /*
      * Emit binding macro functions

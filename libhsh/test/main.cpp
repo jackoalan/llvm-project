@@ -410,6 +410,10 @@ int main(int argc, char** argv) {
                                                           HasExtMemoryBudget)).value;
     hsh::detail::vulkan::Globals.Allocator = VmaAllocator.get();
 
+    std::array<hsh::detail::vulkan::DeletedResources, 2> DeletedResources;
+    hsh::detail::vulkan::Globals.DeletedResourcesArr = &DeletedResources;
+    hsh::detail::vulkan::Globals.DeletedResources = &DeletedResources[0];
+
     auto Surface = hsh::create_surface(Window.Connection, Window.Window);
     auto RenderTexture = hsh::create_render_texture2d(Surface);
     auto DescriptorSetLayout = Device->createDescriptorSetLayoutUnique(MyDescriptorSetLayoutCreateInfo()).value;
@@ -433,7 +437,7 @@ int main(int argc, char** argv) {
     hsh::detail::vulkan::Globals.RenderCompleteSem = RenderCompleteSem.get();
 
     for (auto *Node = hsh::detail::GlobalListNode::Head; Node; Node = Node->Next)
-      Node->Func[hsh::VULKAN_SPIRV]();
+      Node->Funcs[hsh::ACTIVE_VULKAN_SPIRV].Create();
 
     MyNS::Binding PipelineBind;
 
@@ -458,6 +462,9 @@ int main(int argc, char** argv) {
     });
 
     Device->waitIdle();
+
+    for (auto *Node = hsh::detail::GlobalListNode::Head; Node; Node = Node->Next)
+      Node->Funcs[hsh::ACTIVE_VULKAN_SPIRV].Destroy();
 
     break;
   }
