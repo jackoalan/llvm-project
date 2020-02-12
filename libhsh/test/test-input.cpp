@@ -15,9 +15,7 @@ struct DrawSomething : pipeline<color_attachment<>> {
     position = u->xf * hsh::float4{v->position, 1.f};
     hsh::float3x3 normalXf = u->xf;
     hsh::float3 finalNormal = normalXf * v->normal;
-    color_out[0] = hsh::float4{hsh::float3{
-        tex0.sample({0.f, 0.f}, TestSampler).xyz() *
-        hsh::dot(finalNormal, -u->lightDir)}, 0.f};
+    color_out[0] = hsh::float4{1.f, 1.f, 1.f, 1.f};
   }
 };
 #endif
@@ -65,12 +63,6 @@ hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typ
 
 Binding BuildPipeline() {
   auto uni = hsh::create_dynamic_uniform_buffer<UniformData>();
-  UniformData UniData{};
-  UniData.xf[0][0] = 1.f;
-  UniData.xf[1][1] = 1.f;
-  UniData.xf[2][2] = 1.f;
-  UniData.xf[3][3] = 1.f;
-  uni.load(UniData);
   std::array<MyFormat, 3> VtxData{
       MyFormat{hsh::float3{0.f, 0.f, 0.f}, {}},
       MyFormat{hsh::float3{1.f, 0.f, 0.f}, {}},

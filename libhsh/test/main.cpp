@@ -1,7 +1,7 @@
 #define VMA_IMPLEMENTATION
+#include <chrono>
 #include <hsh/hsh.h>
 #include <string_view>
-#include <chrono>
 using namespace std::literals;
 
 #include "test-input.h"
@@ -18,8 +18,8 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
   } AppInfo;
   std::vector<vk::LayerProperties> Layers;
   std::vector<vk::ExtensionProperties> Extensions;
-  std::vector<const char*> EnabledLayers;
-  std::vector<const char*> EnabledExtensions;
+  std::vector<const char *> EnabledLayers;
+  std::vector<const char *> EnabledExtensions;
 
   bool enableLayer(std::string_view Name) {
     for (const auto &L : Layers) {
@@ -45,15 +45,15 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
   static constexpr std::string_view WantedLayers[] = {
 #if !defined(NDEBUG)
-      "VK_LAYER_LUNARG_standard_validation"sv,
+    "VK_LAYER_LUNARG_standard_validation"sv,
 #endif
   };
 
   static constexpr std::string_view WantedExtensions[] = {
-      "VK_KHR_surface"sv,
-      "VK_KHR_xcb_surface"sv,
+    "VK_KHR_surface"sv,
+    "VK_KHR_xcb_surface"sv,
 #if !defined(NDEBUG)
-      "VK_EXT_debug_utils"sv,
+    "VK_EXT_debug_utils"sv,
 #endif
   };
 
@@ -79,8 +79,8 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
   vk::DeviceQueueCreateInfo QueueCreateInfo{{}, 0, 1, &QueuePriority};
   std::vector<vk::LayerProperties> Layers;
   std::vector<vk::ExtensionProperties> Extensions;
-  std::vector<const char*> EnabledLayers;
-  std::vector<const char*> EnabledExtensions;
+  std::vector<const char *> EnabledLayers;
+  std::vector<const char *> EnabledExtensions;
   vk::PhysicalDeviceFeatures EnabledFeatures;
 
   bool enableLayer(std::string_view Name) {
@@ -108,18 +108,18 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
 
   static constexpr std::string_view WantedLayers[] = {
 #if !defined(NDEBUG)
-      "VK_LAYER_LUNARG_standard_validation"sv,
+    "VK_LAYER_LUNARG_standard_validation"sv,
 #endif
   };
 
   static constexpr std::string_view WantedExtensions[] = {
-      "VK_KHR_swapchain"sv,
-      "VK_KHR_get_memory_requirements2"sv,
-      "VK_KHR_dedicated_allocation"sv
-  };
+      "VK_KHR_swapchain"sv, "VK_KHR_get_memory_requirements2"sv,
+      "VK_KHR_dedicated_allocation"sv};
 
-  explicit MyDeviceCreateInfo(vk::PhysicalDevice PD, uint32_t &QFIdxOut, bool &HasExtMemoryBudget)
-  : vk::DeviceCreateInfo({}, 1, &QueueCreateInfo, 0, nullptr, 0, nullptr, &EnabledFeatures) {
+  explicit MyDeviceCreateInfo(vk::PhysicalDevice PD, uint32_t &QFIdxOut,
+                              bool &HasExtMemoryBudget)
+      : vk::DeviceCreateInfo({}, 1, &QueueCreateInfo, 0, nullptr, 0, nullptr,
+                             &EnabledFeatures) {
     Layers = PD.enumerateDeviceLayerProperties().value;
     Extensions = PD.enumerateDeviceExtensionProperties().value;
 
@@ -218,9 +218,7 @@ struct XcbConnection {
     wmProtocols = wmProtocolsReply->atom;
   }
 
-  XcbWindow makeWindow() {
-    return XcbWindow(*this);
-  }
+  XcbWindow makeWindow() { return XcbWindow(*this); }
 
   void runloop(const std::function<bool()> &IdleFunc) {
     bool Running = true;
@@ -265,15 +263,14 @@ XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
                       XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8, AppName.size(),
                       AppName.data());
   xcb_change_property(Connection, XCB_PROP_MODE_REPLACE, Window,
-                      Connection.wmProtocols, 4, 32, 1, &Connection.wmDeleteWin);
+                      Connection.wmProtocols, 4, 32, 1,
+                      &Connection.wmDeleteWin);
 
   xcb_map_window(Connection, Window);
   xcb_flush(Connection);
 }
 
-XcbWindow::~XcbWindow() {
-  xcb_destroy_window(Connection, Window);
-}
+XcbWindow::~XcbWindow() { xcb_destroy_window(Connection, Window); }
 
 struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
   std::array<vk::DescriptorSetLayoutBinding, hsh::detail::MaxUniforms +
@@ -297,7 +294,8 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
                  vk::DescriptorSetLayoutBinding(
                      hsh::detail::MaxUniforms + hsh::detail::MaxImages + SSeq,
                      vk::DescriptorType::eSampler, 1,
-                     vk::ShaderStageFlagBits::eAllGraphics)...} {}
+                     vk::ShaderStageFlagBits::eAllGraphics)...} {
+  }
 #pragma GCC diagnostic pop
   constexpr MyDescriptorSetLayoutCreateInfo() noexcept
       : MyDescriptorSetLayoutCreateInfo(
@@ -311,7 +309,8 @@ struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
   constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
-  : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()), Layouts{layout} {}
+      : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()),
+        Layouts{layout} {}
 #pragma GCC diagnostic pop
 };
 
@@ -323,7 +322,8 @@ struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
 
 struct MyCommandBufferAllocateInfo : vk::CommandBufferAllocateInfo {
   constexpr MyCommandBufferAllocateInfo(vk::CommandPool cmdPool)
-      : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary, 2) {}
+      : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary,
+                                      2) {}
 };
 
 struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
@@ -346,10 +346,10 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
             nullptr,
             Instance,
             VK_API_VERSION_1_1} {
-#define COPY_FUNC(funcName) \
-    Funcs.funcName = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
-#define COPY_1_1_FUNC(funcName) \
-    Funcs.funcName##KHR = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
+#define COPY_FUNC(funcName)                                                    \
+  Funcs.funcName = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
+#define COPY_1_1_FUNC(funcName)                                                \
+  Funcs.funcName##KHR = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
     COPY_FUNC(vkGetPhysicalDeviceProperties);
     COPY_FUNC(vkGetPhysicalDeviceMemoryProperties);
     COPY_FUNC(vkAllocateMemory);
@@ -377,13 +377,14 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
   }
 };
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   XcbConnection Connection;
   XcbWindow Window = Connection.makeWindow();
 
   vk::DynamicLoader Loader;
   VULKAN_HPP_ASSERT(Loader.success());
-  auto GetInstanceProcAddr = Loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+  auto GetInstanceProcAddr =
+      Loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
   VULKAN_HPP_ASSERT(GetInstanceProcAddr);
   VULKAN_HPP_DEFAULT_DISPATCHER.init(GetInstanceProcAddr);
 
@@ -392,7 +393,10 @@ int main(int argc, char** argv) {
   hsh::detail::vulkan::Globals.Instance = Instance.get();
 
 #if !defined(NDEBUG)
-  auto Messenger = Instance->createDebugUtilsMessengerEXTUnique(MyDebugUtilsMessengerCreateInfo()).value;
+  auto Messenger = Instance
+                       ->createDebugUtilsMessengerEXTUnique(
+                           MyDebugUtilsMessengerCreateInfo())
+                       .value;
 #endif
 
   auto PhysDevices = Instance->enumeratePhysicalDevices().value;
@@ -400,15 +404,21 @@ int main(int argc, char** argv) {
     hsh::detail::vulkan::Globals.PhysDevice = PD;
     uint32_t QFIdx = 0;
     bool HasExtMemoryBudget = false;
-    auto Device = PD.createDeviceUnique(MyDeviceCreateInfo(PD, QFIdx, HasExtMemoryBudget)).value;
+    auto Device =
+        PD.createDeviceUnique(MyDeviceCreateInfo(PD, QFIdx, HasExtMemoryBudget))
+            .value;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*Device);
     hsh::detail::vulkan::Globals.Device = Device.get();
     hsh::detail::vulkan::Globals.QueueFamilyIdx = QFIdx;
 
     auto VmaAllocator =
-    vk::createVmaAllocatorUnique(MyVmaAllocatorCreateInfo(Instance.get(), PD, Device.get(),
-                                                          HasExtMemoryBudget)).value;
+        vk::createVmaAllocatorUnique(
+            MyVmaAllocatorCreateInfo(Instance.get(), PD, Device.get(),
+                                     HasExtMemoryBudget))
+            .value;
     hsh::detail::vulkan::Globals.Allocator = VmaAllocator.get();
+    auto UploadPool = hsh::detail::vulkan::CreateUploadPool();
+    hsh::detail::vulkan::Globals.UploadPool = UploadPool.get();
 
     std::array<hsh::detail::vulkan::DeletedResources, 2> DeletedResources;
     hsh::detail::vulkan::Globals.DeletedResourcesArr = &DeletedResources;
@@ -416,19 +426,34 @@ int main(int argc, char** argv) {
 
     auto Surface = hsh::create_surface(Window.Connection, Window.Window);
     auto RenderTexture = hsh::create_render_texture2d(Surface);
-    auto DescriptorSetLayout = Device->createDescriptorSetLayoutUnique(MyDescriptorSetLayoutCreateInfo()).value;
-    hsh::detail::vulkan::Globals.SetDescriptorSetLayout(DescriptorSetLayout.get());
-    auto PipelineLayout = Device->createPipelineLayoutUnique(MyPipelineLayoutCreateInfo(DescriptorSetLayout.get())).value;
+    auto DescriptorSetLayout =
+        Device
+            ->createDescriptorSetLayoutUnique(MyDescriptorSetLayoutCreateInfo())
+            .value;
+    hsh::detail::vulkan::Globals.SetDescriptorSetLayout(
+        DescriptorSetLayout.get());
+    auto PipelineLayout =
+        Device
+            ->createPipelineLayoutUnique(
+                MyPipelineLayoutCreateInfo(DescriptorSetLayout.get()))
+            .value;
     hsh::detail::vulkan::Globals.PipelineLayout = PipelineLayout.get();
     hsh::detail::vulkan::DescriptorPoolChain DescriptorPoolChain;
     hsh::detail::vulkan::Globals.DescriptorPoolChain = &DescriptorPoolChain;
     hsh::detail::vulkan::Globals.Queue = Device->getQueue(QFIdx, 0);
-    auto CommandPool = Device->createCommandPoolUnique(MyCommandPoolCreateInfo(QFIdx)).value;
-    auto CommandBuffers = Device->allocateCommandBuffersUnique(MyCommandBufferAllocateInfo(CommandPool.get())).value;
+    auto CommandPool =
+        Device->createCommandPoolUnique(MyCommandPoolCreateInfo(QFIdx)).value;
+    auto CommandBuffers =
+        Device
+            ->allocateCommandBuffersUnique(
+                MyCommandBufferAllocateInfo(CommandPool.get()))
+            .value;
     hsh::detail::vulkan::Globals.CommandBuffers = &CommandBuffers;
     std::array<vk::UniqueFence, 2> CommandFences{
-      Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{})).value,
-      Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{})).value,
+        Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
+            .value,
+        Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
+            .value,
     };
     hsh::detail::vulkan::Globals.CommandFences = &CommandFences;
     auto ImageAcquireSem = Device->createSemaphoreUnique({}).value;
@@ -436,26 +461,31 @@ int main(int argc, char** argv) {
     auto RenderCompleteSem = Device->createSemaphoreUnique({}).value;
     hsh::detail::vulkan::Globals.RenderCompleteSem = RenderCompleteSem.get();
 
-    for (auto *Node = hsh::detail::GlobalListNode::Head; Node; Node = Node->Next)
-      Node->Funcs[hsh::ACTIVE_VULKAN_SPIRV].Create();
+    hsh::detail::GlobalListNode::CreateAll(hsh::ActiveTarget::VULKAN_SPIRV);
 
     MyNS::Binding PipelineBind;
 
     Connection.runloop([&]() {
-      //auto start = std::chrono::steady_clock::now();
+      // auto start = std::chrono::steady_clock::now();
       hsh::detail::vulkan::Globals.PreRender();
+
       if (!PipelineBind.Binding)
         PipelineBind = MyNS::BuildPipeline();
+
+      MyNS::UniformData UniData{};
+      UniData.xf[0][0] = 1.f;
+      UniData.xf[1][1] = 1.f;
+      UniData.xf[2][2] = 1.f;
+      UniData.xf[3][3] = 1.f;
+      PipelineBind.Uniform.load(UniData);
+
       Surface.acquireNextImage();
       RenderTexture.attach();
-      hsh::detail::vulkan::Globals.Cmd.clearAttachments(
-          vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
-                              vk::ClearValue(vk::ClearColorValue())),
-          vk::ClearRect(vk::Rect2D({}, {512, 512}), 0, 1));
+      hsh::clear_attachments();
       PipelineBind.Binding.draw(0, 3);
       RenderTexture.resolveSurface(Surface.get());
       hsh::detail::vulkan::Globals.PostRender();
-      //std::cerr << std::chrono::duration_cast<std::chrono::microseconds>(
+      // std::cerr << std::chrono::duration_cast<std::chrono::microseconds>(
       //    std::chrono::steady_clock::now() - start)
       //    .count() << std::endl;
       return true;
@@ -463,8 +493,7 @@ int main(int argc, char** argv) {
 
     Device->waitIdle();
 
-    for (auto *Node = hsh::detail::GlobalListNode::Head; Node; Node = Node->Next)
-      Node->Funcs[hsh::ACTIVE_VULKAN_SPIRV].Destroy();
+    hsh::detail::GlobalListNode::DestroyAll(hsh::ActiveTarget::VULKAN_SPIRV);
 
     break;
   }

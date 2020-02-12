@@ -16,7 +16,7 @@ union HSH_MULTI_TRAIT {
 #ifdef HSH_TRAIT_OWNER
   using Owner = HSH_TRAIT_OWNER;
   HSH_MULTI_TRAIT(const Owner &Owner) noexcept {
-     switch (ActiveTarget) {
+     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(Owner._##Enumeration); break;
 #include "targets.def"
     default:
@@ -28,8 +28,8 @@ union HSH_MULTI_TRAIT {
 #ifdef HSH_TRAIT_BINDING
   using Binding = HSH_TRAIT_BINDING;
   operator Binding() const noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return Binding(get_##Enumeration());
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return Binding(get_##Enumeration());
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -37,44 +37,44 @@ union HSH_MULTI_TRAIT {
     }
   }
 #endif
-#define HSH_ACTIVE_TARGET(Enumeration) TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS _##Enumeration;
+#define HSH_ACTIVE_TARGET(Enumeration) TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS _##Enumeration;
 #include "targets.def"
   template <typename... Parms>
   HSH_MULTI_TRAIT(Parms&&... p) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(std::forward<Parms>(p)...); break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(std::forward<Parms>(p)...); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
   ~HSH_MULTI_TRAIT() noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: std::destroy_at(&_##Enumeration); break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: std::destroy_at(&_##Enumeration); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
   HSH_MULTI_TRAIT(const HSH_MULTI_TRAIT &other) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(other._##Enumeration); break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(other._##Enumeration); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
   HSH_MULTI_TRAIT(HSH_MULTI_TRAIT &&other) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(std::move(other._##Enumeration)); break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: new (&_##Enumeration) decltype(_##Enumeration)(std::move(other._##Enumeration)); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
   HSH_MULTI_TRAIT &operator=(const HSH_MULTI_TRAIT &other) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration = other._##Enumeration; break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration = other._##Enumeration; break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -82,17 +82,17 @@ union HSH_MULTI_TRAIT {
     return *this;
   }
   HSH_MULTI_TRAIT &operator=(HSH_MULTI_TRAIT &&other) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration = std::move(other._##Enumeration); break;
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration = std::move(other._##Enumeration); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
     return *this;
   }
-  bool isValid() const noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return _##Enumeration.isValid();
+  bool IsValid() const noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.IsValid();
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -100,24 +100,24 @@ union HSH_MULTI_TRAIT {
     return false;
   }
 #define HSH_ACTIVE_TARGET(Enumeration) \
-operator TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; } \
-TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; } \
-operator const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; } \
-const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return _##Enumeration; }
+operator TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return _##Enumeration; } \
+TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return _##Enumeration; } \
+operator const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return _##Enumeration; } \
+const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return _##Enumeration; }
 #include "targets.def"
 #ifdef HSH_DYNAMIC_OWNER
-  void *map() noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return _##Enumeration.map();
+  void *Map() noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.Map();
 #include "targets.def"
     default:
       assert(false && "unhandled case");
       return nullptr;
     }
   }
-  void unmap() noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.unmap(); break;
+  void Unmap() noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Unmap(); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -125,51 +125,51 @@ const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##
   }
 #endif
 #ifdef HSH_RENDER_TEXTURE_OWNER
-  RenderTextureBinding getColor(uint32_t idx) const noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return _##Enumeration.getColor(idx);
+  RenderTextureBinding GetColor(uint32_t idx) const noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.GetColor(idx);
 #include "targets.def"
     default:
       assert(false && "unhandled case");
       return {};
     }
   }
-  RenderTextureBinding getDepth(uint32_t idx) const noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return _##Enumeration.getDepth(idx);
+  RenderTextureBinding GetDepth(uint32_t idx) const noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.GetDepth(idx);
 #include "targets.def"
     default:
       assert(false && "unhandled case");
       return {};
     }
   }
-  void attach() noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.attach(); break;
+  void Attach() noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Attach(); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
-  void resolveSurface(SurfaceBinding surf, bool reattach) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.resolveSurface(surf, reattach); break;
+  void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.ResolveSurface(surf, reattach); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
-  void resolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.resolveColorBinding(idx, region, reattach); break;
+  void ResolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.ResolveColorBinding(idx, region, reattach); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
     }
   }
-  void resolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.resolveDepthBinding(idx, region, reattach); break;
+  void ResolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.ResolveDepthBinding(idx, region, reattach); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -177,9 +177,9 @@ const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##
   }
 #endif
 #ifdef HSH_SURFACE_OWNER
-  bool acquireNextImage() noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: return _##Enumeration.acquireNextImage();
+  bool AcquireNextImage() noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.AcquireNextImage();
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -188,9 +188,9 @@ const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##
   }
 #endif
 #ifdef HSH_PIPELINE_BINDING
-  void draw(uint32_t start, uint32_t count) noexcept {
-    switch (ActiveTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Enumeration: _##Enumeration.draw(start, count); break;
+  void Draw(uint32_t start, uint32_t count) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Draw(start, count); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -224,32 +224,32 @@ operator TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { r
 TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { return _##Enumeration; } \
 operator const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { return _##Enumeration; } \
 const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { return _##Enumeration; } \
-bool isValid() const noexcept { return _##Enumeration.isValid(); }
+bool IsValid() const noexcept { return _##Enumeration.IsValid(); }
 #include "targets.def"
 #ifdef HSH_DYNAMIC_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
-void *map() noexcept { return _##Enumeration.map(); } \
-void unmap() noexcept { _##Enumeration.unmap(); }
+void *Map() noexcept { return _##Enumeration.Map(); } \
+void Unmap() noexcept { _##Enumeration.Unmap(); }
 #include "targets.def"
 #endif
 #ifdef HSH_RENDER_TEXTURE_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
-RenderTextureBinding getColor(uint32_t idx) const noexcept { return _##Enumeration.getColor(idx); } \
-RenderTextureBinding getDepth(uint32_t idx) const noexcept { return _##Enumeration.getDepth(idx); } \
-void attach() noexcept { _##Enumeration.attach(); } \
-void resolveSurface(SurfaceBinding surf, bool reattach) noexcept { _##Enumeration.resolveSurface(surf, reattach); } \
-void resolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.resolveColorBinding(idx, region, reattach); } \
-void resolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.resolveDepthBinding(idx, region, reattach); }
+RenderTextureBinding GetColor(uint32_t idx) const noexcept { return _##Enumeration.GetColor(idx); } \
+RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return _##Enumeration.GetDepth(idx); } \
+void Attach() noexcept { _##Enumeration.Attach(); } \
+void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept { _##Enumeration.ResolveSurface(surf, reattach); } \
+void ResolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.ResolveColorBinding(idx, region, reattach); } \
+void ResolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.ResolveDepthBinding(idx, region, reattach); }
 #include "targets.def"
 #endif
 #ifdef HSH_SURFACE_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
-bool acquireNextImage() noexcept { return _##Enumeration.acquireNextImage(); }
+bool AcquireNextImage() noexcept { return _##Enumeration.AcquireNextImage(); }
 #include "targets.def"
 #endif
 #ifdef HSH_PIPELINE_BINDING
 #define HSH_ACTIVE_TARGET(Enumeration) \
-void draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.draw(start, count); }
+void Draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.Draw(start, count); }
 #include "targets.def"
 #endif
   };

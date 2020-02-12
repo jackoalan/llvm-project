@@ -18,23 +18,23 @@ struct HSH_MULTI_TRAIT {
 #ifdef HSH_TRAIT_BINDING
   using Binding = HSH_TRAIT_BINDING;
   operator Binding() const noexcept {
-#define HSH_ACTIVE_TARGET(Enumeration) assert(ActiveTarget == Enumeration && "bad cast"); return Binding(get_##Enumeration());
+#define HSH_ACTIVE_TARGET(Enumeration) assert(CurrentTarget == Target::Enumeration && "bad cast"); return Binding(get_##Enumeration());
 #include "targets.def"
   }
 #endif
-#define HSH_ACTIVE_TARGET(Enumeration) static_assert(std::is_trivially_copyable_v<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits<" #Enumeration ">::" HSH_XSTR(HSH_MULTI_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable");
+#define HSH_ACTIVE_TARGET(Enumeration) static_assert(std::is_trivially_copyable_v<TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits<" #Enumeration ">::" HSH_XSTR(HSH_MULTI_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable");
 #include "targets.def"
   std::aligned_union_t<0
-#define HSH_ACTIVE_TARGET(Enumeration) , TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
+#define HSH_ACTIVE_TARGET(Enumeration) , TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
 #include "targets.def"
     > _Storage;
 HSH_MULTI_TRAIT() noexcept : _Storage{} {}
 #define HSH_ACTIVE_TARGET(Enumeration) \
-HSH_MULTI_TRAIT(const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &Obj) noexcept { new (std::addressof(_Storage)) TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS(Obj); } \
-operator TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
-TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
-operator const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
-const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { assert(ActiveTarget == Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+HSH_MULTI_TRAIT(const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &Obj) noexcept { new (std::addressof(_Storage)) TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS(Obj); } \
+operator TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return *reinterpret_cast<TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+operator const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
+const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { assert(CurrentTarget == Target::Enumeration && "bad cast"); return *reinterpret_cast<const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
 bool isValid() const noexcept { return get_##Enumeration().isValid(); }
 #include "targets.def"
 };
@@ -63,7 +63,7 @@ operator TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { r
 TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { return *reinterpret_cast<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
 operator const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { return *reinterpret_cast<const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
 const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { return *reinterpret_cast<const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
-bool isValid() const noexcept { return get_##Enumeration().isValid(); }
+bool IsValid() const noexcept { return get_##Enumeration().IsValid(); }
 #include "targets.def"
   };
 #undef HSH_SINGLE_TRAIT

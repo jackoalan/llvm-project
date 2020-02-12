@@ -182,23 +182,13 @@ private:
 #define HSH_ENABLE_VULKAN 1
 
 #if HSH_ENABLE_VULKAN
-inline void hshVkAssert(const char *pred) noexcept {
-  std::cerr << pred << " failed\n";
-  std::abort();
-}
 #define VK_NO_PROTOTYPES
 #define VULKAN_HPP_NO_EXCEPTIONS
 #define VK_USE_PLATFORM_XCB_KHR
-#define VULKAN_HPP_ASSERT(pred)                                                \
-  if (!(pred))                                                                 \
-  hshVkAssert(#pred)
 #include <vulkan/vulkan.hpp>
 
 #define VMA_USE_STL_CONTAINERS 1
 #define VMA_USE_STL_SHARED_MUTEX 1
-#define VMA_ASSERT(pred)                                                       \
-  if (!(pred))                                                                 \
-  hshVkAssert(#pred)
 #include "vk_mem_alloc_hsh.h"
 
 namespace hsh {
@@ -206,6 +196,7 @@ struct Offset2D {
   int32_t x, y;
   constexpr Offset2D(int32_t x, int32_t y) noexcept : x(x), y(y) {}
 #if HSH_ENABLE_VULKAN
+  constexpr Offset2D(vk::Offset2D off) noexcept : x(off.x), y(off.y) {}
   operator vk::Offset2D() const noexcept { return vk::Offset2D(x, y); }
 #endif
 };
@@ -213,6 +204,7 @@ struct Extent2D {
   uint32_t w, h;
   constexpr Extent2D(uint32_t w, uint32_t h) noexcept : w(w), h(h) {}
 #if HSH_ENABLE_VULKAN
+  constexpr Extent2D(vk::Extent2D ext) noexcept : w(ext.width), h(ext.height) {}
   operator vk::Extent2D() const noexcept { return vk::Extent2D(w, h); }
 #endif
 };
@@ -222,6 +214,8 @@ struct Rect2D {
   constexpr Rect2D(Offset2D offset, Extent2D extent) noexcept
       : offset(offset), extent(extent) {}
 #if HSH_ENABLE_VULKAN
+  constexpr Rect2D(vk::Rect2D rect) noexcept
+      : offset(rect.offset), extent(rect.extent) {}
   operator vk::Rect2D() const noexcept { return vk::Rect2D(offset, extent); }
 #endif
 };
@@ -244,6 +238,18 @@ public:
   inline ObjectDestroy(
       Device owner, Optional<const AllocationCallbacks> allocationCallbacks,
       VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT;
+
+protected:
+  template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT;
+};
+template <>
+struct ObjectDestroy<VmaAllocator, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
+public:
+  ObjectDestroy() noexcept = default;
+  inline ObjectDestroy(VmaAllocator allocator,
+                       Optional<const AllocationCallbacks> allocationCallbacks,
+                       VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch)
+      VULKAN_HPP_NOEXCEPT;
 
 protected:
   template <typename T> void destroy(T t) VULKAN_HPP_NOEXCEPT;
@@ -277,9 +283,9 @@ public:
     return *this;
   }
   inline ~BufferAllocation() noexcept;
-  vk::Buffer getBuffer() const noexcept { return Buffer; }
-  operator vk::Buffer() const noexcept { return getBuffer(); }
-  bool isValid() const noexcept { return Buffer.operator bool(); }
+  vk::Buffer GetBuffer() const noexcept { return Buffer; }
+  operator vk::Buffer() const noexcept { return GetBuffer(); }
+  bool IsValid() const noexcept { return Buffer.operator bool(); }
 };
 
 class DynamicBufferBinding {
@@ -291,9 +297,9 @@ class DynamicBufferBinding {
 
 public:
   DynamicBufferBinding() noexcept = default;
-  vk::Buffer getBuffer() const noexcept { return Buffer; }
-  vk::DeviceSize getSecondOffset() const noexcept { return SecondOffset; }
-  bool isValid() const noexcept { return Buffer.operator bool(); }
+  vk::Buffer GetBuffer() const noexcept { return Buffer; }
+  vk::DeviceSize GetSecondOffset() const noexcept { return SecondOffset; }
+  bool IsValid() const noexcept { return Buffer.operator bool(); }
 };
 
 class DynamicBufferAllocation : public BufferAllocation {
@@ -310,18 +316,18 @@ class DynamicBufferAllocation : public BufferAllocation {
 
 public:
   DynamicBufferAllocation() noexcept = default;
-  DynamicBufferBinding getBinding() const noexcept {
+  DynamicBufferBinding GetBinding() const noexcept {
     return DynamicBufferBinding(Buffer, SecondOffset);
   }
-  operator DynamicBufferBinding() const noexcept { return getBinding(); }
-  inline vk::DeviceSize getOffset() const noexcept;
-  vk::DescriptorBufferInfo getDescriptorBufferInfo() const noexcept {
+  operator DynamicBufferBinding() const noexcept { return GetBinding(); }
+  inline vk::DeviceSize GetOffset() const noexcept;
+  vk::DescriptorBufferInfo GetDescriptorBufferInfo() const noexcept {
     return {Buffer, 0, SecondOffset};
   }
-  void *map() noexcept {
-    return reinterpret_cast<uint8_t *>(MappedData) + getOffset();
+  void *Map() noexcept {
+    return reinterpret_cast<uint8_t *>(MappedData) + GetOffset();
   }
-  inline void unmap() noexcept;
+  inline void Unmap() noexcept;
 };
 
 class UploadBufferAllocation : public BufferAllocation {
@@ -334,7 +340,7 @@ class UploadBufferAllocation : public BufferAllocation {
       : BufferAllocation(Buffer, Allocation), MappedData(MappedData) {}
 
 public:
-  void *getMappedData() const noexcept { return MappedData; }
+  void *GetMappedData() const noexcept { return MappedData; }
 };
 
 struct TextureAllocation {
@@ -482,6 +488,7 @@ public:
   }
   inline void Attach() noexcept;
   RenderTextureAllocation *GetNext() const noexcept { return Next; }
+  Extent2D GetExtent() const noexcept { return Extent; }
 };
 
 class DeletedBufferAllocation {
@@ -613,6 +620,7 @@ struct VulkanGlobals {
   vk::PhysicalDevice PhysDevice;
   vk::Device Device;
   vk::VmaAllocator Allocator;
+  vk::VmaPool UploadPool;
   std::array<vk::DescriptorSetLayout, 64> DescriptorSetLayout;
   vk::PipelineLayout PipelineLayout;
   struct DescriptorPoolChain *DescriptorPoolChain = nullptr;
@@ -733,15 +741,14 @@ bool SurfaceAllocation::PreRender() noexcept {
             break;
           }
         }
-        VULKAN_HPP_ASSERT(UseFormat.format != vk::Format::eUndefined);
+        assert(UseFormat.format != vk::Format::eUndefined);
         setImageFormat(UseFormat.format)
             .setImageColorSpace(UseFormat.colorSpace);
         setImageExtent(SC.currentExtent);
         setImageArrayLayers(1);
         constexpr auto WantedUsage = vk::ImageUsageFlagBits::eTransferDst |
                                      vk::ImageUsageFlagBits::eColorAttachment;
-        VULKAN_HPP_ASSERT((SC.supportedUsageFlags & WantedUsage) ==
-                          WantedUsage);
+        assert((SC.supportedUsageFlags & WantedUsage) == WantedUsage);
         setImageUsage(WantedUsage);
         setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
         setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque);
@@ -758,8 +765,8 @@ bool SurfaceAllocation::PreRender() noexcept {
                                Swapchain.get());
     SwapchainImages = Globals.Device.getSwapchainImagesKHR(*Swapchain).value;
     Extent = Capabilities.currentExtent;
-    VULKAN_HPP_ASSERT((!Next || ColorFormat == Next->ColorFormat) &&
-                      "Subsequent surfaces must have the same color format");
+    assert((!Next || ColorFormat == Next->ColorFormat) &&
+           "Subsequent surfaces must have the same color format");
     return true;
   }
   return false;
@@ -908,12 +915,12 @@ RenderTextureAllocation::RenderTextureAllocation(
   Prepare();
 }
 
-vk::DeviceSize DynamicBufferAllocation::getOffset() const noexcept {
+vk::DeviceSize DynamicBufferAllocation::GetOffset() const noexcept {
   return SecondOffset & Globals.DynamicBufferMask;
 }
 
-void DynamicBufferAllocation::unmap() noexcept {
-  vmaFlushAllocation(Globals.Allocator, Allocation, getOffset(), SecondOffset);
+void DynamicBufferAllocation::Unmap() noexcept {
+  vmaFlushAllocation(Globals.Allocator, Allocation, GetOffset(), SecondOffset);
 }
 } // namespace hsh::detail::vulkan
 
@@ -943,18 +950,31 @@ void ObjectDestroy<Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::destroy(T t)
   ::hsh::detail::vulkan::Globals.Device.destroy(t, {},
                                                 VULKAN_HPP_DEFAULT_DISPATCHER);
 }
+
+ObjectDestroy<VmaAllocator, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::ObjectDestroy(
+    VmaAllocator owner, Optional<const AllocationCallbacks> allocationCallbacks,
+    VULKAN_HPP_DEFAULT_DISPATCHER_TYPE const &dispatch) VULKAN_HPP_NOEXCEPT {
+  assert(owner == ::hsh::detail::vulkan::Globals.Allocator);
+}
+
+template <typename T>
+void ObjectDestroy<VmaAllocator, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>::destroy(
+    T t) VULKAN_HPP_NOEXCEPT {
+  ::hsh::detail::vulkan::Globals.Allocator.destroy(
+      t, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
+}
 } // namespace VULKAN_HPP_NAMESPACE
 
 namespace hsh {
-enum Target : std::uint8_t {
+enum class Target : std::uint8_t {
 #define HSH_TARGET(Enumeration, Active) Enumeration,
 #include "targets.def"
-  TARGET_MAX
+  MAX
 };
-enum ActiveTarget : std::uint8_t {
-#define HSH_ACTIVE_TARGET(Enumeration) ACTIVE_##Enumeration,
+enum class ActiveTarget : std::uint8_t {
+#define HSH_ACTIVE_TARGET(Enumeration) Enumeration,
 #include "targets.def"
-  ACTIVE_TARGET_MAX
+  MAX
 };
 struct uniform_buffer_typeless;
 struct dynamic_uniform_buffer_typeless;
@@ -1022,7 +1042,7 @@ struct DescriptorPoolChain {
       std::array<vk::DescriptorSet, 64> DescriptorSets;
       UniqueDescriptorSet allocate(struct DescriptorPool &pool, uint64_t &bmp,
                                    std::size_t Index) noexcept {
-        VULKAN_HPP_ASSERT(bmp != UINT64_MAX && "descriptor bucket full");
+        assert(bmp != UINT64_MAX && "descriptor bucket full");
         if (!DescriptorSets[0]) {
           struct DescriptorSetAllocateInfo
               : public vk::DescriptorSetAllocateInfo {
@@ -1033,7 +1053,7 @@ struct DescriptorPoolChain {
           } AllocateInfo(pool.Pool.get());
           auto Result = Globals.Device.allocateDescriptorSets(
               &AllocateInfo, DescriptorSets.data());
-          VULKAN_HPP_ASSERT(Result == vk::Result::eSuccess);
+          assert(Result == vk::Result::eSuccess);
         }
         for (unsigned i = 0; i < 64; ++i) {
           if ((bmp & (1u << i)) == 0) {
@@ -1046,8 +1066,7 @@ struct DescriptorPoolChain {
     };
     std::array<DescriptorBucket, MaxDescriptorPoolSets / 64> Buckets;
     UniqueDescriptorSet allocate(std::size_t Index) noexcept {
-      VULKAN_HPP_ASSERT(AllocatedSets < MaxDescriptorPoolSets &&
-                        "descriptor pool full");
+      assert(AllocatedSets < MaxDescriptorPoolSets && "descriptor pool full");
       auto BucketsIt = Buckets.begin();
       for (uint64_t &bmp : Bitmap) {
         if (bmp != UINT64_MAX) {
@@ -1062,10 +1081,8 @@ struct DescriptorPoolChain {
     void free(std::size_t Index) noexcept {
       auto BucketIdx = Index / 64;
       auto BucketRem = Index % 64;
-      VULKAN_HPP_ASSERT(AllocatedSets &&
-                        "freed too many descriptor sets from pool");
-      VULKAN_HPP_ASSERT(Bitmap[BucketIdx] & (1ull << BucketRem) &&
-                        "double free");
+      assert(AllocatedSets && "freed too many descriptor sets from pool");
+      assert(Bitmap[BucketIdx] & (1ull << BucketRem) && "double free");
       Bitmap[BucketIdx] &= ~(1ull << BucketRem);
       --AllocatedSets;
     }
@@ -1126,6 +1143,17 @@ vmaCreateDoubleBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
       pBuffer, pAllocation, pAllocationInfo, secondOffset);
 }
 
+inline VkResult vmaFindMemoryTypeIndexForBufferInfo(
+    const VkBufferCreateInfo &pBufferCreateInfo,
+    const VmaAllocationCreateInfo &pAllocationCreateInfo,
+    uint32_t *pMemoryTypeIndex) noexcept {
+  return ::vmaFindMemoryTypeIndexForBufferInfo(
+      Globals.Allocator,
+      reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
+      reinterpret_cast<const VmaAllocationCreateInfo *>(&pAllocationCreateInfo),
+      pMemoryTypeIndex);
+}
+
 #if HSH_SOURCE_LOCATION_ENABLED
 class VmaLocationStrSetter {
   std::string LocationStr;
@@ -1175,7 +1203,7 @@ AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
   VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result = vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
                                 CreateInfo, &Buffer, &Allocation, nullptr);
-  VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
+  assert(Result == VK_SUCCESS);
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return BufferAllocation(Buffer, Allocation);
 }
@@ -1202,34 +1230,49 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
   auto Result =
       vmaCreateDoubleBuffer(vk::BufferCreateInfo({}, size, usage), CreateInfo,
                             &Buffer, &Allocation, &AllocInfo, &SecondOffset);
-  VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
+  assert(Result == VK_SUCCESS);
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return DynamicBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
                                  SecondOffset);
 }
 
+struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+  constexpr UploadBufferAllocationCreateInfo(VmaPool pool = {}) noexcept
+      : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                VMA_MEMORY_USAGE_CPU_ONLY,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                0,
+                                0,
+                                pool,
+                                nullptr} {}
+};
+
+inline vk::UniqueVmaPool CreateUploadPool() noexcept {
+  struct UploadPoolCreateInfo : VmaPoolCreateInfo {
+    constexpr UploadPoolCreateInfo() noexcept
+        : VmaPoolCreateInfo{0, 0, 64ull * 1024 * 1024, 0, 0, 0} {}
+  };
+  UploadPoolCreateInfo CreateInfo;
+  auto Result = vmaFindMemoryTypeIndexForBufferInfo(
+      vk::BufferCreateInfo({}, 32ull * 1024 * 1024,
+                           vk::BufferUsageFlagBits::eTransferSrc),
+      UploadBufferAllocationCreateInfo(), &CreateInfo.memoryTypeIndex);
+  assert(Result == VK_SUCCESS);
+  return Globals.Allocator.createVmaPoolUnique(CreateInfo).value;
+}
+
 inline UploadBufferAllocation
 AllocateUploadBuffer(const SourceLocation &location,
                      vk::DeviceSize size) noexcept {
-  struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
-    constexpr UploadBufferAllocationCreateInfo() noexcept
-        : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                                  VMA_MEMORY_USAGE_CPU_ONLY,
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                  0,
-                                  0,
-                                  VK_NULL_HANDLE,
-                                  nullptr} {}
-  };
   VkBuffer Buffer;
   VmaAllocation Allocation;
   VmaAllocationInfo AllocInfo;
-  UploadBufferAllocationCreateInfo CreateInfo;
+  UploadBufferAllocationCreateInfo CreateInfo(Globals.UploadPool);
   VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result = vmaCreateBuffer(
       vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
       CreateInfo, &Buffer, &Allocation, &AllocInfo);
-  VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
+  assert(Result == VK_SUCCESS);
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
 }
@@ -1256,7 +1299,7 @@ inline TextureAllocation AllocateTexture(const SourceLocation &location,
       vmaCreateImage(Globals.Allocator,
                      reinterpret_cast<const VkImageCreateInfo *>(&CreateInfo),
                      &AllocationCreateInfo, &Image, &Allocation, nullptr);
-  VULKAN_HPP_ASSERT(Result == VK_SUCCESS);
+  assert(Result == VK_SUCCESS);
   Globals.SetDebugObjectName(LocationStr, vk::Image(Image));
   return TextureAllocation(Image, Allocation);
 }
@@ -1528,29 +1571,6 @@ void RenderTextureAllocation::Attach() noexcept {
 } // namespace hsh::detail::vulkan
 #endif
 
-#if 0
-class LogPrinter {
-public:
-  std::ostream &Out = std::cerr;
-#if HSH_ENABLE_LOG
-  template <typename T>
-  LogPrinter &operator<<(const T &Obj) {
-    Out << Obj;
-    return *this;
-  }
-#else
-  template <typename T> LogPrinter &operator<<(const T &Obj) {
-    return *this;
-  }
-#endif
-};
-
-LogPrinter &logger() {
-  static LogPrinter LP;
-  return LP;
-}
-#endif
-
 namespace hsh {
 namespace detail {
 template <typename T> struct ClassWrapper {};
@@ -1564,10 +1584,10 @@ constexpr unsigned NumStaticallyActiveTargets = 0
 static_assert(NumStaticallyActiveTargets != 0,
               "No hsh targets are statically active");
 constexpr enum Target FirstStaticallyActiveTarget() noexcept {
-#define HSH_ACTIVE_TARGET(Enumeration) return Enumeration;
+#define HSH_ACTIVE_TARGET(Enumeration) return Target::Enumeration;
 #include "targets.def"
 }
-inline enum Target ActiveTarget = FirstStaticallyActiveTarget();
+inline enum Target CurrentTarget = FirstStaticallyActiveTarget();
 
 template <Target T> struct TargetTraits {
   struct UniformBufferOwner {};
@@ -1588,13 +1608,13 @@ template <Target T> struct TargetTraits {
   template <typename ResTp> struct ResourceFactory {};
 };
 #if HSH_ENABLE_VULKAN
-template <> struct TargetTraits<VULKAN_SPIRV> {
+template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   struct BufferWrapper {
     vk::Buffer Buffer;
     BufferWrapper() noexcept = default;
     BufferWrapper(const vulkan::BufferAllocation &Alloc) noexcept
-        : Buffer(Alloc.getBuffer()) {}
-    bool isValid() const noexcept { return Buffer.operator bool(); }
+        : Buffer(Alloc.GetBuffer()) {}
+    bool IsValid() const noexcept { return Buffer.operator bool(); }
     operator vk::Buffer() const noexcept { return Buffer; }
   };
   using UniformBufferOwner = vulkan::BufferAllocation;
@@ -1609,7 +1629,7 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
     vk::ImageView ImageView;
     std::uint8_t NumMips : 7;
     std::uint8_t Integer : 1;
-    bool isValid() const noexcept { return ImageView.operator bool(); }
+    bool IsValid() const noexcept { return ImageView.operator bool(); }
   };
   struct TextureOwner {
     vulkan::TextureAllocation Allocation;
@@ -1622,12 +1642,12 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
     TextureOwner(TextureOwner &&other) noexcept = default;
     TextureOwner &operator=(TextureOwner &&other) noexcept = default;
 
-    bool isValid() const noexcept { return ImageView.operator bool(); }
+    bool IsValid() const noexcept { return ImageView.operator bool(); }
 
-    TextureBinding getBinding() const noexcept {
+    TextureBinding GetBinding() const noexcept {
       return TextureBinding{ImageView.get(), NumMips, Integer};
     }
-    operator TextureBinding() const noexcept { return getBinding(); }
+    operator TextureBinding() const noexcept { return GetBinding(); }
   };
   struct RenderTextureBinding {
     vulkan::RenderTextureAllocation *Allocation = nullptr;
@@ -1638,9 +1658,9 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
                          uint32_t BindingIdx, uint32_t IsDepth) noexcept
         : Allocation(Allocation), BindingIdx(BindingIdx), IsDepth(IsDepth) {}
 
-    bool isValid() const noexcept { return Allocation != nullptr; }
+    bool IsValid() const noexcept { return Allocation != nullptr; }
 
-    vk::ImageView getImageView() const noexcept {
+    vk::ImageView GetImageView() const noexcept {
       if (IsDepth)
         return Allocation->GetDepthBindingView(BindingIdx);
       else
@@ -1649,51 +1669,53 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
   };
   struct SurfaceBinding {
     vulkan::SurfaceAllocation *Allocation = nullptr;
-    bool isValid() const noexcept { return Allocation != nullptr; }
+    bool IsValid() const noexcept { return Allocation != nullptr; }
   };
   struct RenderTextureOwner {
     std::unique_ptr<vulkan::RenderTextureAllocation> Allocation;
+    RenderTextureOwner() = default;
     RenderTextureOwner(const RenderTextureOwner &other) = delete;
     RenderTextureOwner &operator=(const RenderTextureOwner &other) = delete;
     RenderTextureOwner(RenderTextureOwner &&other) noexcept = default;
     RenderTextureOwner &
     operator=(RenderTextureOwner &&other) noexcept = default;
 
-    bool isValid() const noexcept { return Allocation.operator bool(); }
+    bool IsValid() const noexcept { return Allocation.operator bool(); }
 
-    RenderTextureBinding getColor(uint32_t idx) const noexcept {
+    RenderTextureBinding GetColor(uint32_t idx) const noexcept {
       return {Allocation.get(), idx, false};
     }
-    RenderTextureBinding getDepth(uint32_t idx) const noexcept {
+    RenderTextureBinding GetDepth(uint32_t idx) const noexcept {
       return {Allocation.get(), idx, true};
     }
-    void attach() noexcept { return Allocation->Attach(); }
-    void resolveSurface(SurfaceBinding surface, bool reattach) noexcept {
+    void Attach() noexcept { return Allocation->Attach(); }
+    void ResolveSurface(SurfaceBinding surface, bool reattach) noexcept {
       Allocation->ResolveSurface(surface.Allocation, reattach);
     }
-    void resolveColorBinding(uint32_t idx, Rect2D region,
+    void ResolveColorBinding(uint32_t idx, Rect2D region,
                              bool reattach) noexcept {
       Allocation->ResolveColorBinding(idx, region, reattach);
     }
-    void resolveDepthBinding(uint32_t idx, Rect2D region,
+    void ResolveDepthBinding(uint32_t idx, Rect2D region,
                              bool reattach) noexcept {
       Allocation->ResolveDepthBinding(idx, region, reattach);
     }
   };
   struct SurfaceOwner {
     std::unique_ptr<vulkan::SurfaceAllocation> Allocation;
+    SurfaceOwner() = default;
     SurfaceOwner(const SurfaceOwner &other) = delete;
     SurfaceOwner &operator=(const SurfaceOwner &other) = delete;
     SurfaceOwner(SurfaceOwner &&other) noexcept = default;
     SurfaceOwner &operator=(SurfaceOwner &&other) noexcept = default;
 
-    bool isValid() const noexcept { return Allocation.operator bool(); }
+    bool IsValid() const noexcept { return Allocation.operator bool(); }
 
-    SurfaceBinding getBinding() const noexcept {
+    SurfaceBinding GetBinding() const noexcept {
       return SurfaceBinding{Allocation.get()};
     }
-    operator SurfaceBinding() const noexcept { return getBinding(); }
-    bool acquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
+    operator SurfaceBinding() const noexcept { return GetBinding(); }
+    bool AcquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
   };
   struct PipelineBinding {
     vk::Pipeline Pipeline;
@@ -1725,30 +1747,30 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
             VertexOffsetIt(Binding.VertexOffsets.begin()),
             RenderTextureIt(Binding.RenderTextures.begin()) {}
 
-      inline void add(uniform_buffer_typeless uniform) noexcept;
-      inline void add(dynamic_uniform_buffer_typeless uniform) noexcept;
-      inline void add(vertex_buffer_typeless uniform) noexcept;
-      inline void add(dynamic_vertex_buffer_typeless uniform) noexcept;
-      inline void add(texture_typeless texture) noexcept;
-      inline void add(render_texture2d texture) noexcept;
-      static inline void add(SamplerBinding sampler) noexcept;
+      inline void Add(uniform_buffer_typeless uniform) noexcept;
+      inline void Add(dynamic_uniform_buffer_typeless uniform) noexcept;
+      inline void Add(vertex_buffer_typeless uniform) noexcept;
+      inline void Add(dynamic_vertex_buffer_typeless uniform) noexcept;
+      inline void Add(texture_typeless texture) noexcept;
+      inline void Add(render_texture2d texture) noexcept;
+      static inline void Add(SamplerBinding sampler) noexcept;
     };
 
-    bool isValid() const noexcept { return Pipeline.operator bool(); }
+    bool IsValid() const noexcept { return Pipeline.operator bool(); }
 
     PipelineBinding() noexcept = default;
 
     template <typename Impl, typename... Args>
     explicit PipelineBinding(ClassWrapper<Impl>, Args... args) noexcept;
 
-    void updateRenderTextures() noexcept {
+    void UpdateRenderTextures() noexcept {
       std::array<vk::DescriptorImageInfo, MaxImages> ImageInfos;
       std::array<vk::WriteDescriptorSet, MaxImages> Writes;
       uint32_t WriteCur = 0;
       for (auto &RT : RenderTextures) {
         if (!RT.RenderTextureBinding.Allocation)
           break;
-        auto ImageView = RT.RenderTextureBinding.getImageView();
+        auto ImageView = RT.RenderTextureBinding.GetImageView();
         if (ImageView != RT.KnownImageView) {
           Writes[WriteCur] = vk::WriteDescriptorSet(
               DescriptorSet.Set, RT.DescriptorBindingIdx, 0, 1,
@@ -1762,12 +1784,12 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
                                                   nullptr);
     }
 
-    void bind() noexcept {
+    void Bind() noexcept {
       for (auto &RT : RenderTextures) {
         if (!RT.RenderTextureBinding.Allocation)
           break;
-        if (RT.RenderTextureBinding.getImageView() != RT.KnownImageView) {
-          updateRenderTextures();
+        if (RT.RenderTextureBinding.GetImageView() != RT.KnownImageView) {
+          UpdateRenderTextures();
           break;
         }
       }
@@ -1790,11 +1812,36 @@ template <> struct TargetTraits<VULKAN_SPIRV> {
       }
     }
 
-    void draw(uint32_t start, uint32_t count) noexcept {
-      bind();
+    void Draw(uint32_t start, uint32_t count) noexcept {
+      Bind();
       vulkan::Globals.Cmd.draw(count, 1, start, 0);
     }
   };
+
+  static void ClearAttachments(bool color, bool depth) noexcept {
+    assert(vulkan::Globals.AttachedRenderTexture != nullptr);
+    vk::ClearRect Rect(vk::Rect2D({}, hsh::detail::vulkan::Globals
+                                          .AttachedRenderTexture->GetExtent()),
+                       0, 1);
+    if (color && depth) {
+      vulkan::Globals.Cmd.clearAttachments(
+          {vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
+                               vk::ClearValue(vk::ClearColorValue())),
+           vk::ClearAttachment(vk::ImageAspectFlagBits::eDepth, 0,
+                               vk::ClearValue(vk::ClearDepthStencilValue()))},
+          Rect);
+    } else if (color) {
+      vulkan::Globals.Cmd.clearAttachments(
+          vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
+                              vk::ClearValue(vk::ClearColorValue())),
+          Rect);
+    } else if (depth) {
+      vulkan::Globals.Cmd.clearAttachments(
+          vk::ClearAttachment(vk::ImageAspectFlagBits::eDepth, 0,
+                              vk::ClearValue(vk::ClearDepthStencilValue())),
+          Rect);
+    }
+  }
 
   template <typename ResTp> struct ResourceFactory {};
 };
@@ -1871,9 +1918,9 @@ template <unsigned NSTs> struct SelectTargetTraits {
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
   CreateResource(const SourceLocation &location, Args... args) {
-    switch (detail::ActiveTarget) {
+    switch (detail::CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  case Enumeration:                                                            \
+  case Target::Enumeration:                                                    \
     return decltype(ResourceFactory<T>::_##Enumeration)::Create(location,      \
                                                                 args...);
 #include "targets.def"
@@ -1881,6 +1928,17 @@ template <unsigned NSTs> struct SelectTargetTraits {
       assert(false && "unhandled case");
     }
     return {};
+  }
+
+  static void ClearAttachments(bool color, bool depth) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    TargetTraits<Target::Enumeration>::ClearAttachments(color, depth);
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
   }
 };
 template <> struct SelectTargetTraits<1> {
@@ -1960,6 +2018,10 @@ template <> struct SelectTargetTraits<1> {
   return decltype(ResourceFactory<T>::_##Enumeration)::Create(location,        \
                                                               args...);
 #include "targets.def"
+  }
+
+  static void ClearAttachments(bool color, bool depth) noexcept {
+    TargetTraits::ClearAttachments(color, depth);
   }
 };
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
@@ -2148,8 +2210,8 @@ struct float4 {
   float4 operator/(float other) noexcept {
     return float4{x / other, y / other, z / other, w / other};
   }
-  float &operator[](std::size_t idx) noexcept { return (&x)[0]; }
-  const float &operator[](std::size_t idx) const noexcept { return (&x)[0]; }
+  float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
+  const float &operator[](std::size_t idx) const noexcept { return (&x)[idx]; }
   constexpr float3 xyz() const noexcept;
   constexpr float2 xy() const noexcept;
   constexpr float2 xz() const noexcept;
@@ -2191,8 +2253,8 @@ struct float3 {
     z += other.z;
     return *this;
   }
-  float &operator[](std::size_t idx) noexcept { return (&x)[0]; }
-  const float &operator[](std::size_t idx) const noexcept { return (&x)[0]; }
+  float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
+  const float &operator[](std::size_t idx) const noexcept { return (&x)[idx]; }
 };
 constexpr float3 float4::xyz() const noexcept { return float3{x, y, z}; }
 struct float2 {
@@ -3191,7 +3253,7 @@ HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
   }
 }
 
-template <> struct ShaderCode<VULKAN_SPIRV> {
+template <> struct ShaderCode<Target::VULKAN_SPIRV> {
   enum Stage Stage = Stage::Vertex;
   ShaderDataBlob<uint32_t> Blob;
   constexpr ShaderCode() noexcept = default;
@@ -3199,7 +3261,7 @@ template <> struct ShaderCode<VULKAN_SPIRV> {
       : Stage(Stage), Blob(Blob) {}
 };
 
-template <> struct ShaderObject<VULKAN_SPIRV> {
+template <> struct ShaderObject<Target::VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
   ShaderObject() noexcept = default;
   vk::ShaderModule Get(const vk::ShaderModuleCreateInfo &Info) noexcept {
@@ -3211,7 +3273,7 @@ template <> struct ShaderObject<VULKAN_SPIRV> {
   void Destroy() noexcept { ShaderModule.reset(); }
 };
 
-template <> struct SamplerObject<VULKAN_SPIRV> {
+template <> struct SamplerObject<Target::VULKAN_SPIRV> {
   std::array<std::array<vk::UniqueSampler, MaxMipCount - 1>, 2> Samplers;
   SamplerObject() noexcept = default;
   vk::Sampler Get(const vk::SamplerCreateInfo &Info, bool Int,
@@ -3303,7 +3365,7 @@ template <typename Impl> struct DescriptorPoolWrites {
     void add(dynamic_uniform_buffer_typeless uniform) noexcept {
       auto UniformIdx = UniformIt - UniformBegin;
       auto &Uniform = *UniformIt++;
-      Uniform.setBuffer(uniform.Binding.get_VULKAN_SPIRV().getBuffer());
+      Uniform.setBuffer(uniform.Binding.get_VULKAN_SPIRV().GetBuffer());
       auto &Write = *WriteIt++;
       Write.setDstSet(DstSet);
       Write.setDstBinding(UniformIdx);
@@ -3327,7 +3389,7 @@ template <typename Impl> struct DescriptorPoolWrites {
     void add(render_texture2d texture) noexcept {
       auto ImageIdx = ImageIt - ImageBegin;
       auto &Image = *ImageIt++;
-      Image.setImageView(texture.Binding.get_VULKAN_SPIRV().getImageView());
+      Image.setImageView(texture.Binding.get_VULKAN_SPIRV().GetImageView());
       auto &Write = *WriteIt++;
       Write.setDstSet(DstSet);
       Write.setDstBinding(MaxUniforms + ImageIdx);
@@ -3353,7 +3415,7 @@ template <typename Impl> struct DescriptorPoolWrites {
 } // namespace vulkan
 
 template <typename Impl, typename... Args>
-TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
+TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
     ClassWrapper<Impl>, Args... args) noexcept
     : Pipeline(Impl::data_VULKAN_SPIRV.Pipeline.get()),
       DescriptorSet(vulkan::Globals.DescriptorPoolChain->allocate()) {
@@ -3361,47 +3423,47 @@ TargetTraits<VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
   vulkan::Globals.Device.updateDescriptorSets(Writes.NumWrites,
                                               Writes.Writes.data(), 0, nullptr);
   Iterators Its(*this);
-  (Its.add(args), ...);
+  (Its.Add(args), ...);
   NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
 }
 
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     uniform_buffer_typeless) noexcept {
   UniformOffsetIt++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     dynamic_uniform_buffer_typeless uniform) noexcept {
-  *UniformOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
+  *UniformOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().GetSecondOffset();
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     vertex_buffer_typeless uniform) noexcept {
   *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV();
   VertexOffsetIt++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     dynamic_vertex_buffer_typeless uniform) noexcept {
-  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV().getBuffer();
-  *VertexOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().getSecondOffset();
+  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV().GetBuffer();
+  *VertexOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().GetSecondOffset();
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     texture_typeless) noexcept {
   TextureIdx++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     render_texture2d texture) noexcept {
   auto &RT = *RenderTextureIt++;
   RT.RenderTextureBinding = texture.Binding.get_VULKAN_SPIRV();
-  RT.KnownImageView = RT.RenderTextureBinding.getImageView();
+  RT.KnownImageView = RT.RenderTextureBinding.GetImageView();
   RT.DescriptorBindingIdx = MaxUniforms + TextureIdx++;
 }
-void TargetTraits<VULKAN_SPIRV>::PipelineBinding::Iterators::add(
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     SamplerBinding) noexcept {}
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
           std::uint32_t NAttributes, std::uint32_t NSamplers,
           std::uint32_t NAttachments>
-struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
-                       NAttachments> {
+struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
+                       NSamplers, NAttachments> {
   std::array<vk::ShaderModuleCreateInfo, NStages> StageCodes;
   std::array<vk::ShaderStageFlagBits, NStages> StageFlags;
   std::array<vk::VertexInputBindingDescription, NBindings>
@@ -3420,17 +3482,15 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
 
   template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq,
             std::size_t... SampSeq, std::size_t... AttSeq>
-  constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
-                            std::array<VertexBinding, NBindings> B,
-                            std::array<VertexAttribute, NAttributes> A,
-                            std::array<sampler, NSamplers> Samps,
-                            std::array<ColorAttachment, NAttachments> Atts,
-                            struct PipelineInfo PipelineInfo,
-                            std::index_sequence<SSeq...>,
-                            std::index_sequence<BSeq...>,
-                            std::index_sequence<ASeq...>,
-                            std::index_sequence<SampSeq...>,
-                            std::index_sequence<AttSeq...>) noexcept
+  constexpr ShaderConstData(
+      std::array<ShaderCode<Target::VULKAN_SPIRV>, NStages> S,
+      std::array<VertexBinding, NBindings> B,
+      std::array<VertexAttribute, NAttributes> A,
+      std::array<sampler, NSamplers> Samps,
+      std::array<ColorAttachment, NAttachments> Atts,
+      struct PipelineInfo PipelineInfo, std::index_sequence<SSeq...>,
+      std::index_sequence<BSeq...>, std::index_sequence<ASeq...>,
+      std::index_sequence<SampSeq...>, std::index_sequence<AttSeq...>) noexcept
       : StageCodes{vk::ShaderModuleCreateInfo{
             {}, std::get<SSeq>(S).Blob.Size, std::get<SSeq>(S).Blob.Data}...},
         StageFlags{HshToVkShaderStage(std::get<SSeq>(S).Stage)...},
@@ -3498,12 +3558,13 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
             HshToVkBorderColor(std::get<SampSeq>(Samps).BorderColor,
                                false)}...} {}
 
-  constexpr ShaderConstData(std::array<ShaderCode<VULKAN_SPIRV>, NStages> S,
-                            std::array<VertexBinding, NBindings> B,
-                            std::array<VertexAttribute, NAttributes> A,
-                            std::array<sampler, NSamplers> Samps,
-                            std::array<ColorAttachment, NAttachments> Atts,
-                            struct PipelineInfo PipelineInfo) noexcept
+  constexpr ShaderConstData(
+      std::array<ShaderCode<Target::VULKAN_SPIRV>, NStages> S,
+      std::array<VertexBinding, NBindings> B,
+      std::array<VertexAttribute, NAttributes> A,
+      std::array<sampler, NSamplers> Samps,
+      std::array<ColorAttachment, NAttachments> Atts,
+      struct PipelineInfo PipelineInfo) noexcept
       : ShaderConstData(S, B, A, Samps, Atts, PipelineInfo,
                         std::make_index_sequence<NStages>(),
                         std::make_index_sequence<NBindings>(),
@@ -3547,10 +3608,11 @@ struct ShaderConstData<VULKAN_SPIRV, NStages, NBindings, NAttributes, NSamplers,
 };
 
 template <std::uint32_t NStages, std::uint32_t NSamplers>
-struct ShaderData<VULKAN_SPIRV, NStages, NSamplers> {
-  using ObjectRef = std::reference_wrapper<ShaderObject<VULKAN_SPIRV>>;
+struct ShaderData<Target::VULKAN_SPIRV, NStages, NSamplers> {
+  using ObjectRef = std::reference_wrapper<ShaderObject<Target::VULKAN_SPIRV>>;
   std::array<ObjectRef, NStages> ShaderObjects;
-  using SamplerRef = std::reference_wrapper<SamplerObject<VULKAN_SPIRV>>;
+  using SamplerRef =
+      std::reference_wrapper<SamplerObject<Target::VULKAN_SPIRV>>;
   std::array<SamplerRef, NSamplers> SamplerObjects;
   vk::UniquePipeline Pipeline;
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
@@ -3565,7 +3627,7 @@ struct ShaderData<VULKAN_SPIRV, NStages, NSamplers> {
   }
 };
 
-template <> struct PipelineBuilder<VULKAN_SPIRV> {
+template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
   template <typename B>
   static constexpr std::size_t GetNumStages(bool NotZero) noexcept {
     return NotZero ? B::cdata_VULKAN_SPIRV.StageCodes.size() : 0;
@@ -3590,7 +3652,7 @@ template <> struct PipelineBuilder<VULKAN_SPIRV> {
     std::array<vk::Pipeline, sizeof...(B)> Pipelines;
     auto Result = vulkan::Globals.Device.createGraphicsPipelines(
         {}, Infos.size(), Infos.data(), nullptr, Pipelines.data());
-    VULKAN_HPP_ASSERT(Result == vk::Result::eSuccess);
+    assert(Result == vk::Result::eSuccess);
     (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
   template <typename... B> static void CreatePipelines() noexcept {
@@ -3621,19 +3683,19 @@ MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
 } // namespace buffer_math::vulkan
 
 template <typename T>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location,
                      CopyFunc copyFunc) noexcept {
     auto UploadBuffer = vulkan::AllocateUploadBuffer(
         location.with_field("UniformBufferUpload"), sizeof(T));
-    copyFunc(UploadBuffer.getMappedData(), sizeof(T));
+    copyFunc(UploadBuffer.GetMappedData(), sizeof(T));
 
-    TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
+    TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
         vulkan::AllocateStaticBuffer(location, sizeof(T),
                                      vk::BufferUsageFlagBits::eUniformBuffer);
 
-    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
+    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
                                    vk::BufferCopy(0, 0, sizeof(T)));
 
     return Ret;
@@ -3641,7 +3703,8 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
 };
 
 template <typename T>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_uniform_buffer<T>> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
+    dynamic_uniform_buffer<T>> {
   static auto Create(const SourceLocation &location) noexcept {
     return vulkan::AllocateDynamicBuffer(
         location, sizeof(T), vk::BufferUsageFlagBits::eUniformBuffer);
@@ -3649,21 +3712,21 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_uniform_buffer<T>> {
 };
 
 template <typename T>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location, std::size_t Count,
                      CopyFunc copyFunc) noexcept {
     std::size_t Size = sizeof(T) * Count;
     auto UploadBuffer = vulkan::AllocateUploadBuffer(
         location.with_field("VertexBufferUpload"), Size);
-    copyFunc(UploadBuffer.getMappedData(), Size);
+    copyFunc(UploadBuffer.GetMappedData(), Size);
 
-    TargetTraits<VULKAN_SPIRV>::UniformBufferOwner Ret =
+    TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
         vulkan::AllocateStaticBuffer(location, Size,
                                      vk::BufferUsageFlagBits::eVertexBuffer |
                                          vk::BufferUsageFlagBits::eTransferDst);
 
-    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.getBuffer(), Ret.getBuffer(),
+    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
                                    vk::BufferCopy(0, 0, Size));
 
     return Ret;
@@ -3671,7 +3734,8 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
 };
 
 template <typename T>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_vertex_buffer<T>> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
+    dynamic_vertex_buffer<T>> {
   static auto Create(const SourceLocation &location,
                      std::size_t Count) noexcept {
     return vulkan::AllocateDynamicBuffer(
@@ -3680,7 +3744,8 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<dynamic_vertex_buffer<T>> {
 };
 
 template <typename TexelType>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
+    texture2d<TexelType>> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location, Extent2D extent,
                      Format format, uint32_t numMips, CopyFunc copyFunc,
@@ -3697,9 +3762,9 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
         buffer_math::MipOffset2D(extent.w, extent.h, TexelSize, numMips);
     auto UploadBuffer = vulkan::AllocateUploadBuffer(
         location.with_field("TextureUpload"), BufferSize);
-    copyFunc(UploadBuffer.getMappedData(), BufferSize);
+    copyFunc(UploadBuffer.GetMappedData(), BufferSize);
 
-    TargetTraits<VULKAN_SPIRV>::TextureOwner Ret{
+    TargetTraits<Target::VULKAN_SPIRV>::TextureOwner Ret{
         vulkan::AllocateTexture(
             location,
             vk::ImageCreateInfo({}, vk::ImageType::e2D, TexelFormat,
@@ -3740,7 +3805,7 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
                                       VK_REMAINING_MIP_LEVELS, 0,
                                       VK_REMAINING_ARRAY_LAYERS)));
     vulkan::Globals.Cmd.copyBufferToImage(
-        UploadBuffer.getBuffer(), Ret.Allocation.GetImage(),
+        UploadBuffer.GetBuffer(), Ret.Allocation.GetImage(),
         vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
     vulkan::Globals.Cmd.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
@@ -3764,18 +3829,19 @@ struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<texture2d<TexelType>> {
 };
 
 template <>
-struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
   static auto Create(const SourceLocation &location, surface Surf,
                      uint32_t NumColorBindings = 0,
                      uint32_t NumDepthBindings = 0) noexcept {
-    return TargetTraits<VULKAN_SPIRV>::RenderTextureOwner{
+    return TargetTraits<Target::VULKAN_SPIRV>::RenderTextureOwner{
         std::make_unique<vulkan::RenderTextureAllocation>(
             location, Surf.Binding.get_VULKAN_SPIRV().Allocation,
             NumColorBindings, NumDepthBindings)};
   }
 };
 
-template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
   static auto Create(const SourceLocation &location,
                      vk::UniqueSurfaceKHR Surface) noexcept {
     vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
@@ -3783,9 +3849,9 @@ template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
     if (!vulkan::Globals.CheckSurfaceSupported(Surface.get())) {
       // TODO: make this return a detectable null object
       assert(false && "surface not supported");
-      return TargetTraits<VULKAN_SPIRV>::SurfaceOwner{};
+      return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{};
     }
-    return TargetTraits<VULKAN_SPIRV>::SurfaceOwner{
+    return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{
         std::make_unique<vulkan::SurfaceAllocation>(location,
                                                     std::move(Surface))};
   }
@@ -3803,18 +3869,40 @@ template <> struct TargetTraits<VULKAN_SPIRV>::ResourceFactory<surface> {
 };
 #endif
 
-struct GlobalListNode {
+class GlobalListNode {
   static GlobalListNode *Head;
+
+public:
+  static GlobalListNode *GetHead() noexcept { return Head; }
   typedef void (*BuildFunc)() noexcept;
   struct FuncPair {
     BuildFunc Create, Destroy;
   };
-  std::array<FuncPair, ACTIVE_TARGET_MAX> Funcs;
+
+private:
+  std::array<FuncPair, std::size_t(ActiveTarget::MAX)> Funcs;
   GlobalListNode *Next;
+
+public:
   template <typename... Args>
   explicit GlobalListNode(Args... Funcs) noexcept
       : Funcs{Funcs...}, Next(Head) {
     Head = this;
+  }
+  GlobalListNode *GetNext() const noexcept { return Next; }
+  void Create(ActiveTarget T) const noexcept {
+    return Funcs[std::size_t(T)].Create();
+  }
+  static void CreateAll(ActiveTarget T) noexcept {
+    for (auto *Node = GetHead(); Node; Node = Node->GetNext())
+      Node->Create(T);
+  }
+  void Destroy(ActiveTarget T) const noexcept {
+    return Funcs[std::size_t(T)].Destroy();
+  }
+  static void DestroyAll(ActiveTarget T) noexcept {
+    for (auto *Node = GetHead(); Node; Node = Node->GetNext())
+      Node->Destroy(T);
   }
 };
 inline GlobalListNode *GlobalListNode::Head = nullptr;
@@ -3824,8 +3912,8 @@ struct PipelineCoordinatorNode : GlobalListNode {
   PipelineCoordinatorNode()
       : GlobalListNode{
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  GlobalListNode::FuncPair{Impl<Enumeration>::Create,                          \
-                           Impl<Enumeration>::Destroy},
+  GlobalListNode::FuncPair{Impl<Target::Enumeration>::Create,                  \
+                           Impl<Target::Enumeration>::Destroy},
 #include "targets.def"
         } {
   }
@@ -3874,9 +3962,9 @@ struct dynamic_resource_owner_base : resource_owner_base<T> {
   using resource_owner_base<T>::resource_owner_base;
   using MappedType = typename T::MappedType;
   MappedType *map() noexcept {
-    return reinterpret_cast<MappedType *>(resource_owner_base<T>::Owner.map());
+    return reinterpret_cast<MappedType *>(resource_owner_base<T>::Owner.Map());
   }
-  void unmap() noexcept { resource_owner_base<T>::Owner.unmap(); }
+  void unmap() noexcept { resource_owner_base<T>::Owner.Unmap(); }
   void load(const MappedType &obj) noexcept {
     auto *ptr = map();
     std::memcpy(ptr, &obj, sizeof(MappedType));
@@ -4022,22 +4110,22 @@ template <> struct resource_owner<render_texture2d> {
   resource_owner &operator=(resource_owner &&other) noexcept = default;
 
   render_texture2d getColor(uint32_t idx) const noexcept {
-    return {Owner.getColor(idx)};
+    return {Owner.GetColor(idx)};
   }
   render_texture2d getDepth(uint32_t idx) const noexcept {
-    return {Owner.getDepth(idx)};
+    return {Owner.GetDepth(idx)};
   }
-  void attach() noexcept { Owner.attach(); }
+  void attach() noexcept { Owner.Attach(); }
   void resolveSurface(surface surface, bool reattach = false) noexcept {
-    Owner.resolveSurface(surface.Binding, reattach);
+    Owner.ResolveSurface(surface.Binding, reattach);
   }
   void resolveColorBinding(uint32_t idx, Rect2D region,
                            bool reattach = true) noexcept {
-    Owner.resolveColorBinding(idx, region, reattach);
+    Owner.ResolveColorBinding(idx, region, reattach);
   }
   void resolveDepthBinding(uint32_t idx, Rect2D region,
                            bool reattach = true) noexcept {
-    Owner.resolveDepthBinding(idx, region, reattach);
+    Owner.ResolveDepthBinding(idx, region, reattach);
   }
 };
 
@@ -4051,7 +4139,7 @@ inline resource_owner<render_texture2d> create_render_texture2d(
 template <> struct resource_owner<surface> : resource_owner_base<surface> {
   using resource_owner_base<surface>::resource_owner_base;
   bool acquireNextImage() noexcept {
-    return resource_owner_base<surface>::Owner.acquireNextImage();
+    return resource_owner_base<surface>::Owner.AcquireNextImage();
   }
 };
 
@@ -4070,10 +4158,10 @@ protected:
   explicit binding_typeless(Args... args) noexcept : Data(args...) {}
 
 public:
-  operator bool() const noexcept { return Data.isValid(); }
+  operator bool() const noexcept { return Data.IsValid(); }
   binding_typeless() noexcept = default;
   void draw(uint32_t start, uint32_t count) noexcept {
-    Data.draw(start, count);
+    Data.Draw(start, count);
   }
 };
 
@@ -4083,6 +4171,10 @@ protected:
   explicit binding(Args... args) noexcept
       : binding_typeless(detail::ClassWrapper<Impl>(), args...) {}
 };
+
+inline void clear_attachments(bool color = true, bool depth = true) noexcept {
+  detail::ActiveTargetTraits::ClearAttachments(color, depth);
+}
 
 #if HSH_PROFILE_MODE
 struct value_formatter {

@@ -82,6 +82,15 @@ VMA_CALL_PRE VkResult VMA_CALL_POST vmaCreateDoubleBuffer(
 #endif
 
 namespace VULKAN_HPP_NAMESPACE {
+struct VmaPool {
+  ::VmaPool Pool = VK_NULL_HANDLE;
+  operator ::VmaPool() const VULKAN_HPP_NOEXCEPT { return Pool; }
+  VmaPool & operator=( std::nullptr_t ) VULKAN_HPP_NOEXCEPT {
+    Pool = VK_NULL_HANDLE;
+    return *this;
+  }
+};
+
 struct VmaAllocator {
   ::VmaAllocator Allocator = VK_NULL_HANDLE;
   operator ::VmaAllocator() const VULKAN_HPP_NOEXCEPT { return Allocator; }
@@ -92,6 +101,23 @@ struct VmaAllocator {
   template<typename Dispatch>
   void destroy(Optional<const AllocationCallbacks> allocator, Dispatch const &d) VULKAN_HPP_NOEXCEPT {
     ::vmaDestroyAllocator(Allocator);
+  }
+
+
+  template<typename Dispatch = VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>
+  typename ResultValueType<UniqueHandle<VmaPool,Dispatch>>::type createVmaPoolUnique( const VmaPoolCreateInfo& pCreateInfo, Optional<const AllocationCallbacks> allocator = nullptr, Dispatch const &d = VULKAN_HPP_DEFAULT_DISPATCHER )
+  {
+    ::VmaPool vmaPool;
+    Result result = static_cast<Result>( ::vmaCreatePool(Allocator, &pCreateInfo, &vmaPool) );
+    VmaPool vmaPoolObj{vmaPool};
+
+    ObjectDestroy<VmaAllocator,Dispatch> deleter( *this, allocator, d );
+    return createResultValue<VmaPool,Dispatch>( result, vmaPoolObj, VULKAN_HPP_NAMESPACE_STRING"::createVmaPoolUnique", deleter );
+  }
+
+  template<typename Dispatch = VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>
+  void destroy( VmaPool pool, Optional<const AllocationCallbacks> allocator = nullptr, Dispatch const &d = VULKAN_HPP_DEFAULT_DISPATCHER ) const VULKAN_HPP_NOEXCEPT {
+    ::vmaDestroyPool(Allocator, pool);
   }
 };
 template <typename Dispatch> class UniqueHandleTraits<VmaAllocator, Dispatch> { public: using deleter = ObjectDestroy<NoParent, Dispatch>; };
@@ -106,4 +132,7 @@ VULKAN_HPP_INLINE typename ResultValueType<UniqueHandle<VmaAllocator,Dispatch>>:
   ObjectDestroy<NoParent,Dispatch> deleter( allocator, d );
   return createResultValue<VmaAllocator,Dispatch>( result, vmaAllocatorObj, VULKAN_HPP_NAMESPACE_STRING"::createVmaAllocatorUnique", deleter );
 }
+
+template <typename Dispatch> class UniqueHandleTraits<VmaPool, Dispatch> { public: using deleter = ObjectDestroy<VmaAllocator, Dispatch>; };
+using UniqueVmaPool = UniqueHandle<VmaPool, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE>;
 }
