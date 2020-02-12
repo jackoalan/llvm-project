@@ -3425,6 +3425,7 @@ public:
 
 class StagesCompilerDxc : public StagesCompilerBase {
   DiagnosticsEngine &Diags;
+  bool DebugInfo;
   WCHAR TShiftArg[4];
   WCHAR SShiftArg[4];
   CComPtr<IDxcCompiler3> Compiler;
@@ -3445,9 +3446,10 @@ protected:
       if (Stage.empty())
         continue;
       DxcText SourceBuf{Stage.data(), Stage.size(), 0};
-      LPCWSTR DxArgs[] = {L"-T", Profile};
+      LPCWSTR DxArgs[] = {L"-T", Profile, DebugInfo ? L"-Zi" : L""};
       LPCWSTR VkArgs[] = {L"-T",
                           Profile,
+                          DebugInfo ? L"-Zi" : L"",
                           L"-spirv",
                           L"-fspv-target-env=vulkan1.1",
                           L"-fvk-use-dx-layout",
@@ -3503,9 +3505,10 @@ protected:
   }
 
 public:
-  explicit StagesCompilerDxc(HshTarget Target, StringRef ResourceDir,
-                             DiagnosticsEngine &Diags, HshBuiltins &Builtins)
-      : StagesCompilerBase(Target), Diags(Diags) {
+  explicit StagesCompilerDxc(HshTarget Target, bool DebugInfo,
+                             StringRef ResourceDir, DiagnosticsEngine &Diags,
+                             HshBuiltins &Builtins)
+      : StagesCompilerBase(Target), Diags(Diags), DebugInfo(DebugInfo) {
     DxcLibrary::EnsureSharedInstance(ResourceDir, Diags);
     Compiler = DxcLibrary::SharedInstance->MakeCompiler();
 
@@ -3517,10 +3520,9 @@ public:
   }
 };
 
-std::unique_ptr<StagesCompilerBase> MakeCompiler(HshTarget Target,
-                                                 StringRef ResourceDir,
-                                                 DiagnosticsEngine &Diags,
-                                                 HshBuiltins &Builtins) {
+std::unique_ptr<StagesCompilerBase>
+MakeCompiler(HshTarget Target, bool DebugInfo, StringRef ResourceDir,
+             DiagnosticsEngine &Diags, HshBuiltins &Builtins) {
   switch (Target) {
   default:
   case HT_GLSL:
@@ -3529,8 +3531,8 @@ std::unique_ptr<StagesCompilerBase> MakeCompiler(HshTarget Target,
   case HT_DXBC:
   case HT_DXIL:
   case HT_VULKAN_SPIRV:
-    return std::make_unique<StagesCompilerDxc>(Target, ResourceDir, Diags,
-                                               Builtins);
+    return std::make_unique<StagesCompilerDxc>(Target, DebugInfo, ResourceDir,
+                                               Diags, Builtins);
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
@@ -4887,6 +4889,7 @@ class GenerateConsumer : public ASTConsumer {
   AnalysisDeclContextManager AnalysisMgr;
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
+  bool DebugInfo;
   std::unique_ptr<raw_pwrite_stream> OS;
   llvm::DenseSet<uint64_t> SeenHashes;
   llvm::DenseSet<uint64_t> SeenSamplerHashes;
@@ -4908,8 +4911,9 @@ class GenerateConsumer : public ASTConsumer {
   StagesCompilerBase &getCompiler(HshTarget Target) {
     auto &Compiler = Compilers[Target];
     if (!Compiler)
-      Compiler = MakeCompiler(Target, CI.getHeaderSearchOpts().ResourceDir,
-                              Context.getDiagnostics(), Builtins);
+      Compiler =
+          MakeCompiler(Target, DebugInfo, CI.getHeaderSearchOpts().ResourceDir,
+                       Context.getDiagnostics(), Builtins);
     return *Compiler;
   }
 
@@ -4987,10 +4991,11 @@ class GenerateConsumer : public ASTConsumer {
   };
 
 public:
-  explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets)
+  explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets,
+                            bool DebugInfo)
       : CI(CI), Context(CI.getASTContext()),
         HostPolicy(Context.getPrintingPolicy()), AnalysisMgr(Context),
-        PP(CI.getPreprocessor()), Targets(Targets) {
+        PP(CI.getPreprocessor()), Targets(Targets), DebugInfo(DebugInfo) {
     AnalysisMgr.getCFGBuildOptions().OmitLogicalBinaryOperators = true;
   }
 
@@ -5639,13 +5644,15 @@ public:
         Diags.getCustomDiagID(DiagnosticsEngine::Error,
                               "hshhead include in must appear in global scope");
     if (!HeadInclude) {
-      std::string ExpectedName =
-          sys::path::filename(CI.getFrontendOpts().OutputFile);
-      std::string Insertion = "#include \""s + ExpectedName + '\"';
+      std::string Insertion;
+      raw_string_ostream InsertionOS(Insertion);
+      InsertionOS << "#include \""
+                  << sys::path::filename(CI.getFrontendOpts().OutputFile)
+                  << '\"';
       Diags.Report(IncludeDiagID) << FixItHint::CreateInsertion(
           Context.getSourceManager().getLocForStartOfFile(
               Context.getSourceManager().getMainFileID()),
-          Insertion);
+          InsertionOS.str());
       return;
     }
     if (NamespaceDecl *NS = LocationNamespaceSearch(Context).findNamespace(
@@ -5720,16 +5727,19 @@ public:
                                            "previous include was here"));
         return;
       } else {
-        std::string ExpectedName =
+        auto ExpectedName =
             sys::path::filename(CI.getFrontendOpts().OutputFile);
         if (ExpectedName != RelativePath) {
-          std::string Replacement = "\""s + ExpectedName + '\"';
+          std::string Replacement;
+          raw_string_ostream ReplacementOS(Replacement);
+          ReplacementOS << '\"' << ExpectedName << '\"';
           Diags.Report(
               FilenameRange.getBegin(),
               Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                     "hshhead include must match the output "
                                     "filename"))
-              << FixItHint::CreateReplacement(FilenameRange, Replacement);
+              << FixItHint::CreateReplacement(FilenameRange,
+                                              ReplacementOS.str());
           return;
         }
         HeadInclude.emplace(HashLoc, RelativePath);
@@ -5884,7 +5894,7 @@ namespace clang::hshgen {
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   dumper().setPrintingPolicy(CI.getASTContext().getPrintingPolicy());
-  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets);
+  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets, DebugInfo);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(
           *Consumer, CI.getPreprocessor(), CI.getFileManager(),

@@ -26,8 +26,7 @@
 #endif
 #ifdef HSH_SOURCE_LOCATION_REP
 namespace hsh {
-class SourceLocation {
-  HSH_SOURCE_LOCATION_REP m_location;
+class SourceLocation : public HSH_SOURCE_LOCATION_REP {
   const char *m_field = nullptr;
   std::uint32_t m_fieldIdx = UINT32_MAX;
 
@@ -35,19 +34,11 @@ public:
   SourceLocation(const HSH_SOURCE_LOCATION_REP &location,
                  const char *field = nullptr,
                  std::uint32_t fieldIdx = UINT32_MAX) noexcept
-      : m_location(location), m_field(field), m_fieldIdx(fieldIdx) {}
+      : HSH_SOURCE_LOCATION_REP(location), m_field(field),
+        m_fieldIdx(fieldIdx) {}
   SourceLocation with_field(const char *f, std::uint32_t idx = UINT32_MAX) const
       noexcept {
-    return SourceLocation(m_location, f, idx);
-  }
-  static SourceLocation current(const char *f = nullptr,
-                                std::uint32_t idx = UINT32_MAX) noexcept {
-    return SourceLocation(HSH_SOURCE_LOCATION_REP::current(), f, idx);
-  }
-  const char *file_name() const noexcept { return m_location.file_name(); }
-  std::uint_least32_t line() const noexcept { return m_location.line(); }
-  const char *function_name() const noexcept {
-    return m_location.function_name();
+    return SourceLocation(*this, f, idx);
   }
   bool has_field() const noexcept { return m_field != nullptr; }
   const char *field() const noexcept { return m_field; }
@@ -3692,7 +3683,8 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
     copyFunc(UploadBuffer.GetMappedData(), sizeof(T));
 
     TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
-        vulkan::AllocateStaticBuffer(location, sizeof(T),
+        vulkan::AllocateStaticBuffer(location.with_field("UniformBuffer"),
+                                     sizeof(T),
                                      vk::BufferUsageFlagBits::eUniformBuffer);
 
     vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
@@ -3707,7 +3699,8 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
     dynamic_uniform_buffer<T>> {
   static auto Create(const SourceLocation &location) noexcept {
     return vulkan::AllocateDynamicBuffer(
-        location, sizeof(T), vk::BufferUsageFlagBits::eUniformBuffer);
+        location.with_field("DynamicUniformBuffer"), sizeof(T),
+        vk::BufferUsageFlagBits::eUniformBuffer);
   }
 };
 
@@ -3722,7 +3715,7 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
     copyFunc(UploadBuffer.GetMappedData(), Size);
 
     TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
-        vulkan::AllocateStaticBuffer(location, Size,
+        vulkan::AllocateStaticBuffer(location.with_field("VertexBuffer"), Size,
                                      vk::BufferUsageFlagBits::eVertexBuffer |
                                          vk::BufferUsageFlagBits::eTransferDst);
 
@@ -3739,7 +3732,8 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
   static auto Create(const SourceLocation &location,
                      std::size_t Count) noexcept {
     return vulkan::AllocateDynamicBuffer(
-        location, sizeof(T) * Count, vk::BufferUsageFlagBits::eVertexBuffer);
+        location.with_field("DynamicVertexBuffer"), sizeof(T) * Count,
+        vk::BufferUsageFlagBits::eVertexBuffer);
   }
 };
 
@@ -3766,7 +3760,7 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
 
     TargetTraits<Target::VULKAN_SPIRV>::TextureOwner Ret{
         vulkan::AllocateTexture(
-            location,
+            location.with_field("Texture2D"),
             vk::ImageCreateInfo({}, vk::ImageType::e2D, TexelFormat,
                                 {extent.w, extent.h, 1}, numMips, 1,
                                 vk::SampleCountFlagBits::e1,
@@ -3835,8 +3829,9 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
                      uint32_t NumDepthBindings = 0) noexcept {
     return TargetTraits<Target::VULKAN_SPIRV>::RenderTextureOwner{
         std::make_unique<vulkan::RenderTextureAllocation>(
-            location, Surf.Binding.get_VULKAN_SPIRV().Allocation,
-            NumColorBindings, NumDepthBindings)};
+            location.with_field("RenderTexture2D"),
+            Surf.Binding.get_VULKAN_SPIRV().Allocation, NumColorBindings,
+            NumDepthBindings)};
   }
 };
 

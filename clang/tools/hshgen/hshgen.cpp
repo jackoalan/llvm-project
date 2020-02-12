@@ -71,6 +71,10 @@ int main(int argc, const char **argv) {
       "v", cl::desc("Show commands to run and use verbose output"),
       cl::cat(llvm::cl::GeneralCategory));
 
+  static cl::opt<bool> DebugInfo(
+      "g", cl::desc("Embed debug information in compiled shaders"),
+      cl::cat(llvm::cl::GeneralCategory));
+
   static cl::list<std::string, bool, cl::dir_parser> IncludeDirs(
       "I", cl::ZeroOrMore, cl::Prefix,
       cl::desc("Add directory to include search path"),
@@ -175,8 +179,7 @@ int main(int argc, const char **argv) {
       Targets.push_back(T.Target);
   }
   if (Targets.empty()) {
-    const std::string ProgramName = sys::path::filename(argv[0]);
-    errs() << ProgramName << ": No hsh targets specified!\n"
+    errs() << sys::path::filename(argv[0]) << ": No hsh targets specified!\n"
            << "Must specify at least one of --glsl, --hlsl, --metal, etc...\n"
            << "See: " << argv[0] << " --help\n";
     return 1;
@@ -184,9 +187,9 @@ int main(int argc, const char **argv) {
 
   llvm::IntrusiveRefCntPtr<FileManager> fman(
       new FileManager(FileSystemOptions()));
-  tooling::ToolInvocation TI(std::move(args),
-                             std::make_unique<hshgen::GenerateAction>(Targets),
-                             fman.get());
+  tooling::ToolInvocation TI(
+      std::move(args),
+      std::make_unique<hshgen::GenerateAction>(Targets, DebugInfo), fman.get());
   if (!TI.run())
     return 1;
 
