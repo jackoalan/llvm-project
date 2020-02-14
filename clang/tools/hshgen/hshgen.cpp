@@ -107,6 +107,12 @@ int main(int argc, const char **argv) {
 
   static cl::OptionCategory HshCategory("Hsh Generator Options");
 
+  static cl::opt<bool> SourceDump(
+      "source-dump",
+      cl::desc(
+          "Output concatenated generated shader sources instead of header"),
+      cl::cat(HshCategory));
+
   struct TargetOption {
     hshgen::HshTarget Target;
     cl::opt<bool> Opt;
@@ -189,7 +195,7 @@ int main(int argc, const char **argv) {
       new FileManager(FileSystemOptions()));
   tooling::ToolInvocation TI(
       std::move(args),
-      std::make_unique<hshgen::GenerateAction>(Targets, DebugInfo), fman.get());
+      std::make_unique<hshgen::GenerateAction>(Targets, DebugInfo, SourceDump), fman.get());
   if (!TI.run())
     return 1;
 

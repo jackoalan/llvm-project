@@ -1,9 +1,37 @@
-#hsh_sources(test-input.cpp)
-add_library(hsh-test-lib test-input.cpp)
-target_hsh(hsh-test-lib ALL_SOURCES HSH_TARGETS vulkan-spirv)
-#target_compile_options(hsh-test-lib PRIVATE -fno-rtti)
+llvm_canonicalize_cmake_booleans(
+        CLANG_BUILD_EXAMPLES
+        CLANG_ENABLE_ARCMT
+        CLANG_ENABLE_STATIC_ANALYZER
+        CLANG_SPAWN_CC1
+        ENABLE_BACKTRACES
+        ENABLE_EXPERIMENTAL_NEW_PASS_MANAGER
+        LLVM_ENABLE_ZLIB
+        LLVM_ENABLE_PER_TARGET_RUNTIME_DIR
+        LLVM_ENABLE_PLUGINS
+        LLVM_ENABLE_THREADS)
 
-add_executable(hsh-test main.cpp)
-target_include_directories(hsh-test PRIVATE "${HSH_INCLUDE_DIR}")
-target_link_libraries(hsh-test PRIVATE hsh-test-lib xcb ${CMAKE_DL_LIBS})
-#target_compile_options(hsh-test PRIVATE -fno-rtti)
+configure_lit_site_cfg(
+        ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
+        ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
+        MAIN_CONFIG
+        ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
+)
+
+list(APPEND HSH_TEST_DEPS hshgen FileCheck count not)
+
+add_custom_target(hsh-test-depends DEPENDS ${HSH_TEST_DEPS})
+set_target_properties(hsh-test-depends PROPERTIES FOLDER "hsh tests")
+
+add_lit_testsuite(check-hsh "Running the hsh regression tests"
+        ${CMAKE_CURRENT_BINARY_DIR}
+        #LIT ${LLVM_LIT}
+        PARAMS ${HSH_TEST_PARAMS}
+        DEPENDS ${HSH_TEST_DEPS}
+        ARGS ${HSH_TEST_EXTRA_ARGS}
+        )
+set_target_properties(check-hsh PROPERTIES FOLDER "hsh tests")
+
+add_lit_testsuites(HSH ${CMAKE_CURRENT_SOURCE_DIR}
+        PARAMS ${HSH_TEST_PARAMS}
+        DEPENDS ${HSH_TEST_DEPS}
+        )

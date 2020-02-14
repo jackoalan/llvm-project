@@ -1,4 +1,4 @@
-#define VMA_IMPLEMENTATION
+#define HSH_IMPLEMENTATION
 #include <chrono>
 #include <hsh/hsh.h>
 #include <string_view>
@@ -6,9 +6,93 @@ using namespace std::literals;
 
 #include "test-input.h"
 
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
-
 constexpr std::string_view AppName = "Hello World"sv;
+
+struct XcbConnection;
+struct XcbWindow {
+  XcbConnection &Connection;
+  xcb_window_t Window;
+  explicit XcbWindow(XcbConnection &Connection);
+  ~XcbWindow();
+};
+
+struct XcbConnection {
+  xcb_connection_t *Connection;
+  xcb_atom_t wmDeleteWin, wmProtocols;
+
+  operator xcb_connection_t *() const { return Connection; }
+
+  XcbConnection() {
+    Connection = xcb_connect(nullptr, nullptr);
+    assert(Connection);
+
+    xcb_intern_atom_cookie_t wmDeleteCookie = xcb_intern_atom(
+        Connection, 0, strlen("WM_DELETE_WINDOW"), "WM_DELETE_WINDOW");
+    xcb_intern_atom_cookie_t wmProtocolsCookie =
+        xcb_intern_atom(Connection, 0, strlen("WM_PROTOCOLS"), "WM_PROTOCOLS");
+
+    xcb_intern_atom_reply_t *wmDeleteReply =
+        xcb_intern_atom_reply(Connection, wmDeleteCookie, nullptr);
+    xcb_intern_atom_reply_t *wmProtocolsReply =
+        xcb_intern_atom_reply(Connection, wmProtocolsCookie, nullptr);
+
+    wmDeleteWin = wmDeleteReply->atom;
+    wmProtocols = wmProtocolsReply->atom;
+  }
+
+  XcbWindow makeWindow() { return XcbWindow(*this); }
+
+  void runloop(const std::function<bool()> &IdleFunc) {
+    bool Running = true;
+    while (Running) {
+      xcb_generic_event_t *event = xcb_poll_for_event(Connection);
+      if (!event) {
+        if (!IdleFunc())
+          break;
+        continue;
+      }
+
+      switch (event->response_type & ~0x80u) {
+      case XCB_CLIENT_MESSAGE: {
+        auto *cm = (xcb_client_message_event_t *)event;
+
+        if (cm->data.data32[0] == wmDeleteWin)
+          Running = false;
+
+        break;
+      }
+      default:
+        break;
+      }
+
+      free(event);
+    }
+  }
+};
+
+XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
+  const struct xcb_setup_t *Setup = xcb_get_setup(Connection);
+  xcb_screen_iterator_t Screen = xcb_setup_roots_iterator(Setup);
+  assert(Screen.rem);
+
+  Window = xcb_generate_id(Connection);
+  uint32_t EventMask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+  uint32_t ValueList[] = {Screen.data->black_pixel, 0};
+  xcb_create_window(Connection, XCB_COPY_FROM_PARENT, Window, Screen.data->root,
+                    0, 0, 512, 512, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                    Screen.data->root_visual, EventMask, ValueList);
+  xcb_change_property(Connection, XCB_PROP_MODE_REPLACE, Window,
+                      XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8, AppName.size(),
+                      AppName.data());
+  xcb_change_property(Connection, XCB_PROP_MODE_REPLACE, Window,
+                      Connection.wmProtocols, 4, 32, 1,
+                      &Connection.wmDeleteWin);
+
+  xcb_map_window(Connection, Window);
+  xcb_flush(Connection);
+}
+
+XcbWindow::~XcbWindow() { xcb_destroy_window(Connection, Window); }
 
 struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
   struct MyApplicationInfo : vk::ApplicationInfo {
@@ -61,11 +145,15 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
     Layers = vk::enumerateInstanceLayerProperties().value;
     Extensions = vk::enumerateInstanceExtensionProperties().value;
 
-    for (auto WL : WantedLayers)
-      VULKAN_HPP_ASSERT(enableLayer(WL));
+    for (auto WL : WantedLayers) {
+      bool res = enableLayer(WL);
+      assert(res);
+    }
 
-    for (auto WE : WantedExtensions)
-      VULKAN_HPP_ASSERT(enableExtension(WE));
+    for (auto WE : WantedExtensions) {
+      bool res = enableExtension(WE);
+      assert(res);
+    }
 
     setEnabledLayerCount(EnabledLayers.size());
     setPpEnabledLayerNames(EnabledLayers.data());
@@ -123,11 +211,15 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
     Layers = PD.enumerateDeviceLayerProperties().value;
     Extensions = PD.enumerateDeviceExtensionProperties().value;
 
-    for (auto WL : WantedLayers)
-      VULKAN_HPP_ASSERT(enableLayer(WL));
+    for (auto WL : WantedLayers) {
+      bool res = enableLayer(WL);
+      assert(res);
+    }
 
-    for (auto WE : WantedExtensions)
-      VULKAN_HPP_ASSERT(enableExtension(WE));
+    for (auto WE : WantedExtensions) {
+      bool res = enableExtension(WE);
+      assert(res);
+    }
 
     HasExtMemoryBudget = enableExtension("VK_EXT_memory_budget"sv, false);
 
@@ -145,7 +237,7 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
       }
       ++QFIdx;
     }
-    VULKAN_HPP_ASSERT(FoundQF);
+    assert(FoundQF);
     QFIdxOut = QFIdx;
     QueueCreateInfo.setQueueFamilyIndex(QFIdx);
 
@@ -185,92 +277,6 @@ struct MyDebugUtilsMessengerCreateInfo : vk::DebugUtilsMessengerCreateInfoEXT {
             {}, WantedFlags, WantedTypes,
             PFN_vkDebugUtilsMessengerCallbackEXT(&Callback)) {}
 };
-
-struct XcbConnection;
-struct XcbWindow {
-  XcbConnection &Connection;
-  xcb_window_t Window;
-  explicit XcbWindow(XcbConnection &Connection);
-  ~XcbWindow();
-};
-
-struct XcbConnection {
-  xcb_connection_t *Connection;
-  xcb_atom_t wmDeleteWin, wmProtocols;
-
-  operator xcb_connection_t *() const { return Connection; }
-
-  XcbConnection() {
-    Connection = xcb_connect(nullptr, nullptr);
-    VULKAN_HPP_ASSERT(Connection);
-
-    xcb_intern_atom_cookie_t wmDeleteCookie = xcb_intern_atom(
-        Connection, 0, strlen("WM_DELETE_WINDOW"), "WM_DELETE_WINDOW");
-    xcb_intern_atom_cookie_t wmProtocolsCookie =
-        xcb_intern_atom(Connection, 0, strlen("WM_PROTOCOLS"), "WM_PROTOCOLS");
-
-    xcb_intern_atom_reply_t *wmDeleteReply =
-        xcb_intern_atom_reply(Connection, wmDeleteCookie, nullptr);
-    xcb_intern_atom_reply_t *wmProtocolsReply =
-        xcb_intern_atom_reply(Connection, wmProtocolsCookie, nullptr);
-
-    wmDeleteWin = wmDeleteReply->atom;
-    wmProtocols = wmProtocolsReply->atom;
-  }
-
-  XcbWindow makeWindow() { return XcbWindow(*this); }
-
-  void runloop(const std::function<bool()> &IdleFunc) {
-    bool Running = true;
-    while (Running) {
-      xcb_generic_event_t *event = xcb_poll_for_event(Connection);
-      if (!event) {
-        if (!IdleFunc())
-          break;
-        continue;
-      }
-
-      switch (event->response_type & ~0x80u) {
-      case XCB_CLIENT_MESSAGE: {
-        auto *cm = (xcb_client_message_event_t *)event;
-
-        if (cm->data.data32[0] == wmDeleteWin)
-          Running = false;
-
-        break;
-      }
-      default:
-        break;
-      }
-
-      free(event);
-    }
-  }
-};
-
-XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
-  const struct xcb_setup_t *Setup = xcb_get_setup(Connection);
-  xcb_screen_iterator_t Screen = xcb_setup_roots_iterator(Setup);
-  VULKAN_HPP_ASSERT(Screen.rem);
-
-  Window = xcb_generate_id(Connection);
-  uint32_t EventMask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-  uint32_t ValueList[] = {Screen.data->black_pixel, 0};
-  xcb_create_window(Connection, XCB_COPY_FROM_PARENT, Window, Screen.data->root,
-                    0, 0, 512, 512, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
-                    Screen.data->root_visual, EventMask, ValueList);
-  xcb_change_property(Connection, XCB_PROP_MODE_REPLACE, Window,
-                      XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8, AppName.size(),
-                      AppName.data());
-  xcb_change_property(Connection, XCB_PROP_MODE_REPLACE, Window,
-                      Connection.wmProtocols, 4, 32, 1,
-                      &Connection.wmDeleteWin);
-
-  xcb_map_window(Connection, Window);
-  xcb_flush(Connection);
-}
-
-XcbWindow::~XcbWindow() { xcb_destroy_window(Connection, Window); }
 
 struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
   std::array<vk::DescriptorSetLayoutBinding, hsh::detail::MaxUniforms +
@@ -382,17 +388,17 @@ int main(int argc, char **argv) {
   XcbWindow Window = Connection.makeWindow();
 
   vk::DynamicLoader Loader;
-  VULKAN_HPP_ASSERT(Loader.success());
+  assert(Loader.success());
   auto GetInstanceProcAddr =
       Loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-  VULKAN_HPP_ASSERT(GetInstanceProcAddr);
+  assert(GetInstanceProcAddr);
   VULKAN_HPP_DEFAULT_DISPATCHER.init(GetInstanceProcAddr);
 
   auto Instance = vk::createInstanceUnique(MyInstanceCreateInfo()).value;
   VULKAN_HPP_DEFAULT_DISPATCHER.init(*Instance);
   hsh::detail::vulkan::Globals.Instance = Instance.get();
 
-#if !defined(NDEBUG)
+#ifndef NDEBUG
   auto Messenger = Instance
                        ->createDebugUtilsMessengerEXTUnique(
                            MyDebugUtilsMessengerCreateInfo())

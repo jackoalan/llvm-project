@@ -1,6 +1,6 @@
 #pragma once
 
-#if !defined(NDEBUG)
+#ifndef NDEBUG
 #if __has_include(<source_location>)
 #include <source_location>
 #define HSH_SOURCE_LOCATION_REP std::source_location
@@ -10,6 +10,7 @@
 #endif
 #endif
 #ifdef HSH_SOURCE_LOCATION_REP
+#include <sstream>
 namespace hsh {
 class SourceLocation : public HSH_SOURCE_LOCATION_REP {
   const char *m_field = nullptr;

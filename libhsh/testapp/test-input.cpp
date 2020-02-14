@@ -13,8 +13,6 @@ struct DrawSomething : pipeline<color_attachment<>> {
                 hsh::vertex_buffer<MyFormat> v,
                 hsh::texture2d<float> tex0) {
     position = u->xf * hsh::float4{v->position, 1.f};
-    hsh::float3x3 normalXf = u->xf;
-    hsh::float3 finalNormal = normalXf * v->normal;
     color_out[0] = hsh::float4{1.f, 1.f, 1.f, 1.f};
   }
 };

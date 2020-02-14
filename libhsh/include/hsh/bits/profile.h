@@ -2,6 +2,10 @@
 
 #if HSH_PROFILE_MODE
 
+#include <iostream>
+#include <sstream>
+#include <unordered_map>
+
 namespace hsh {
 struct value_formatter {
   template <typename T>

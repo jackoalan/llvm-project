@@ -98,6 +98,7 @@ template <unsigned NSTs> struct SelectTargetTraits {
     }
   }
 };
+
 template <> struct SelectTargetTraits<1> {
   using TargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
 #define HSH_SURFACE_OWNER
@@ -181,6 +182,7 @@ template <> struct SelectTargetTraits<1> {
     TargetTraits::ClearAttachments(color, depth);
   }
 };
+
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
 
 } // namespace hsh::detail

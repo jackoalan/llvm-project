@@ -12,6 +12,7 @@
 
 namespace clang::hshgen {
 
+/* Keep in sync with targets.def in libhsh!! */
 enum HshTarget : int {
   HT_GLSL,
   HT_HLSL,
@@ -51,11 +52,12 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
 
 class GenerateAction : public ASTFrontendAction {
   OwningArrayRef<HshTarget> Targets;
-  bool DebugInfo;
+  bool DebugInfo, SourceDump;
 
 public:
-  explicit GenerateAction(ArrayRef<HshTarget> Targets, bool DebugInfo = false)
-      : Targets(Targets), DebugInfo(DebugInfo) {}
+  explicit GenerateAction(ArrayRef<HshTarget> Targets, bool DebugInfo = false,
+                          bool SourceDump = false)
+      : Targets(Targets), DebugInfo(DebugInfo), SourceDump(SourceDump) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
 };

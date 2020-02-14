@@ -7,6 +7,11 @@
 #define VK_USE_PLATFORM_XCB_KHR
 #include <vulkan/vulkan.hpp>
 
+#ifdef HSH_IMPLEMENTATION
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+#define VMA_IMPLEMENTATION
+#endif
+
 #define VMA_USE_STL_CONTAINERS 1
 #define VMA_USE_STL_SHARED_MUTEX 1
 #include "vk_mem_alloc_hsh.h"

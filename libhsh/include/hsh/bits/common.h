@@ -4,12 +4,12 @@ namespace hsh {
 enum class Target : std::uint8_t {
 #define HSH_TARGET(Enumeration, Active) Enumeration,
 #include "targets.def"
-  MAX
+  MaxTarget
 };
 enum class ActiveTarget : std::uint8_t {
 #define HSH_ACTIVE_TARGET(Enumeration) Enumeration,
 #include "targets.def"
-  MAX
+  MaxActiveTarget
 };
 struct uniform_buffer_typeless;
 struct dynamic_uniform_buffer_typeless;
@@ -19,8 +19,6 @@ struct texture_typeless;
 struct render_texture2d;
 
 namespace detail {
-template <hsh::Target T> struct SamplerObject;
-
 constexpr unsigned NumStaticallyActiveTargets = 0
 #define HSH_TARGET(Enumeration, Active) +unsigned(!!(Active))
 #include "targets.def"
@@ -153,6 +151,7 @@ template <Target T> struct TargetTraits {
   template <typename ResTp> struct ResourceFactory {};
 };
 
+template <hsh::Target T> struct SamplerObject;
 struct SamplerBinding;
 template <typename T> struct ClassWrapper {};
 } // namespace hsh::detail

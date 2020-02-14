@@ -622,7 +622,7 @@ public:
   };
 
 private:
-  std::array<FuncPair, std::size_t(ActiveTarget::MAX)> Funcs;
+  std::array<FuncPair, std::size_t(ActiveTarget::MaxActiveTarget)> Funcs;
   GlobalListNode *Next;
 
 public:

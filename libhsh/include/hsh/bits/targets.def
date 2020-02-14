@@ -10,6 +10,7 @@
 HSH_ACTIVE_TARGET(VULKAN_SPIRV)
 #endif
 
+/* Keep in sync with HshGenerator.h!! */
 HSH_TARGET(GLSL, false)
 HSH_TARGET(HLSL, false)
 HSH_TARGET(DXBC, false)

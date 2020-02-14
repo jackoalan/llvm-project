@@ -4889,7 +4889,7 @@ class GenerateConsumer : public ASTConsumer {
   AnalysisDeclContextManager AnalysisMgr;
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
-  bool DebugInfo;
+  bool DebugInfo, SourceDump;
   std::unique_ptr<raw_pwrite_stream> OS;
   llvm::DenseSet<uint64_t> SeenHashes;
   llvm::DenseSet<uint64_t> SeenSamplerHashes;
@@ -4992,10 +4992,11 @@ class GenerateConsumer : public ASTConsumer {
 
 public:
   explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets,
-                            bool DebugInfo)
+                            bool DebugInfo, bool SourceDump)
       : CI(CI), Context(CI.getASTContext()),
         HostPolicy(Context.getPrintingPolicy()), AnalysisMgr(Context),
-        PP(CI.getPreprocessor()), Targets(Targets), DebugInfo(DebugInfo) {
+        PP(CI.getPreprocessor()), Targets(Targets), DebugInfo(DebugInfo),
+        SourceDump(SourceDump) {
     AnalysisMgr.getCFGBuildOptions().OmitLogicalBinaryOperators = true;
   }
 
@@ -5152,6 +5153,20 @@ public:
 
       // Finalize expressions and add host to stage records
       Builder.finalizeResults(Constructor);
+
+      // Dump sources directly for -source-dump
+      if (SourceDump) {
+        for (auto Target : Targets) {
+          auto Policy =
+              MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
+          auto Sources = Builder.printResults(*Policy);
+          for (auto &S : Sources) {
+            if (!S.empty())
+              *OS << S;
+          }
+        }
+        return;
+      }
 
       // Set public access
       Specialization->addDecl(
@@ -5670,14 +5685,16 @@ public:
 
     OS = CI.createDefaultOutputFile(false);
 
-    SourceManager &SM = Context.getSourceManager();
-    StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
-    *OS << "/* Auto-generated hshhead for " << MainName
-        << " */\n"
-           "#include <hsh/hsh.h>\n\n";
+    if (!SourceDump) {
+      SourceManager &SM = Context.getSourceManager();
+      StringRef MainName = SM.getFileEntryForID(SM.getMainFileID())->getName();
+      *OS << "/* Auto-generated hshhead for " << MainName
+          << " */\n"
+             "#include <hsh/hsh.h>\n\n";
 
-    AnonOS << "namespace {\n\n";
-    CoordinatorSpecOS << "hsh::detail::PipelineCoordinator<\n";
+      AnonOS << "namespace {\n\n";
+      CoordinatorSpecOS << "hsh::detail::PipelineCoordinator<\n";
+    }
 
     /*
      * Process all hsh::pipeline derivatives
@@ -5690,25 +5707,29 @@ public:
           return true;
         });
 
-    AnonOS << "}\n\n";
+    if (!SourceDump) {
+      AnonOS << "}\n\n";
 
-    *OS << AnonOS.str() << "template <> hsh::detail::PipelineCoordinatorNode<\n"
-        << CoordinatorSpecOS.str() << ">::Impl>\n"
-        << CoordinatorSpecOS.str() << ">::global{};\n\n";
+      *OS << AnonOS.str()
+          << "template <> hsh::detail::PipelineCoordinatorNode<\n"
+          << CoordinatorSpecOS.str() << ">::Impl>\n"
+          << CoordinatorSpecOS.str() << ">::global{};\n\n";
 
-    /*
+      /*
      * Emit binding macro functions
-     */
-    StringRef OutFileRef = sys::path::filename(CI.getFrontendOpts().OutputFile);
-    SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
-    sys::path::replace_extension(ProfFile, ".hshprof");
-    SmallString<128> AbsProfFile(ProfFile);
-    sys::fs::make_absolute(AbsProfFile);
+       */
+      StringRef OutFileRef =
+          sys::path::filename(CI.getFrontendOpts().OutputFile);
+      SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
+      sys::path::replace_extension(ProfFile, ".hshprof");
+      SmallString<128> AbsProfFile(ProfFile);
+      sys::fs::make_absolute(AbsProfFile);
 
-    *OS << "namespace {\n";
-    for (auto &Exp : SeenHshExpansions)
-      handleHshExpansion(Exp.second, SeenDecls, AbsProfFile);
-    *OS << "}\n";
+      *OS << "namespace {\n";
+      for (auto &Exp : SeenHshExpansions)
+        handleHshExpansion(Exp.second, SeenDecls, AbsProfFile);
+      *OS << "}\n";
+    }
 
     DxcLibrary::SharedInstance.reset();
   }
@@ -5727,20 +5748,22 @@ public:
                                            "previous include was here"));
         return;
       } else {
-        auto ExpectedName =
-            sys::path::filename(CI.getFrontendOpts().OutputFile);
-        if (ExpectedName != RelativePath) {
-          std::string Replacement;
-          raw_string_ostream ReplacementOS(Replacement);
-          ReplacementOS << '\"' << ExpectedName << '\"';
-          Diags.Report(
-              FilenameRange.getBegin(),
-              Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                    "hshhead include must match the output "
-                                    "filename"))
-              << FixItHint::CreateReplacement(FilenameRange,
-                                              ReplacementOS.str());
-          return;
+        if (!SourceDump) {
+          auto ExpectedName =
+              sys::path::filename(CI.getFrontendOpts().OutputFile);
+          if (ExpectedName != RelativePath) {
+            std::string Replacement;
+            raw_string_ostream ReplacementOS(Replacement);
+            ReplacementOS << '\"' << ExpectedName << '\"';
+            Diags.Report(
+                FilenameRange.getBegin(),
+                Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                      "hshhead include must match the output "
+                                      "filename"))
+                << FixItHint::CreateReplacement(FilenameRange,
+                                                ReplacementOS.str());
+            return;
+          }
         }
         HeadInclude.emplace(HashLoc, RelativePath);
       }
@@ -5894,7 +5917,8 @@ namespace clang::hshgen {
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   dumper().setPrintingPolicy(CI.getASTContext().getPrintingPolicy());
-  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets, DebugInfo);
+  auto Consumer =
+      std::make_unique<GenerateConsumer>(CI, Targets, DebugInfo, SourceDump);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(
           *Consumer, CI.getPreprocessor(), CI.getFileManager(),
