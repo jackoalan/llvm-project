@@ -479,11 +479,11 @@ int main(int argc, char **argv) {
       UniData.xf[3][3] = 1.f;
       PipelineBind.Uniform.load(UniData);
 
-      Surface.acquireNextImage();
+      Surface.acquire_next_image();
       RenderTexture.attach();
       hsh::clear_attachments();
       PipelineBind.Binding.draw(0, 3);
-      RenderTexture.resolveSurface(Surface.get());
+      RenderTexture.resolve_surface(Surface.get());
       hsh::detail::vulkan::Globals.PostRender();
       // std::cerr << std::chrono::duration_cast<std::chrono::microseconds>(
       //    std::chrono::steady_clock::now() - start)

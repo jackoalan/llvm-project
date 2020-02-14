@@ -159,7 +159,7 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       assert(false && "unhandled case");
     }
   }
-  void ResolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
+  void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.ResolveColorBinding(idx, region, reattach); break;
 #include "targets.def"
@@ -167,7 +167,7 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       assert(false && "unhandled case");
     }
   }
-  void ResolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept {
+  void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.ResolveDepthBinding(idx, region, reattach); break;
 #include "targets.def"
@@ -238,8 +238,8 @@ RenderTextureBinding GetColor(uint32_t idx) const noexcept { return _##Enumerati
 RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return _##Enumeration.GetDepth(idx); } \
 void Attach() noexcept { _##Enumeration.Attach(); } \
 void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept { _##Enumeration.ResolveSurface(surf, reattach); } \
-void ResolveColorBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.ResolveColorBinding(idx, region, reattach); } \
-void ResolveDepthBinding(uint32_t idx, Rect2D region, bool reattach) noexcept { _##Enumeration.ResolveDepthBinding(idx, region, reattach); }
+void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept { _##Enumeration.ResolveColorBinding(idx, region, reattach); } \
+void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept { _##Enumeration.ResolveDepthBinding(idx, region, reattach); }
 #include "targets.def"
 #endif
 #ifdef HSH_SURFACE_OWNER
