@@ -179,8 +179,88 @@ template <> struct SelectTargetTraits<1> {
   }
 
   static void ClearAttachments(bool color, bool depth) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
     TargetTraits::ClearAttachments(color, depth);
+#include "targets.def"
   }
+};
+
+template <> struct SelectTargetTraits<0> {
+#define HSH_SURFACE_OWNER
+#define HSH_TRAIT_BINDING SurfaceBinding
+#define HSH_NULL_TRAIT SurfaceOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER SurfaceOwner
+#define HSH_NULL_TRAIT SurfaceBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING UniformBufferBinding
+#define HSH_NULL_TRAIT UniformBufferOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER UniformBufferOwner
+#define HSH_NULL_TRAIT UniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicUniformBufferBinding
+#define HSH_NULL_TRAIT DynamicUniformBufferOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicUniformBufferOwner
+#define HSH_NULL_TRAIT DynamicUniformBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING VertexBufferBinding
+#define HSH_NULL_TRAIT VertexBufferOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER VertexBufferOwner
+#define HSH_NULL_TRAIT VertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_DYNAMIC_OWNER
+#define HSH_TRAIT_BINDING DynamicVertexBufferBinding
+#define HSH_NULL_TRAIT DynamicVertexBufferOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER DynamicVertexBufferOwner
+#define HSH_NULL_TRAIT DynamicVertexBufferBinding
+#include "trivial_trait.def"
+
+#define HSH_TRAIT_BINDING TextureBinding
+#define HSH_NULL_TRAIT TextureOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER TextureOwner
+#define HSH_NULL_TRAIT TextureBinding
+#include "trivial_trait.def"
+
+#define HSH_RENDER_TEXTURE_OWNER
+#define HSH_NULL_TRAIT RenderTextureOwner
+#include "trait.def"
+
+#define HSH_TRAIT_OWNER RenderTextureOwner
+#define HSH_NULL_TRAIT RenderTextureBinding
+#include "trivial_trait.def"
+
+#define HSH_PIPELINE_BINDING
+#define HSH_NULL_TRAIT PipelineBinding
+#include "trait.def"
+
+#define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
+#define HSH_TRAIT_TEMPLATE_REFS <ResTp>
+#define HSH_NULL_TRAIT ResourceFactory
+#include "trait.def"
+
+  template <typename T, typename... Args>
+  static typename decltype(T::Binding)::Owner
+  CreateResource(const SourceLocation &location, Args... args) {
+    return {};
+  }
+
+  static void ClearAttachments(bool color, bool depth) noexcept {}
 };
 
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;

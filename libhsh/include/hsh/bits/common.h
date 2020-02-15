@@ -2,7 +2,8 @@
 
 namespace hsh {
 enum class Target : std::uint8_t {
-#define HSH_TARGET(Enumeration, Active) Enumeration,
+  NullTarget,
+#define HSH_TARGET(Enumeration) Enumeration,
 #include "targets.def"
   MaxTarget
 };
@@ -19,15 +20,12 @@ struct texture_typeless;
 struct render_texture2d;
 
 namespace detail {
-constexpr unsigned NumStaticallyActiveTargets = 0
-#define HSH_TARGET(Enumeration, Active) +unsigned(!!(Active))
-#include "targets.def"
-    ;
-static_assert(NumStaticallyActiveTargets != 0,
-              "No hsh targets are statically active");
+constexpr unsigned NumStaticallyActiveTargets =
+    unsigned(ActiveTarget::MaxActiveTarget);
 constexpr enum Target FirstStaticallyActiveTarget() noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration) return Target::Enumeration;
 #include "targets.def"
+  return Target::NullTarget;
 }
 inline enum Target CurrentTarget = FirstStaticallyActiveTarget();
 } // namespace detail

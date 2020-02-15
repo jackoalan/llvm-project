@@ -447,7 +447,9 @@ void ReportUnsupportedStmt(const Stmt *S, const ASTContext &Context) {
 }
 
 void ReportUnsupportedFunctionCall(const Stmt *S, const ASTContext &Context) {
-  ReportCustom(S, Context, "function calls are limited to hsh intrinsics");
+  ReportCustom(S, Context,
+               "function calls are limited to hsh intrinsics and static "
+               "constexpr functions");
 }
 
 void ReportUnsupportedTypeReference(const Stmt *S, const ASTContext &Context) {
@@ -483,6 +485,20 @@ void ReportBadRecordType(const Decl *D, const ASTContext &Context) {
 
 void ReportConstAssignment(const Expr *AssignExpr, const ASTContext &Context) {
   ReportCustom(AssignExpr, Context, "cannot assign data to previous stages");
+}
+
+void ReportOverloadedFunctionUsage(const FunctionDecl *Overloaded,
+                                   const FunctionDecl *Prev,
+                                   const ASTContext &Context) {
+  ReportCustom(Overloaded, Context,
+               "overloaded functions may not be used in the same pipeline");
+  ReportCustom(Prev, Context, "previously used function is here",
+               DiagnosticsEngine::Note);
+}
+
+void ReportUndefinedFunctionUsage(const FunctionDecl *FD,
+                                  const ASTContext &Context) {
+  ReportCustom(FD, Context, "constexpr functions must be fully defined");
 }
 
 enum HshBuiltinType {
@@ -1645,13 +1661,16 @@ public:
     return nullptr;
   }
 
-  bool checkHshFieldTypeCompatibility(const ASTContext &Context,
-                                      const ValueDecl *VD) const {
+  bool checkHshTypeCompatibility(const ASTContext &Context, const ValueDecl *VD,
+                                 bool AllowTextures) const {
     QualType Tp = VD->getType();
     if (auto *VarD = dyn_cast<VarDecl>(VD))
       Tp = ResolveParmType(VarD);
+    else if (auto *FuncD = dyn_cast<FunctionDecl>(VD))
+      Tp = FuncD->getReturnType();
     HshBuiltinType HBT = identifyBuiltinType(Tp);
-    if (HBT != HBT_None && !HshBuiltins::isTextureType(HBT)) {
+    if (HBT != HBT_None &&
+        (AllowTextures || !HshBuiltins::isTextureType(HBT))) {
       return true;
     } else if (Tp->isIntegralOrEnumerationType()) {
       if (Context.getIntWidth(Tp) != 32) {
@@ -1667,11 +1686,32 @@ public:
     return false;
   }
 
+  bool checkHshFieldTypeCompatibility(const ASTContext &Context,
+                                      const ValueDecl *VD) const {
+    return checkHshTypeCompatibility(Context, VD, false);
+  }
+
+  bool checkHshParamTypeCompatibility(const ASTContext &Context,
+                                      const ValueDecl *VD) const {
+    return checkHshTypeCompatibility(Context, VD, true);
+  }
+
   bool checkHshRecordCompatibility(const ASTContext &Context,
                                    const CXXRecordDecl *Record) const {
     bool Ret = true;
     for (const auto *FD : Record->fields())
       if (!checkHshFieldTypeCompatibility(Context, FD))
+        Ret = false;
+    return Ret;
+  }
+
+  bool checkHshFunctionCompatibility(const ASTContext &Context,
+                                     const FunctionDecl *FD) const {
+    bool Ret = true;
+    if (FD->getReturnType() != Context.VoidTy)
+      Ret = checkHshParamTypeCompatibility(Context, FD);
+    for (const auto *Param : FD->parameters())
+      if (!checkHshParamTypeCompatibility(Context, Param))
         Ret = false;
     return Ret;
   }
@@ -2136,6 +2176,12 @@ struct AttributeRecord {
   HshAttributeKind Kind;
 };
 
+struct FunctionRecord {
+  const IdentifierInfo *Identifier;
+  const FunctionDecl *Function;
+  unsigned UseStages;
+};
+
 enum HshTextureKind {
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
@@ -2223,6 +2269,7 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
   HshTarget Target;
   virtual ~ShaderPrintingPolicyBase() = default;
   virtual void printStage(raw_ostream &OS, ASTContext &Context,
+                          ArrayRef<FunctionRecord> FunctionRecords,
                           ArrayRef<UniformRecord> UniformRecords,
                           CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                           ArrayRef<AttributeRecord> Attributes,
@@ -2435,6 +2482,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
   }
 
   void printStage(raw_ostream &OS, ASTContext &Context,
+                  ArrayRef<FunctionRecord> FunctionRecords,
                   ArrayRef<UniformRecord> UniformRecords,
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                   ArrayRef<AttributeRecord> Attributes,
@@ -2665,6 +2713,7 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
 )"};
 
   void printStage(raw_ostream &OS, ASTContext &Context,
+                  ArrayRef<FunctionRecord> FunctionRecords,
                   ArrayRef<UniformRecord> UniformRecords,
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                   ArrayRef<AttributeRecord> Attributes,
@@ -2676,6 +2725,32 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     OS << HLSLRuntimeSupport;
     ThisStmts = Stmts;
     ThisSampleCalls = SampleCalls;
+
+    auto PrintFunction = [&](const FunctionDecl *FD) {
+      OS << "static ";
+      SuppressSpecifiers = false;
+      FD->getReturnType().print(OS, *this);
+      OS << ' ';
+      SuppressSpecifiers = true;
+      FD->print(OS, *this);
+    };
+    bool OldTerseOutput = TerseOutput;
+    TerseOutput = true;
+    bool OldSuppressSpecifiers = SuppressSpecifiers;
+    for (auto &Function : FunctionRecords) {
+      if ((1u << Stage) & Function.UseStages) {
+        PrintFunction(Function.Function);
+        OS << ";\n";
+      }
+    }
+    TerseOutput = false;
+    for (auto &Function : FunctionRecords) {
+      if ((1u << Stage) & Function.UseStages) {
+        PrintFunction(Function.Function);
+      }
+    }
+    TerseOutput = OldTerseOutput;
+    SuppressSpecifiers = OldSuppressSpecifiers;
 
     static constexpr std::array<char, 4> VectorComponents{'x', 'y', 'z', 'w'};
 
@@ -2992,6 +3067,7 @@ class StagesBuilder {
       InterStageRecords; /* Indexed by consumer stage */
   std::array<StageStmtList, HshMaxStage> StageStmts;
   std::array<SmallVector<SampleCall, 4>, HshMaxStage> SampleCalls;
+  SmallVector<FunctionRecord, 4> FunctionRecords;
   SmallVector<UniformRecord, 4> UniformRecords;
   SmallVector<AttributeRecord, 4> AttributeRecords;
   SmallVector<TextureRecord, 8> Textures;
@@ -3287,7 +3363,25 @@ public:
   }
 
   void registerParmVarRef(ParmVarDecl *PVD, HshStage Stage) {
-    UseParmVarDecls[PVD] |= 1 << Stage;
+    UseParmVarDecls[PVD] |= 1u << unsigned(Stage);
+  }
+
+  void registerFunctionDecl(FunctionDecl *FD, HshStage Stage) {
+    if (auto *FDDecl = FD->getDefinition())
+      FD = FDDecl;
+    else
+      ReportUndefinedFunctionUsage(FD, Context);
+    auto Search = std::find_if(
+        FunctionRecords.begin(), FunctionRecords.end(),
+        [&](const auto &T) { return T.Identifier == FD->getIdentifier(); });
+    if (Search == FunctionRecords.end()) {
+      FunctionRecords.push_back(
+          FunctionRecord{FD->getIdentifier(), FD, 1u << unsigned(Stage)});
+    } else if (Search->Function == FD) {
+      Search->UseStages |= 1u << unsigned(Stage);
+    } else {
+      ReportOverloadedFunctionUsage(FD, Search->Function, Context);
+    }
   }
 
   void finalizeResults(CXXConstructorDecl *Ctor) {
@@ -3355,7 +3449,8 @@ public:
         raw_string_ostream OS(Sources[S]);
         HshStage NextStage = nextUsedStage(HshStage(S));
         Policy.printStage(
-            OS, Context, UniformRecords, InterStageRecords[S].getRecord(),
+            OS, Context, FunctionRecords, UniformRecords,
+            InterStageRecords[S].getRecord(),
             NextStage != HshNoStage ? InterStageRecords[NextStage].getRecord()
                                     : nullptr,
             AttributeRecords, Textures, SamplerBindings, NumColorAttachments,
@@ -4192,7 +4287,11 @@ class StageStmtPartitioner {
         if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
           HshBuiltinFunction Func =
               Partitioner.Builtins.identifyBuiltinFunction(FD);
-          if (Func != HBF_None)
+          bool CompatibleFD =
+              FD->isConstexpr() &&
+              Partitioner.Builtins.checkHshFunctionCompatibility(
+                  Partitioner.Context, FD);
+          if (CompatibleFD || Func != HBF_None)
             DoVisitExprRange(CallExpr->arguments(), Stage);
         }
       }
@@ -4488,10 +4587,16 @@ class StageStmtPartitioner {
         if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
           HshBuiltinFunction Func =
               Partitioner.Builtins.identifyBuiltinFunction(FD);
-          if (Func != HBF_None) {
+          bool CompatibleFD =
+              FD->isConstexpr() &&
+              Partitioner.Builtins.checkHshFunctionCompatibility(
+                  Partitioner.Context, FD);
+          if (CompatibleFD || Func != HBF_None) {
             auto Arguments = DoVisitExprRange(CallExpr->arguments(), Stage);
             if (!Arguments)
               return nullptr;
+            if (Func == HBF_None)
+              Builder.registerFunctionDecl(FD, Stage);
             return CallExpr::Create(Partitioner.Context, CallExpr->getCallee(),
                                     *Arguments, CallExpr->getType(), VK_XValue,
                                     {});

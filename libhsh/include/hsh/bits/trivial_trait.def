@@ -24,7 +24,8 @@ struct HSH_MULTI_TRAIT {
 #endif
 #define HSH_ACTIVE_TARGET(Enumeration) static_assert(std::is_trivially_copyable_v<TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits<" #Enumeration ">::" HSH_XSTR(HSH_MULTI_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable");
 #include "targets.def"
-  std::aligned_union_t<0
+  struct NullTarget {};
+  std::aligned_union_t<0, NullTarget
 #define HSH_ACTIVE_TARGET(Enumeration) , TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
 #include "targets.def"
     > _Storage;
@@ -55,9 +56,13 @@ struct HSH_SINGLE_TRAIT {
   }
 #endif
 HSH_SINGLE_TRAIT() noexcept : _Storage{} {}
+  struct NullTarget {};
+  std::aligned_union_t<0, NullTarget
+#define HSH_ACTIVE_TARGET(Enumeration) , TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS
+#include "targets.def"
+  > _Storage;
 #define HSH_ACTIVE_TARGET(Enumeration) \
 static_assert(std::is_trivially_copyable_v<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS>, "TargetTraits::" HSH_XSTR(HSH_SINGLE_TRAIT) HSH_XSTR(HSH_TRAIT_TEMPLATE_REFS) " is not trivially copyable"); \
-std::aligned_storage_t<sizeof(TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS), alignof(TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS)> _Storage; \
 HSH_SINGLE_TRAIT(const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &Obj) noexcept { new (std::addressof(_Storage)) TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS(Obj); } \
 operator TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { return *reinterpret_cast<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
 TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { return *reinterpret_cast<TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS *>(std::addressof(_Storage)); } \
@@ -67,6 +72,24 @@ bool IsValid() const noexcept { return get_##Enumeration().IsValid(); }
 #include "targets.def"
   };
 #undef HSH_SINGLE_TRAIT
+#endif
+
+#ifdef HSH_NULL_TRAIT
+HSH_TRAIT_TEMPLATE_PARMS
+struct HSH_NULL_TRAIT {
+#ifdef HSH_TRAIT_OWNER
+  using Owner = HSH_TRAIT_OWNER;
+#endif
+#ifdef HSH_TRAIT_BINDING
+  using Binding = HSH_TRAIT_BINDING;
+  operator Binding() const noexcept {
+    return {};
+  }
+#endif
+HSH_NULL_TRAIT() noexcept = default;
+bool IsValid() const noexcept { return false; }
+  };
+#undef HSH_NULL_TRAIT
 #endif
 
 #undef HSH_TRAIT_TEMPLATE_PARMS

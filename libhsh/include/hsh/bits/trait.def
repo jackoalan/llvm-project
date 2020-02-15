@@ -214,6 +214,7 @@ struct HSH_SINGLE_TRAIT {
   operator Binding() const noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration) return Binding(get_##Enumeration());
 #include "targets.def"
+    return {};
   }
 #endif
 #define HSH_ACTIVE_TARGET(Enumeration) \
@@ -254,6 +255,44 @@ void Draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.Draw(start, 
 #endif
   };
 #undef HSH_SINGLE_TRAIT
+#endif
+
+#ifdef HSH_NULL_TRAIT
+HSH_TRAIT_TEMPLATE_PARMS
+struct HSH_NULL_TRAIT {
+#ifdef HSH_TRAIT_OWNER
+  using Owner = HSH_TRAIT_OWNER;
+  HSH_NULL_TRAIT(const Owner &Owner) noexcept {}
+#endif
+#ifdef HSH_TRAIT_BINDING
+  using Binding = HSH_TRAIT_BINDING;
+  operator Binding() const noexcept {
+    return {};
+  }
+#endif
+template <typename... Parms> \
+HSH_NULL_TRAIT(Parms&&... p) noexcept {} \
+bool IsValid() const noexcept { return false; }
+#ifdef HSH_DYNAMIC_OWNER
+void *Map() noexcept { return nullptr; } \
+void Unmap() noexcept {}
+#endif
+#ifdef HSH_RENDER_TEXTURE_OWNER
+RenderTextureBinding GetColor(uint32_t idx) const noexcept { return {}; } \
+RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return {}; } \
+void Attach() noexcept {} \
+void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept {} \
+void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept {} \
+void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
+#endif
+#ifdef HSH_SURFACE_OWNER
+bool AcquireNextImage() noexcept { return false; }
+#endif
+#ifdef HSH_PIPELINE_BINDING
+void Draw(uint32_t start, uint32_t count) noexcept {}
+#endif
+  };
+#undef HSH_NULL_TRAIT
 #endif
 
 #undef HSH_TRAIT_TEMPLATE_PARMS

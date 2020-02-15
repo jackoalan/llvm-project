@@ -14,6 +14,7 @@ namespace clang::hshgen {
 
 /* Keep in sync with targets.def in libhsh!! */
 enum HshTarget : int {
+  HT_NULL,
   HT_GLSL,
   HT_HLSL,
   HT_DXBC,
@@ -29,6 +30,8 @@ enum HshTarget : int {
 constexpr StringRef HshTargetToString(HshTarget Target) {
   switch (Target) {
   default:
+  case HT_NULL:
+    return llvm::StringLiteral("null");
   case HT_GLSL:
     return llvm::StringLiteral("glsl");
   case HT_HLSL:

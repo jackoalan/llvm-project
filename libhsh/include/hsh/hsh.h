@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <list>
@@ -14,7 +15,7 @@
 
 // TODO: Make CMake set these
 #define HSH_ENABLE_VULKAN 1
-#define HSH_PROFILE_MODE 1
+#define HSH_PROFILE_MODE 0
 
 #include "bits/common.h"
 #include "bits/builtin_types.h"

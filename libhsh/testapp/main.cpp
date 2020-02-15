@@ -1,4 +1,5 @@
 #define HSH_IMPLEMENTATION
+#include <iostream>
 #include <chrono>
 #include <hsh/hsh.h>
 #include <string_view>

@@ -1,8 +1,16 @@
 #pragma once
 
-#if HSH_ENABLE_VULKAN
-
 namespace hsh::detail {
+
+template <> struct ShaderCode<Target::VULKAN_SPIRV> {
+  enum Stage Stage = Stage::Vertex;
+  ShaderDataBlob<uint32_t> Blob;
+  constexpr ShaderCode() noexcept = default;
+  constexpr ShaderCode(enum Stage Stage, ShaderDataBlob<uint32_t> Blob) noexcept
+      : Stage(Stage), Blob(Blob) {}
+};
+
+#if HSH_ENABLE_VULKAN
 
 constexpr vk::Format HshToVkFormat(Format Format) noexcept {
   switch (Format) {
@@ -264,14 +272,6 @@ HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
     return vk::ComponentSwizzle::eA;
   }
 }
-
-template <> struct ShaderCode<Target::VULKAN_SPIRV> {
-  enum Stage Stage = Stage::Vertex;
-  ShaderDataBlob<uint32_t> Blob;
-  constexpr ShaderCode() noexcept = default;
-  constexpr ShaderCode(enum Stage Stage, ShaderDataBlob<uint32_t> Blob) noexcept
-      : Stage(Stage), Blob(Blob) {}
-};
 
 template <> struct ShaderObject<Target::VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
@@ -884,6 +884,6 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
 #endif
 };
 
-} // namespace hsh::detail
-
 #endif
+
+} // namespace hsh::detail

@@ -1,3 +1,69 @@
+# HSH Shader Pipeline and Graphics Library
+
+**HSH** is a modular shader compilation pipeline and run-time graphics library. 
+ 
+As an extended fork of LLVM's monorepo, HSH utilizes clang's parsing
+capabilities to transform C++17 semantics into complete Vulkan pipelines
+with HLSL as an intermediate shader language. The pipelines are encoded into
+C++ headers along with necessary metadata to create pipelines at run-time.
+
+Shader pipelines are defined as C++ source files with one or more 
+classes inheriting `hsh::pipeline`. The constructors of these pipeline classes
+contain statements using the builtin hsh types and intrinsic functions to
+define shader code in a language-agnostic manner. The constructor parameters
+may be declared with one or more resource handles; interfacing application
+uniform data and textures with the generated shaders. Along with the shader
+data in an API-ready representation, metadata is generated to establish vertex
+formats, sampler parameters, blend modes and other information used by the
+pipeline. Init-time declarations are generated forming an application-wide
+linked list of all compiled pipelines. This list is iterated and nodes are
+called to build all pipelines at run-time before actual rendering begins.
+
+C++ templates may be used to define variations on a common shader model.
+All specializations of the template supply constant parameters that the shader
+template may use to vary specific aspects of its functionality (i.e. vertex
+format array sizes, control-flow selection of post-processing statements,
+blend modes, etc). For applications that cannot reasonably declare all possible
+template specializations explicitly, a profile-guided mode is available where
+non-constant values are bound to template parameters. Rendering is not
+available in this profiling mode. Instead, applications are expected to
+bind every possible pipeline specialization (based on all potential graphics
+resources or other artistic information) and exit. A header file of these
+unique specializations is emitted. Therefore, all pipelines can be compiled
+offline as long as the application can operate as an enumerating pipeline
+bind tool. Online pipeline compilation is currently outside the scope of hsh.
+
+## hshgen Build Tool
+
+*Found at `clang/tools/hshgen/hshgen.cpp` and `clang/lib/Hsh/HshGenerator.cpp`*
+
+This compile-time tool is used to generate shader code and pipeline metadata
+headers (`.hshhead`) from C++ files. When combined with the supplied CMake
+package, applications can easily integrate hshgen on a per-source-file basis.
+
+## libhsh Run-time Library
+
+*Found at `libhsh`*
+
+The offline preparation of hshgen is applied at run-time via the header-only
+**libhsh**. This library serves as a lightweight wrapper around the Vulkan
+graphics API. Types and constructs are provided to easily set up a rendering
+loop and resource ownership model.
+
+## Getting Started with HSH
+
+In general, the build process of hsh is the same as vanilla LLVM. Build targets
+of interest include:
+
+| Target               | Description                                                        |
+|----------------------|--------------------------------------------------------------------|
+| hshgen               | Compile-time hshhead generator tool                                |
+| check-hsh            | Regression tests for verifying translated source code              |
+| install-distribution | Installs a minimal hsh distribution with hshgen and libhsh headers |
+
+The original README contains detailed instructions on the build workflow as
+follows:
+
 # The LLVM Compiler Infrastructure
 
 This directory and its sub-directories contain source code for LLVM,

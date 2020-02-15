@@ -9,16 +9,20 @@ constexpr hsh::sampler TestSampler(hsh::Nearest, hsh::Nearest, hsh::Linear);
 
 #if 1
 struct DrawSomething : pipeline<color_attachment<>> {
+  static constexpr hsh::float4 DoMultiply(hsh::float4x4 xf, hsh::float3 vec) {
+    return xf * hsh::float4{vec, 1.f};
+  }
   DrawSomething(hsh::dynamic_uniform_buffer<UniformData> u,
                 hsh::vertex_buffer<MyFormat> v,
                 hsh::texture2d<float> tex0) {
-    position = u->xf * hsh::float4{v->position, 1.f};
+    position = DoMultiply(u->xf, v->position);
+    //position = u->xf * hsh::float4{v->position, 1.f};
     color_out[0] = hsh::float4{1.f, 1.f, 1.f, 1.f};
   }
 };
 #endif
 
-#if 1
+#if 0
 template <bool Something, class AT>
 struct DrawSomethingTemplated : pipeline<color_attachment<>> {
   DrawSomethingTemplated(hsh::dynamic_uniform_buffer<UniformData> u,
@@ -50,7 +54,7 @@ hsh::binding_typeless BindDrawSomething(hsh::dynamic_uniform_buffer_typeless u,
 }
 #endif
 
-#if 1
+#if 0
 hsh::binding_typeless BindDrawSomethingTemplated(hsh::dynamic_uniform_buffer_typeless u,
                                         hsh::vertex_buffer_typeless v,
                                         hsh::texture2d<float> tex0,
