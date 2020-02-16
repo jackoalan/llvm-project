@@ -646,6 +646,12 @@ public:
     for (auto *Node = GetHead(); Node; Node = Node->GetNext())
       Node->Destroy(T);
   }
+  static std::size_t CountAll() noexcept {
+    std::size_t Ret = 0;
+    for (auto *Node = GetHead(); Node; Node = Node->GetNext())
+      ++Ret;
+    return Ret;
+  }
 };
 inline GlobalListNode *GlobalListNode::Head = nullptr;
 

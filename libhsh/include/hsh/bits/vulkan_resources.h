@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string_view>
+using namespace std::literals;
+
 namespace hsh::detail {
 
 template <> struct ShaderCode<Target::VULKAN_SPIRV> {
@@ -276,10 +279,13 @@ HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
 template <> struct ShaderObject<Target::VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
   ShaderObject() noexcept = default;
-  vk::ShaderModule Get(const vk::ShaderModuleCreateInfo &Info) noexcept {
-    if (!ShaderModule)
+  vk::ShaderModule Get(const vk::ShaderModuleCreateInfo &Info,
+                       const SourceLocation &Location) noexcept {
+    if (!ShaderModule) {
       ShaderModule =
           vulkan::Globals.Device.createShaderModuleUnique(Info).value;
+      vulkan::Globals.SetDebugObjectName(Location, ShaderModule.get());
+    }
     return ShaderModule.get();
   }
   void Destroy() noexcept { ShaderModule.reset(); }
@@ -289,7 +295,7 @@ template <> struct SamplerObject<Target::VULKAN_SPIRV> {
   std::array<std::array<vk::UniqueSampler, MaxMipCount - 1>, 2> Samplers;
   SamplerObject() noexcept = default;
   vk::Sampler Get(const vk::SamplerCreateInfo &Info, bool Int,
-                  unsigned MipCount) noexcept {
+                  unsigned MipCount, const SourceLocation &Location) noexcept {
     assert(MipCount && MipCount < MaxMipCount);
     vk::UniqueSampler &Samp = Samplers[Int][MipCount - 1];
     if (!Samp) {
@@ -300,13 +306,14 @@ template <> struct SamplerObject<Target::VULKAN_SPIRV> {
       if (Int)
         ModInfo.setBorderColor(vk::BorderColor(int(Info.borderColor) + 1));
       Samp = vulkan::Globals.Device.createSamplerUnique(ModInfo).value;
+      vulkan::Globals.SetDebugObjectName(Location, Samp.get());
     }
     return Samp.get();
   }
-  vk::Sampler Get(const vk::SamplerCreateInfo &Info,
-                  texture_typeless tex) noexcept {
+  vk::Sampler Get(const vk::SamplerCreateInfo &Info, texture_typeless tex,
+                  const SourceLocation &Location) noexcept {
     return Get(Info, tex.Binding.get_VULKAN_SPIRV().Integer,
-               tex.Binding.get_VULKAN_SPIRV().NumMips);
+               tex.Binding.get_VULKAN_SPIRV().NumMips, Location);
   }
   void Destroy() noexcept {
     for (auto &SampI : Samplers)
@@ -318,11 +325,11 @@ template <> struct SamplerObject<Target::VULKAN_SPIRV> {
 namespace vulkan {
 template <typename Impl> struct DescriptorPoolWrites {
   std::size_t NumWrites = 0;
-  std::array<vk::WriteDescriptorSet, MaxUniforms + MaxImages + MaxSamplers>
+  std::array<VkWriteDescriptorSet, MaxUniforms + MaxImages + MaxSamplers>
       Writes;
-  std::array<vk::DescriptorBufferInfo, MaxUniforms> Uniforms;
-  std::array<vk::DescriptorImageInfo, MaxImages> Images;
-  std::array<vk::DescriptorImageInfo, MaxSamplers> Samplers;
+  std::array<VkDescriptorBufferInfo, MaxUniforms> Uniforms;
+  std::array<VkDescriptorImageInfo, MaxImages> Images;
+  std::array<VkDescriptorImageInfo, MaxSamplers> Samplers;
   template <std::size_t... USeq, std::size_t... ISeq, std::size_t... SSeq>
   constexpr DescriptorPoolWrites(std::index_sequence<USeq...>,
                                  std::index_sequence<ISeq...>,
@@ -341,7 +348,7 @@ template <typename Impl> struct DescriptorPoolWrites {
                              std::make_index_sequence<MaxImages>(),
                              std::make_index_sequence<MaxSamplers>()) {
     Iterators Its(DstSet, *this);
-    (Its.add(args), ...);
+    (Its.Add(args), ...);
     NumWrites = Its.WriteIt - Its.WriteBegin;
   }
 
@@ -363,64 +370,65 @@ template <typename Impl> struct DescriptorPoolWrites {
           SamplerBegin(Writes.Samplers.begin()), WriteIt(Writes.Writes.begin()),
           UniformIt(Writes.Uniforms.begin()), ImageIt(Writes.Images.begin()),
           SamplerIt(Writes.Samplers.begin()) {}
-    void add(uniform_buffer_typeless uniform) noexcept {
+    void Add(uniform_buffer_typeless uniform) noexcept {
       auto UniformIdx = UniformIt - UniformBegin;
       auto &Uniform = *UniformIt++;
-      Uniform.setBuffer(uniform.Binding.get_VULKAN_SPIRV());
+      Uniform = vk::DescriptorBufferInfo(uniform.Binding.get_VULKAN_SPIRV(), 0,
+                                         VK_WHOLE_SIZE);
       auto &Write = *WriteIt++;
-      Write.setDstSet(DstSet);
-      Write.setDstBinding(UniformIdx);
-      Write.setDescriptorCount(1);
-      Write.setDescriptorType(vk::DescriptorType::eUniformBufferDynamic);
-      Write.setPBufferInfo(&Uniform);
+      Write = vk::WriteDescriptorSet(
+          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
+          {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
-    void add(dynamic_uniform_buffer_typeless uniform) noexcept {
+    void Add(dynamic_uniform_buffer_typeless uniform) noexcept {
       auto UniformIdx = UniformIt - UniformBegin;
       auto &Uniform = *UniformIt++;
-      Uniform.setBuffer(uniform.Binding.get_VULKAN_SPIRV().GetBuffer());
+      Uniform = vk::DescriptorBufferInfo(
+          uniform.Binding.get_VULKAN_SPIRV().GetBuffer(), 0, VK_WHOLE_SIZE);
       auto &Write = *WriteIt++;
-      Write.setDstSet(DstSet);
-      Write.setDstBinding(UniformIdx);
-      Write.setDescriptorCount(1);
-      Write.setDescriptorType(vk::DescriptorType::eUniformBufferDynamic);
-      Write.setPBufferInfo(&Uniform);
+      Write = vk::WriteDescriptorSet(
+          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
+          {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
-    static void add(vertex_buffer_typeless) noexcept {}
-    static void add(dynamic_vertex_buffer_typeless) noexcept {}
-    void add(texture_typeless texture) noexcept {
+    static void Add(vertex_buffer_typeless) noexcept {}
+    static void Add(dynamic_vertex_buffer_typeless) noexcept {}
+    void Add(texture_typeless texture) noexcept {
       auto ImageIdx = ImageIt - ImageBegin;
       auto &Image = *ImageIt++;
-      Image.setImageView(texture.Binding.get_VULKAN_SPIRV().ImageView);
+      Image = vk::DescriptorImageInfo(
+          {}, texture.Binding.get_VULKAN_SPIRV().ImageView,
+          vk::ImageLayout::eShaderReadOnlyOptimal);
       auto &Write = *WriteIt++;
-      Write.setDstSet(DstSet);
-      Write.setDstBinding(MaxUniforms + ImageIdx);
-      Write.setDescriptorCount(1);
-      Write.setDescriptorType(vk::DescriptorType::eSampledImage);
-      Write.setPImageInfo(&Image);
+      Write = vk::WriteDescriptorSet(
+          DstSet, MaxUniforms + ImageIdx, 0, 1,
+          vk::DescriptorType::eSampledImage,
+          reinterpret_cast<vk::DescriptorImageInfo *>(&Image));
     }
-    void add(render_texture2d texture) noexcept {
+    void Add(render_texture2d texture) noexcept {
       auto ImageIdx = ImageIt - ImageBegin;
       auto &Image = *ImageIt++;
-      Image.setImageView(texture.Binding.get_VULKAN_SPIRV().GetImageView());
+      Image = vk::DescriptorImageInfo(
+          {}, texture.Binding.get_VULKAN_SPIRV().GetImageView(),
+          vk::ImageLayout::eShaderReadOnlyOptimal);
       auto &Write = *WriteIt++;
-      Write.setDstSet(DstSet);
-      Write.setDstBinding(MaxUniforms + ImageIdx);
-      Write.setDescriptorCount(1);
-      Write.setDescriptorType(vk::DescriptorType::eSampledImage);
-      Write.setPImageInfo(&Image);
+      Write = vk::WriteDescriptorSet(
+          DstSet, MaxUniforms + ImageIdx, 0, 1,
+          vk::DescriptorType::eSampledImage,
+          reinterpret_cast<vk::DescriptorImageInfo *>(&Image));
     }
-    void add(hsh::detail::SamplerBinding sampler) noexcept {
+    void Add(hsh::detail::SamplerBinding sampler) noexcept {
       auto SamplerIdx = SamplerIt - SamplerBegin;
       auto &Sampler = *SamplerIt++;
-      Sampler.setSampler(
+      Sampler = vk::DescriptorImageInfo(
           Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.idx].get().Get(
-              Impl::cdata_VULKAN_SPIRV.Samplers[sampler.idx], sampler.tex));
+              Impl::cdata_VULKAN_SPIRV.Samplers[sampler.idx], sampler.tex,
+              Impl::cdata_VULKAN_SPIRV.Location.with_field("Sampler",
+                                                           SamplerIdx)));
       auto &Write = *WriteIt++;
-      Write.setDstSet(DstSet);
-      Write.setDstBinding(MaxUniforms + MaxImages + SamplerIdx);
-      Write.setDescriptorCount(1);
-      Write.setDescriptorType(vk::DescriptorType::eSampler);
-      Write.setPImageInfo(&Sampler);
+      Write = vk::WriteDescriptorSet(
+          DstSet, MaxUniforms + MaxImages + SamplerIdx, 0, 1,
+          vk::DescriptorType::eSampler,
+          reinterpret_cast<vk::DescriptorImageInfo *>(&Sampler));
     }
   };
 };
@@ -430,10 +438,12 @@ template <typename Impl, typename... Args>
 TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
     ClassWrapper<Impl>, Args... args) noexcept
     : Pipeline(Impl::data_VULKAN_SPIRV.Pipeline.get()),
-      DescriptorSet(vulkan::Globals.DescriptorPoolChain->allocate()) {
+      DescriptorSet(vulkan::Globals.DescriptorPoolChain->Allocate()) {
   vulkan::DescriptorPoolWrites<Impl> Writes(DescriptorSet, args...);
-  vulkan::Globals.Device.updateDescriptorSets(Writes.NumWrites,
-                                              Writes.Writes.data(), 0, nullptr);
+  vulkan::Globals.Device.updateDescriptorSets(
+      Writes.NumWrites,
+      reinterpret_cast<vk::WriteDescriptorSet *>(Writes.Writes.data()), 0,
+      nullptr);
   Iterators Its(*this);
   (Its.Add(args), ...);
   NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
@@ -491,6 +501,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
   vk::PipelineDepthStencilStateCreateInfo DepthStencilState;
   vk::PipelineColorBlendStateCreateInfo ColorBlendState;
   std::array<vk::SamplerCreateInfo, NSamplers> Samplers;
+  SourceLocation Location;
 
   template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq,
             std::size_t... SampSeq, std::size_t... AttSeq>
@@ -500,9 +511,10 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
       std::array<VertexAttribute, NAttributes> A,
       std::array<sampler, NSamplers> Samps,
       std::array<ColorAttachment, NAttachments> Atts,
-      struct PipelineInfo PipelineInfo, std::index_sequence<SSeq...>,
-      std::index_sequence<BSeq...>, std::index_sequence<ASeq...>,
-      std::index_sequence<SampSeq...>, std::index_sequence<AttSeq...>) noexcept
+      struct PipelineInfo PipelineInfo, const SourceLocation &Location,
+      std::index_sequence<SSeq...>, std::index_sequence<BSeq...>,
+      std::index_sequence<ASeq...>, std::index_sequence<SampSeq...>,
+      std::index_sequence<AttSeq...>) noexcept
       : StageCodes{vk::ShaderModuleCreateInfo{
             {}, std::get<SSeq>(S).Blob.Size, std::get<SSeq>(S).Blob.Data}...},
         StageFlags{HshToVkShaderStage(std::get<SSeq>(S).Stage)...},
@@ -568,7 +580,8 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
             0,
             0,
             HshToVkBorderColor(std::get<SampSeq>(Samps).BorderColor,
-                               false)}...} {}
+                               false)}...},
+        Location(Location) {}
 
   constexpr ShaderConstData(
       std::array<ShaderCode<Target::VULKAN_SPIRV>, NStages> S,
@@ -576,8 +589,9 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
       std::array<VertexAttribute, NAttributes> A,
       std::array<sampler, NSamplers> Samps,
       std::array<ColorAttachment, NAttachments> Atts,
-      struct PipelineInfo PipelineInfo) noexcept
-      : ShaderConstData(S, B, A, Samps, Atts, PipelineInfo,
+      struct PipelineInfo PipelineInfo,
+      const SourceLocation &Location = SourceLocation::current()) noexcept
+      : ShaderConstData(S, B, A, Samps, Atts, PipelineInfo, Location,
                         std::make_index_sequence<NStages>(),
                         std::make_index_sequence<NBindings>(),
                         std::make_index_sequence<NAttributes>(),
@@ -593,13 +607,21 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
 
   template <typename B>
   vk::GraphicsPipelineCreateInfo
-  getPipelineInfo(VkPipelineShaderStageCreateInfo *StageInfos) const noexcept {
+  GetPipelineInfo(VkPipelineShaderStageCreateInfo *StageInfos) const noexcept {
     for (std::size_t i = 0; i < NStages; ++i)
-      StageInfos[i] = vk::PipelineShaderStageCreateInfo{
-          {},
-          StageFlags[i],
-          B::data_VULKAN_SPIRV.ShaderObjects[i].get().Get(StageCodes[i]),
-          "main"};
+      StageInfos[i] = vk::PipelineShaderStageCreateInfo {
+        {}, StageFlags[i],
+            B::data_VULKAN_SPIRV.ShaderObjects[i].get().Get(
+                StageCodes[i],
+#if HSH_SOURCE_LOCATION_ENABLED
+                B::cdata_VULKAN_SPIRV.Location.with_field(
+                    vk::to_string(StageFlags[i]).c_str())
+#else
+                B::cdata_VULKAN_SPIRV.Location
+#endif
+                    ),
+            "main"
+      };
 
     return vk::GraphicsPipelineCreateInfo{
         {},
@@ -650,6 +672,8 @@ template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
     return (GetNumStages<B>(BSeq < BIdx) + ...);
   }
   template <typename B> static void SetPipeline(vk::Pipeline data) noexcept {
+    vulkan::Globals.SetDebugObjectName(
+        B::cdata_VULKAN_SPIRV.Location.with_field("Pipeline"), data);
     vk::ObjectDestroy<vk::Device, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> deleter(
         vulkan::Globals.Device, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
     B::data_VULKAN_SPIRV.Pipeline = vk::UniquePipeline(data, deleter);
@@ -659,11 +683,12 @@ template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
     std::array<VkPipelineShaderStageCreateInfo, (GetNumStages<B>(true) + ...)>
         ShaderStageInfos;
     std::array<vk::GraphicsPipelineCreateInfo, sizeof...(B)> Infos{
-        B::cdata_VULKAN_SPIRV.template getPipelineInfo<B>(
+        B::cdata_VULKAN_SPIRV.template GetPipelineInfo<B>(
             ShaderStageInfos.data() + StageInfoStart<B...>(BSeq, seq))...};
     std::array<vk::Pipeline, sizeof...(B)> Pipelines;
     auto Result = vulkan::Globals.Device.createGraphicsPipelines(
-        {}, Infos.size(), Infos.data(), nullptr, Pipelines.data());
+        vulkan::Globals.PipelineCache, Infos.size(), Infos.data(), nullptr,
+        Pipelines.data());
     assert(Result == vk::Result::eSuccess);
     (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
@@ -884,6 +909,628 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
 #endif
 };
 
+namespace vulkan {
+
+struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
+  struct MyApplicationInfo : vk::ApplicationInfo {
+    constexpr MyApplicationInfo(const char *AppName, uint32_t AppVersion,
+                                const char *EngineName,
+                                uint32_t EngineVersion) noexcept
+        : vk::ApplicationInfo(AppName, AppVersion, EngineName, EngineVersion,
+                              VK_API_VERSION_1_1) {}
+  } AppInfo;
+  std::vector<vk::LayerProperties> Layers;
+  std::vector<vk::ExtensionProperties> Extensions;
+  std::vector<const char *> EnabledLayers;
+  std::vector<const char *> EnabledExtensions;
+  bool Success = true;
+
+  bool enableLayer(std::string_view Name) noexcept {
+    for (const auto &L : Layers) {
+      if (!Name.compare(L.layerName)) {
+        EnabledLayers.push_back(Name.data());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool enableExtension(std::string_view Name) noexcept {
+    for (const auto &E : Extensions) {
+      if (!Name.compare(E.extensionName)) {
+        EnabledExtensions.push_back(Name.data());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static constexpr std::string_view WantedLayers[] = {
+#if !defined(NDEBUG)
+    "VK_LAYER_LUNARG_standard_validation"sv,
+#endif
+  };
+
+  static constexpr std::string_view WantedExtensions[] = {
+    "VK_KHR_surface"sv,
+    "VK_KHR_xcb_surface"sv,
+#if !defined(NDEBUG)
+    "VK_EXT_debug_utils"sv,
+#endif
+  };
+
+  MyInstanceCreateInfo(
+      const char *AppName, uint32_t AppVersion, const char *EngineName,
+      uint32_t EngineVersion,
+      const std::function<void(std::string_view)> &MissingLayer,
+      const std::function<void(std::string_view)> &MissingExtension) noexcept
+      : vk::InstanceCreateInfo({}, &AppInfo),
+        AppInfo(AppName, AppVersion, EngineName, EngineVersion) {
+    Layers = vk::enumerateInstanceLayerProperties().value;
+    Extensions = vk::enumerateInstanceExtensionProperties().value;
+
+    for (auto WL : WantedLayers) {
+      if (!enableLayer(WL)) {
+        MissingLayer(WL);
+        Success = false;
+      }
+    }
+
+    for (auto WE : WantedExtensions) {
+      if (!enableExtension(WE)) {
+        MissingExtension(WE);
+        Success = false;
+      }
+    }
+
+    setEnabledLayerCount(EnabledLayers.size());
+    setPpEnabledLayerNames(EnabledLayers.data());
+    setEnabledExtensionCount(EnabledExtensions.size());
+    setPpEnabledExtensionNames(EnabledExtensions.data());
+  }
+};
+
+struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
+  float QueuePriority = 1.f;
+  vk::DeviceQueueCreateInfo QueueCreateInfo{{}, 0, 1, &QueuePriority};
+  std::vector<vk::LayerProperties> Layers;
+  std::vector<vk::ExtensionProperties> Extensions;
+  std::vector<const char *> EnabledLayers;
+  std::vector<const char *> EnabledExtensions;
+  vk::PhysicalDeviceFeatures EnabledFeatures;
+  bool Success = true;
+
+  bool enableLayer(std::string_view Name) noexcept {
+    for (const auto &L : Layers) {
+      if (!Name.compare(L.layerName)) {
+        EnabledLayers.push_back(Name.data());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool enableExtension(std::string_view Name) noexcept {
+    for (const auto &E : Extensions) {
+      if (!Name.compare(E.extensionName)) {
+        EnabledExtensions.push_back(Name.data());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static constexpr std::string_view WantedLayers[] = {
+#if !defined(NDEBUG)
+    "VK_LAYER_LUNARG_standard_validation"sv,
+#endif
+  };
+
+  static constexpr std::string_view WantedExtensions[] = {
+      "VK_KHR_swapchain"sv, "VK_KHR_get_memory_requirements2"sv,
+      "VK_KHR_dedicated_allocation"sv};
+
+  explicit MyDeviceCreateInfo(
+      vk::PhysicalDevice PD, uint32_t &QFIdxOut, bool &HasExtMemoryBudget,
+      uint8_t PipelineCacheUUIDOut[VK_UUID_SIZE],
+      const std::function<void(std::string_view)> &MissingLayer,
+      const std::function<void(std::string_view)> &MissingExtension,
+      const std::function<void()> &NoGraphicsQueueFamily) noexcept
+      : vk::DeviceCreateInfo({}, 1, &QueueCreateInfo, 0, nullptr, 0, nullptr,
+                             &EnabledFeatures) {
+    auto Properties = PD.getProperties();
+    std::memcpy(PipelineCacheUUIDOut, Properties.pipelineCacheUUID,
+                VK_UUID_SIZE);
+
+    Layers = PD.enumerateDeviceLayerProperties().value;
+    Extensions = PD.enumerateDeviceExtensionProperties().value;
+
+    for (auto WL : WantedLayers) {
+      if (!enableLayer(WL)) {
+        MissingLayer(WL);
+        Success = false;
+      }
+    }
+
+    for (auto WE : WantedExtensions) {
+      if (!enableExtension(WE)) {
+        MissingExtension(WE);
+        Success = false;
+      }
+    }
+
+    HasExtMemoryBudget = enableExtension("VK_EXT_memory_budget"sv);
+
+    setEnabledLayerCount(EnabledLayers.size());
+    setPpEnabledLayerNames(EnabledLayers.data());
+    setEnabledExtensionCount(EnabledExtensions.size());
+    setPpEnabledExtensionNames(EnabledExtensions.data());
+
+    uint32_t QFIdx = 0;
+    bool FoundQF = false;
+    for (const auto &QF : PD.getQueueFamilyProperties()) {
+      if (QF.queueFlags & vk::QueueFlagBits::eGraphics) {
+        FoundQF = true;
+        break;
+      }
+      ++QFIdx;
+    }
+    if (!FoundQF) {
+      NoGraphicsQueueFamily();
+      Success = false;
+    }
+    QFIdxOut = QFIdx;
+    QueueCreateInfo.setQueueFamilyIndex(QFIdx);
+
+    auto Features = PD.getFeatures();
+    EnabledFeatures.geometryShader = Features.geometryShader;
+    EnabledFeatures.tessellationShader = Features.tessellationShader;
+    EnabledFeatures.samplerAnisotropy = Features.samplerAnisotropy;
+    EnabledFeatures.textureCompressionBC = Features.textureCompressionBC;
+  }
+};
+
+using ErrorHandler = std::function<void(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    vk::DebugUtilsMessageTypeFlagBitsEXT messageTypes,
+    const vk::DebugUtilsMessengerCallbackDataEXT &pCallbackData)>;
+
+struct MyDebugUtilsMessengerCreateInfo : vk::DebugUtilsMessengerCreateInfoEXT {
+  static VkBool32
+  Callback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+           vk::DebugUtilsMessageTypeFlagBitsEXT messageTypes,
+           const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+           ErrorHandler *pUserData) noexcept {
+    (*pUserData)(messageSeverity, messageTypes, *pCallbackData);
+    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+      std::abort();
+    return VK_FALSE;
+  }
+
+  explicit MyDebugUtilsMessengerCreateInfo(
+      vk::DebugUtilsMessageSeverityFlagsEXT WantedFlags,
+      vk::DebugUtilsMessageTypeFlagsEXT WantedTypes,
+      ErrorHandler &ErrHandler) noexcept
+      : vk::DebugUtilsMessengerCreateInfoEXT(
+            {}, WantedFlags, WantedTypes,
+            PFN_vkDebugUtilsMessengerCallbackEXT(&Callback),
+            reinterpret_cast<void *>(&ErrHandler)) {}
+};
+
+struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
+  std::array<vk::DescriptorSetLayoutBinding, hsh::detail::MaxUniforms +
+                                                 hsh::detail::MaxImages +
+                                                 hsh::detail::MaxSamplers>
+      Bindings;
+  template <std::size_t... USeq, std::size_t... ISeq, std::size_t... SSeq>
+  constexpr MyDescriptorSetLayoutCreateInfo(
+      std::index_sequence<USeq...>, std::index_sequence<ISeq...>,
+      std::index_sequence<SSeq...>) noexcept
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+      : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
+        Bindings{vk::DescriptorSetLayoutBinding(
+                     USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
+                     vk::ShaderStageFlagBits::eAllGraphics)...,
+                 vk::DescriptorSetLayoutBinding(
+                     hsh::detail::MaxUniforms + ISeq,
+                     vk::DescriptorType::eSampledImage, 1,
+                     vk::ShaderStageFlagBits::eAllGraphics)...,
+                 vk::DescriptorSetLayoutBinding(
+                     hsh::detail::MaxUniforms + hsh::detail::MaxImages + SSeq,
+                     vk::DescriptorType::eSampler, 1,
+                     vk::ShaderStageFlagBits::eAllGraphics)...} {
+  }
+#pragma GCC diagnostic pop
+  constexpr MyDescriptorSetLayoutCreateInfo() noexcept
+      : MyDescriptorSetLayoutCreateInfo(
+            std::make_index_sequence<hsh::detail::MaxUniforms>(),
+            std::make_index_sequence<hsh::detail::MaxImages>(),
+            std::make_index_sequence<hsh::detail::MaxSamplers>()) {}
+};
+
+struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
+  std::array<vk::DescriptorSetLayout, 1> Layouts;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+  constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
+      : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()),
+        Layouts{layout} {}
+#pragma GCC diagnostic pop
+};
+
+struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
+  constexpr MyCommandPoolCreateInfo(uint32_t qfIdx) noexcept
+      : vk::CommandPoolCreateInfo(
+            vk::CommandPoolCreateFlagBits::eResetCommandBuffer, qfIdx) {}
+};
+
+struct MyCommandBufferAllocateInfo : vk::CommandBufferAllocateInfo {
+  constexpr MyCommandBufferAllocateInfo(vk::CommandPool cmdPool) noexcept
+      : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary,
+                                      2) {}
+};
+
+struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
+  VmaVulkanFunctions Funcs;
+  MyVmaAllocatorCreateInfo(VkInstance Instance, VkPhysicalDevice PhysDev,
+                           VkDevice Device, bool HasExtMemoryBudget) noexcept
+      : VmaAllocatorCreateInfo{
+            VmaAllocatorCreateFlagBits(
+                VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT |
+                (HasExtMemoryBudget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT
+                                    : 0)),
+            PhysDev,
+            Device,
+            0,
+            nullptr,
+            nullptr,
+            0,
+            nullptr,
+            &Funcs,
+            nullptr,
+            Instance,
+            VK_API_VERSION_1_1} {
+#define COPY_FUNC(funcName)                                                    \
+  Funcs.funcName = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
+#define COPY_1_1_FUNC(funcName)                                                \
+  Funcs.funcName##KHR = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
+    COPY_FUNC(vkGetPhysicalDeviceProperties);
+    COPY_FUNC(vkGetPhysicalDeviceMemoryProperties);
+    COPY_FUNC(vkAllocateMemory);
+    COPY_FUNC(vkFreeMemory);
+    COPY_FUNC(vkMapMemory);
+    COPY_FUNC(vkUnmapMemory);
+    COPY_FUNC(vkFlushMappedMemoryRanges);
+    COPY_FUNC(vkInvalidateMappedMemoryRanges);
+    COPY_FUNC(vkBindBufferMemory);
+    COPY_FUNC(vkBindImageMemory);
+    COPY_FUNC(vkGetBufferMemoryRequirements);
+    COPY_FUNC(vkGetImageMemoryRequirements);
+    COPY_FUNC(vkCreateBuffer);
+    COPY_FUNC(vkDestroyBuffer);
+    COPY_FUNC(vkCreateImage);
+    COPY_FUNC(vkDestroyImage);
+    COPY_FUNC(vkCmdCopyBuffer);
+    COPY_1_1_FUNC(vkGetBufferMemoryRequirements2);
+    COPY_1_1_FUNC(vkGetImageMemoryRequirements2);
+    COPY_1_1_FUNC(vkBindBufferMemory2);
+    COPY_1_1_FUNC(vkBindImageMemory2);
+    COPY_1_1_FUNC(vkGetPhysicalDeviceMemoryProperties2);
+#undef COPY_FUNC
+#undef COPY_1_1_FUNC
+  }
+};
+
+} // namespace vulkan
+
 #endif
 
 } // namespace hsh::detail
+
+namespace hsh {
+class vulkan_device_owner {
+  friend class vulkan_instance_owner;
+  struct Data {
+    vk::UniqueDevice Device;
+    vk::UniqueVmaAllocator VmaAllocator;
+    vk::UniqueVmaPool UploadPool;
+    vk::UniquePipelineCache PipelineCache;
+    std::array<detail::vulkan::DeletedResources, 2> DeletedResources;
+    vk::UniqueDescriptorSetLayout DescriptorSetLayout;
+    vk::UniquePipelineLayout PipelineLayout;
+    detail::vulkan::DescriptorPoolChain DescriptorPoolChain;
+    vk::UniqueCommandPool CommandPool;
+    std::vector<vk::UniqueCommandBuffer> CommandBuffers;
+    std::array<vk::UniqueFence, 2> CommandFences;
+    vk::UniqueSemaphore ImageAcquireSem;
+    vk::UniqueSemaphore RenderCompleteSem;
+    bool BuiltPipelines = false;
+
+    ~Data() noexcept {
+      Device->waitIdle();
+      if (BuiltPipelines)
+        hsh::detail::GlobalListNode::DestroyAll(ActiveTarget::VULKAN_SPIRV);
+    }
+  };
+  std::unique_ptr<Data> Data;
+
+public:
+  vulkan_device_owner() noexcept = default;
+  vulkan_device_owner(vulkan_device_owner &&) noexcept = default;
+  vulkan_device_owner &operator=(vulkan_device_owner &&) noexcept = default;
+
+  bool success() const noexcept { return Data.operator bool(); }
+  operator bool() const noexcept { return success(); }
+
+  void build_pipelines() noexcept {
+    if (Data->BuiltPipelines)
+      return;
+    hsh::detail::GlobalListNode::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    Data->BuiltPipelines = true;
+  }
+
+  template <typename CacheFileMgr>
+  void build_pipelines(CacheFileMgr &CFM) noexcept {
+    if (Data->BuiltPipelines)
+      return;
+    Data->PipelineCache = hsh::detail::vulkan::CreatePipelineCache(CFM);
+    detail::vulkan::Globals.PipelineCache = Data->PipelineCache.get();
+    hsh::detail::GlobalListNode::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    hsh::detail::vulkan::WritePipelineCache(CFM);
+    Data->BuiltPipelines = true;
+  }
+
+  using ProgFunc = std::function<void(std::size_t, std::size_t)>;
+
+  void build_pipelines(const ProgFunc &PF) noexcept {
+    if (Data->BuiltPipelines)
+      return;
+    std::size_t Count = hsh::detail::GlobalListNode::CountAll();
+    std::size_t I = 0;
+    PF(I, Count);
+    for (auto *Node = hsh::detail::GlobalListNode::GetHead(); Node;
+         Node = Node->GetNext()) {
+      Node->Create(ActiveTarget::VULKAN_SPIRV);
+      PF(++I, Count);
+    }
+    Data->BuiltPipelines = true;
+  }
+
+  template <typename CacheFileMgr>
+  void build_pipelines(CacheFileMgr &CFM, const ProgFunc &PF) noexcept {
+    if (Data->BuiltPipelines)
+      return;
+    Data->PipelineCache = hsh::detail::vulkan::CreatePipelineCache(CFM);
+    detail::vulkan::Globals.PipelineCache = Data->PipelineCache.get();
+    std::size_t Count = hsh::detail::GlobalListNode::CountAll();
+    std::size_t I = 0;
+    PF(I, Count);
+    for (auto *Node = hsh::detail::GlobalListNode::GetHead(); Node;
+         Node = Node->GetNext()) {
+      Node->Create(ActiveTarget::VULKAN_SPIRV);
+      PF(++I, Count);
+    }
+    hsh::detail::vulkan::WritePipelineCache(CFM);
+    Data->BuiltPipelines = true;
+  }
+
+  template <typename Func> void enter_draw_context(Func F) const noexcept {
+    detail::vulkan::Globals.PreRender();
+    F();
+    detail::vulkan::Globals.PostRender();
+  }
+};
+
+class vulkan_instance_owner {
+  friend vulkan_instance_owner create_vulkan_instance(
+      const char *AppName, uint32_t AppVersion, const char *EngineName,
+      uint32_t EngineVersion, detail::vulkan::ErrorHandler &&ErrHandler,
+      vk::DebugUtilsMessageSeverityFlagsEXT WantedFlags,
+      vk::DebugUtilsMessageTypeFlagsEXT WantedTypes) noexcept;
+  struct Data {
+    vk::DynamicLoader Loader;
+    vk::UniqueInstance Instance;
+#ifndef NDEBUG
+    vk::UniqueDebugUtilsMessengerEXT Messenger;
+#endif
+    detail::vulkan::ErrorHandler ErrHandler;
+  };
+  std::unique_ptr<Data> Data;
+
+public:
+  bool success() const noexcept { return Data.operator bool(); }
+  operator bool() const noexcept { return success(); }
+
+  template <typename Func>
+  vulkan_device_owner enumerate_vulkan_devices(Func Acceptor) const noexcept {
+    vulkan_device_owner Ret;
+    vk::Instance Instance = Data->Instance.get();
+    auto &ErrHandler = Data->ErrHandler;
+
+    auto PhysDevices = Instance.enumeratePhysicalDevices().value;
+    for (auto PD : PhysDevices) {
+      auto Properties = PD.getProperties();
+      if (Properties.apiVersion < VK_VERSION_1_1)
+        continue;
+      if (!Acceptor(Properties))
+        continue;
+
+      Ret.Data = std::make_unique<struct vulkan_device_owner::Data>();
+      auto &Data = *Ret.Data;
+      detail::vulkan::Globals.PhysDevice = PD;
+      uint32_t QFIdx = 0;
+      bool HasExtMemoryBudget = false;
+      detail::vulkan::MyDeviceCreateInfo DeviceCreateInfo(
+          PD, QFIdx, HasExtMemoryBudget,
+          detail::vulkan::Globals.PipelineCacheUUID,
+          [&](std::string_view MissingLayer) {
+            std::ostringstream ss;
+            ss << "Required instance layer '" << MissingLayer
+               << "' not available.";
+            ErrHandler(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                       vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+                       vk::DebugUtilsMessengerCallbackDataEXT(
+                           {}, "Missing instance layer", {}, ss.str().c_str()));
+          },
+          [&](std::string_view MissingExtension) {
+            std::ostringstream ss;
+            ss << "Required instance extension '" << MissingExtension
+               << "' not available.";
+            ErrHandler(
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+                vk::DebugUtilsMessengerCallbackDataEXT(
+                    {}, "Missing instance extension", {}, ss.str().c_str()));
+          },
+          [&]() {
+            ErrHandler(
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+                vk::DebugUtilsMessengerCallbackDataEXT(
+                    {}, "Missing graphics queue family", {},
+                    "Selected device does not have a graphics queue family."));
+          });
+      if (!DeviceCreateInfo.Success)
+        return {};
+      Data.Device = PD.createDeviceUnique(DeviceCreateInfo).value;
+      VULKAN_HPP_DEFAULT_DISPATCHER.init(*Data.Device);
+      detail::vulkan::Globals.Device = Data.Device.get();
+      detail::vulkan::Globals.QueueFamilyIdx = QFIdx;
+
+      Data.VmaAllocator =
+          vk::createVmaAllocatorUnique(
+              detail::vulkan::MyVmaAllocatorCreateInfo(
+                  Instance, PD, Data.Device.get(), HasExtMemoryBudget))
+              .value;
+      detail::vulkan::Globals.Allocator = Data.VmaAllocator.get();
+      Data.UploadPool = detail::vulkan::CreateUploadPool();
+      detail::vulkan::Globals.UploadPool = Data.UploadPool.get();
+
+      detail::vulkan::Globals.DeletedResourcesArr = &Data.DeletedResources;
+      detail::vulkan::Globals.DeletedResources = &Data.DeletedResources[0];
+
+      Data.DescriptorSetLayout =
+          Data.Device
+              ->createDescriptorSetLayoutUnique(
+                  detail::vulkan::MyDescriptorSetLayoutCreateInfo())
+              .value;
+      detail::vulkan::Globals.SetDescriptorSetLayout(
+          Data.DescriptorSetLayout.get());
+      Data.PipelineLayout = Data.Device
+                                ->createPipelineLayoutUnique(
+                                    detail::vulkan::MyPipelineLayoutCreateInfo(
+                                        Data.DescriptorSetLayout.get()))
+                                .value;
+      detail::vulkan::Globals.PipelineLayout = Data.PipelineLayout.get();
+      detail::vulkan::Globals.DescriptorPoolChain = &Data.DescriptorPoolChain;
+      detail::vulkan::Globals.Queue = Data.Device->getQueue(QFIdx, 0);
+      Data.CommandPool = Data.Device
+                             ->createCommandPoolUnique(
+                                 detail::vulkan::MyCommandPoolCreateInfo(QFIdx))
+                             .value;
+      Data.CommandBuffers = Data.Device
+                                ->allocateCommandBuffersUnique(
+                                    detail::vulkan::MyCommandBufferAllocateInfo(
+                                        Data.CommandPool.get()))
+                                .value;
+      for (int i = 0; i < 2; ++i)
+        detail::vulkan::Globals.CommandBuffers[i] =
+            Data.CommandBuffers[i].get();
+      Data.CommandFences = {
+          Data.Device
+              ->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
+              .value,
+          Data.Device
+              ->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
+              .value,
+      };
+      for (int i = 0; i < 2; ++i)
+        detail::vulkan::Globals.CommandFences[i] = Data.CommandFences[i].get();
+      Data.ImageAcquireSem = Data.Device->createSemaphoreUnique({}).value;
+      detail::vulkan::Globals.ImageAcquireSem = Data.ImageAcquireSem.get();
+      Data.RenderCompleteSem = Data.Device->createSemaphoreUnique({}).value;
+      detail::vulkan::Globals.RenderCompleteSem = Data.RenderCompleteSem.get();
+
+      return Ret;
+    }
+
+    return {};
+  }
+};
+
+inline vulkan_instance_owner create_vulkan_instance(
+    const char *AppName, uint32_t AppVersion, const char *EngineName,
+    uint32_t EngineVersion, detail::vulkan::ErrorHandler &&ErrHandler,
+    vk::DebugUtilsMessageSeverityFlagsEXT WantedFlags =
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
+    vk::DebugUtilsMessageTypeFlagsEXT WantedTypes =
+        vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+        vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+        vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance) noexcept {
+  vulkan_instance_owner Ret;
+  Ret.Data = std::make_unique<struct vulkan_instance_owner::Data>();
+  auto &Data = *Ret.Data;
+  Data.ErrHandler = std::move(ErrHandler);
+
+  if (!Data.Loader.success()) {
+    Data.ErrHandler(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+        vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+        vk::DebugUtilsMessengerCallbackDataEXT({}, "Missing vulkan runtime", {},
+                                               "Unable to load vulkan loader"));
+    return {};
+  }
+  auto GetInstanceProcAddr =
+      Data.Loader.getProcAddress<PFN_vkGetInstanceProcAddr>(
+          "vkGetInstanceProcAddr");
+  if (!GetInstanceProcAddr) {
+    Data.ErrHandler(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                    vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+                    vk::DebugUtilsMessengerCallbackDataEXT(
+                        {}, "Missing vkGetInstanceProcAddr", {},
+                        "Unable to find vkGetInstanceProcAddr"));
+    return {};
+  }
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(GetInstanceProcAddr);
+
+  detail::vulkan::MyInstanceCreateInfo InstanceCreateInfo(
+      AppName, AppVersion, EngineName, EngineVersion,
+      [&](std::string_view MissingLayer) {
+        std::ostringstream ss;
+        ss << "Required instance layer '" << MissingLayer << "' not available.";
+        Data.ErrHandler(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+            vk::DebugUtilsMessengerCallbackDataEXT({}, "Missing instance layer",
+                                                   {}, ss.str().c_str()));
+      },
+      [&](std::string_view MissingExtension) {
+        std::ostringstream ss;
+        ss << "Required instance extension '" << MissingExtension
+           << "' not available.";
+        Data.ErrHandler(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+            vk::DebugUtilsMessengerCallbackDataEXT(
+                {}, "Missing instance extension", {}, ss.str().c_str()));
+      });
+  if (!InstanceCreateInfo.Success)
+    return {};
+  Data.Instance = vk::createInstanceUnique(InstanceCreateInfo).value;
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(*Data.Instance);
+  detail::vulkan::Globals.Instance = Data.Instance.get();
+
+#ifndef NDEBUG
+  Data.Messenger = Data.Instance
+                       ->createDebugUtilsMessengerEXTUnique(
+                           detail::vulkan::MyDebugUtilsMessengerCreateInfo(
+                               WantedFlags, WantedTypes, Data.ErrHandler))
+                       .value;
+#endif
+
+  return Ret;
+}
+} // namespace hsh

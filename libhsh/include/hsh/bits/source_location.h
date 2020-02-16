@@ -17,12 +17,13 @@ class SourceLocation : public HSH_SOURCE_LOCATION_REP {
   std::uint32_t m_fieldIdx = UINT32_MAX;
 
 public:
-  SourceLocation(const HSH_SOURCE_LOCATION_REP &location,
-                 const char *field = nullptr,
-                 std::uint32_t fieldIdx = UINT32_MAX) noexcept
+  constexpr SourceLocation(const HSH_SOURCE_LOCATION_REP &location,
+                           const char *field = nullptr,
+                           std::uint32_t fieldIdx = UINT32_MAX) noexcept
       : HSH_SOURCE_LOCATION_REP(location), m_field(field),
         m_fieldIdx(fieldIdx) {}
-  SourceLocation with_field(const char *f, std::uint32_t idx = UINT32_MAX) const
+  constexpr SourceLocation with_field(const char *f,
+                                      std::uint32_t idx = UINT32_MAX) const
       noexcept {
     return SourceLocation(*this, f, idx);
   }
@@ -49,7 +50,12 @@ public:
 namespace hsh {
 class SourceLocation {
 public:
-  static SourceLocation current() noexcept { return {}; }
+  constexpr static SourceLocation current() noexcept { return {}; }
+  constexpr SourceLocation with_field(const char *f,
+                                      std::uint32_t idx = UINT32_MAX) const
+  noexcept {
+    return {};
+  }
 };
 } // namespace hsh
 #define HSH_SOURCE_LOCATION_ENABLED 0

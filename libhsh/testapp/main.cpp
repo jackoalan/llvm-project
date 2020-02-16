@@ -1,13 +1,15 @@
 #define HSH_IMPLEMENTATION
-#include <iostream>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <hsh/hsh.h>
+#include <iostream>
 #include <string_view>
 using namespace std::literals;
 
 #include "test-input.h"
 
-constexpr std::string_view AppName = "Hello World"sv;
+constexpr std::string_view AppName = "Hello Triangle"sv;
 
 struct XcbConnection;
 struct XcbWindow {
@@ -95,292 +97,46 @@ XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
 
 XcbWindow::~XcbWindow() { xcb_destroy_window(Connection, Window); }
 
-struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
-  struct MyApplicationInfo : vk::ApplicationInfo {
-    constexpr MyApplicationInfo()
-        : vk::ApplicationInfo(AppName.data(), 0, "test-engine", 0,
-                              VK_API_VERSION_1_1) {}
-  } AppInfo;
-  std::vector<vk::LayerProperties> Layers;
-  std::vector<vk::ExtensionProperties> Extensions;
-  std::vector<const char *> EnabledLayers;
-  std::vector<const char *> EnabledExtensions;
+struct PipelineCacheFileManager {
+  static std::string GetFilename(const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    std::ostringstream FileName;
+    // TODO: make this more portable
+    if (const char *home = std::getenv("HOME")) {
+      FileName << home;
+      FileName << "/.cache/hsh-test-pipeline-cache-";
+      for (int i = 0; i < VK_UUID_SIZE; ++i)
+        FileName << std::hex << unsigned(UUID[i]);
+      FileName << ".bin";
+    }
+    return FileName.str();
+  }
 
-  bool enableLayer(std::string_view Name) {
-    for (const auto &L : Layers) {
-      if (!Name.compare(L.layerName)) {
-        EnabledLayers.push_back(Name.data());
-        return true;
+  template <typename Func>
+  static void ReadPipelineCache(Func F,
+                                const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    if (std::FILE *File = std::fopen(GetFilename(UUID).c_str(), "rb")) {
+      std::fseek(File, 0, SEEK_END);
+      auto Size = std::ftell(File);
+      if (Size != 0) {
+        std::fseek(File, 0, SEEK_SET);
+        std::unique_ptr<uint8_t[]> Data(new uint8_t[Size]);
+        Size = std::fread(Data.get(), 1, Size, File);
+        if (Size != 0)
+          F(Data.get(), Size);
       }
+      std::fclose(File);
     }
-    std::cerr << "Unable to find '" << Name << " instance layer\n";
-    return false;
   }
 
-  bool enableExtension(std::string_view Name) {
-    for (const auto &E : Extensions) {
-      if (!Name.compare(E.extensionName)) {
-        EnabledExtensions.push_back(Name.data());
-        return true;
-      }
+  template <typename Func>
+  static void WritePipelineCache(Func F,
+                                 const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    if (std::FILE *File = std::fopen(GetFilename(UUID).c_str(), "wb")) {
+      F([File](const uint8_t *Data, std::size_t Size) {
+        std::fwrite(Data, 1, Size, File);
+      });
+      std::fclose(File);
     }
-    std::cerr << "Unable to find '" << Name << " instance extension\n";
-    return false;
-  }
-
-  static constexpr std::string_view WantedLayers[] = {
-#if !defined(NDEBUG)
-    "VK_LAYER_LUNARG_standard_validation"sv,
-#endif
-  };
-
-  static constexpr std::string_view WantedExtensions[] = {
-    "VK_KHR_surface"sv,
-    "VK_KHR_xcb_surface"sv,
-#if !defined(NDEBUG)
-    "VK_EXT_debug_utils"sv,
-#endif
-  };
-
-  MyInstanceCreateInfo() : vk::InstanceCreateInfo({}, &AppInfo) {
-    Layers = vk::enumerateInstanceLayerProperties().value;
-    Extensions = vk::enumerateInstanceExtensionProperties().value;
-
-    for (auto WL : WantedLayers) {
-      bool res = enableLayer(WL);
-      assert(res);
-    }
-
-    for (auto WE : WantedExtensions) {
-      bool res = enableExtension(WE);
-      assert(res);
-    }
-
-    setEnabledLayerCount(EnabledLayers.size());
-    setPpEnabledLayerNames(EnabledLayers.data());
-    setEnabledExtensionCount(EnabledExtensions.size());
-    setPpEnabledExtensionNames(EnabledExtensions.data());
-  }
-};
-
-struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
-  float QueuePriority = 1.f;
-  vk::DeviceQueueCreateInfo QueueCreateInfo{{}, 0, 1, &QueuePriority};
-  std::vector<vk::LayerProperties> Layers;
-  std::vector<vk::ExtensionProperties> Extensions;
-  std::vector<const char *> EnabledLayers;
-  std::vector<const char *> EnabledExtensions;
-  vk::PhysicalDeviceFeatures EnabledFeatures;
-
-  bool enableLayer(std::string_view Name) {
-    for (const auto &L : Layers) {
-      if (!Name.compare(L.layerName)) {
-        EnabledLayers.push_back(Name.data());
-        return true;
-      }
-    }
-    std::cerr << "Unable to find '" << Name << " device layer\n";
-    return false;
-  }
-
-  bool enableExtension(std::string_view Name, bool Error = true) {
-    for (const auto &E : Extensions) {
-      if (!Name.compare(E.extensionName)) {
-        EnabledExtensions.push_back(Name.data());
-        return true;
-      }
-    }
-    if (Error)
-      std::cerr << "Unable to find '" << Name << " device extension\n";
-    return false;
-  }
-
-  static constexpr std::string_view WantedLayers[] = {
-#if !defined(NDEBUG)
-    "VK_LAYER_LUNARG_standard_validation"sv,
-#endif
-  };
-
-  static constexpr std::string_view WantedExtensions[] = {
-      "VK_KHR_swapchain"sv, "VK_KHR_get_memory_requirements2"sv,
-      "VK_KHR_dedicated_allocation"sv};
-
-  explicit MyDeviceCreateInfo(vk::PhysicalDevice PD, uint32_t &QFIdxOut,
-                              bool &HasExtMemoryBudget)
-      : vk::DeviceCreateInfo({}, 1, &QueueCreateInfo, 0, nullptr, 0, nullptr,
-                             &EnabledFeatures) {
-    Layers = PD.enumerateDeviceLayerProperties().value;
-    Extensions = PD.enumerateDeviceExtensionProperties().value;
-
-    for (auto WL : WantedLayers) {
-      bool res = enableLayer(WL);
-      assert(res);
-    }
-
-    for (auto WE : WantedExtensions) {
-      bool res = enableExtension(WE);
-      assert(res);
-    }
-
-    HasExtMemoryBudget = enableExtension("VK_EXT_memory_budget"sv, false);
-
-    setEnabledLayerCount(EnabledLayers.size());
-    setPpEnabledLayerNames(EnabledLayers.data());
-    setEnabledExtensionCount(EnabledExtensions.size());
-    setPpEnabledExtensionNames(EnabledExtensions.data());
-
-    uint32_t QFIdx = 0;
-    bool FoundQF = false;
-    for (const auto &QF : PD.getQueueFamilyProperties()) {
-      if (QF.queueFlags & vk::QueueFlagBits::eGraphics) {
-        FoundQF = true;
-        break;
-      }
-      ++QFIdx;
-    }
-    assert(FoundQF);
-    QFIdxOut = QFIdx;
-    QueueCreateInfo.setQueueFamilyIndex(QFIdx);
-
-    auto Features = PD.getFeatures();
-    EnabledFeatures.geometryShader = Features.geometryShader;
-    EnabledFeatures.tessellationShader = Features.tessellationShader;
-    EnabledFeatures.samplerAnisotropy = Features.samplerAnisotropy;
-    EnabledFeatures.textureCompressionBC = Features.textureCompressionBC;
-  }
-};
-
-struct MyDebugUtilsMessengerCreateInfo : vk::DebugUtilsMessengerCreateInfoEXT {
-  static VkBool32
-  Callback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-           vk::DebugUtilsMessageTypeFlagBitsEXT messageTypes,
-           const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
-           void *pUserData) {
-    std::cerr << to_string(messageSeverity) << " " << to_string(messageTypes)
-              << " " << pCallbackData->pMessage << "\n";
-    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
-      std::abort();
-    return VK_FALSE;
-  }
-
-  static constexpr vk::DebugUtilsMessageSeverityFlagsEXT WantedFlags =
-      vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
-      vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
-      vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-      vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose;
-  static constexpr vk::DebugUtilsMessageTypeFlagsEXT WantedTypes =
-      vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-      vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-      vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
-
-  MyDebugUtilsMessengerCreateInfo()
-      : vk::DebugUtilsMessengerCreateInfoEXT(
-            {}, WantedFlags, WantedTypes,
-            PFN_vkDebugUtilsMessengerCallbackEXT(&Callback)) {}
-};
-
-struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
-  std::array<vk::DescriptorSetLayoutBinding, hsh::detail::MaxUniforms +
-                                                 hsh::detail::MaxImages +
-                                                 hsh::detail::MaxSamplers>
-      Bindings;
-  template <std::size_t... USeq, std::size_t... ISeq, std::size_t... SSeq>
-  constexpr MyDescriptorSetLayoutCreateInfo(
-      std::index_sequence<USeq...>, std::index_sequence<ISeq...>,
-      std::index_sequence<SSeq...>) noexcept
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-      : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
-        Bindings{vk::DescriptorSetLayoutBinding(
-                     USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
-                     vk::ShaderStageFlagBits::eAllGraphics)...,
-                 vk::DescriptorSetLayoutBinding(
-                     hsh::detail::MaxUniforms + ISeq,
-                     vk::DescriptorType::eSampledImage, 1,
-                     vk::ShaderStageFlagBits::eAllGraphics)...,
-                 vk::DescriptorSetLayoutBinding(
-                     hsh::detail::MaxUniforms + hsh::detail::MaxImages + SSeq,
-                     vk::DescriptorType::eSampler, 1,
-                     vk::ShaderStageFlagBits::eAllGraphics)...} {
-  }
-#pragma GCC diagnostic pop
-  constexpr MyDescriptorSetLayoutCreateInfo() noexcept
-      : MyDescriptorSetLayoutCreateInfo(
-            std::make_index_sequence<hsh::detail::MaxUniforms>(),
-            std::make_index_sequence<hsh::detail::MaxImages>(),
-            std::make_index_sequence<hsh::detail::MaxSamplers>()) {}
-};
-
-struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
-  std::array<vk::DescriptorSetLayout, 1> Layouts;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-  constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
-      : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()),
-        Layouts{layout} {}
-#pragma GCC diagnostic pop
-};
-
-struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
-  constexpr MyCommandPoolCreateInfo(uint32_t qfIdx)
-      : vk::CommandPoolCreateInfo(
-            vk::CommandPoolCreateFlagBits::eResetCommandBuffer, qfIdx) {}
-};
-
-struct MyCommandBufferAllocateInfo : vk::CommandBufferAllocateInfo {
-  constexpr MyCommandBufferAllocateInfo(vk::CommandPool cmdPool)
-      : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary,
-                                      2) {}
-};
-
-struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
-  VmaVulkanFunctions Funcs;
-  MyVmaAllocatorCreateInfo(VkInstance Instance, VkPhysicalDevice PhysDev,
-                           VkDevice Device, bool HasExtMemoryBudget)
-      : VmaAllocatorCreateInfo{
-            VmaAllocatorCreateFlagBits(
-                VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT |
-                (HasExtMemoryBudget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT
-                                    : 0)),
-            PhysDev,
-            Device,
-            0,
-            nullptr,
-            nullptr,
-            0,
-            nullptr,
-            &Funcs,
-            nullptr,
-            Instance,
-            VK_API_VERSION_1_1} {
-#define COPY_FUNC(funcName)                                                    \
-  Funcs.funcName = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
-#define COPY_1_1_FUNC(funcName)                                                \
-  Funcs.funcName##KHR = VULKAN_HPP_DEFAULT_DISPATCHER.funcName;
-    COPY_FUNC(vkGetPhysicalDeviceProperties);
-    COPY_FUNC(vkGetPhysicalDeviceMemoryProperties);
-    COPY_FUNC(vkAllocateMemory);
-    COPY_FUNC(vkFreeMemory);
-    COPY_FUNC(vkMapMemory);
-    COPY_FUNC(vkUnmapMemory);
-    COPY_FUNC(vkFlushMappedMemoryRanges);
-    COPY_FUNC(vkInvalidateMappedMemoryRanges);
-    COPY_FUNC(vkBindBufferMemory);
-    COPY_FUNC(vkBindImageMemory);
-    COPY_FUNC(vkGetBufferMemoryRequirements);
-    COPY_FUNC(vkGetImageMemoryRequirements);
-    COPY_FUNC(vkCreateBuffer);
-    COPY_FUNC(vkDestroyBuffer);
-    COPY_FUNC(vkCreateImage);
-    COPY_FUNC(vkDestroyImage);
-    COPY_FUNC(vkCmdCopyBuffer);
-    COPY_1_1_FUNC(vkGetBufferMemoryRequirements2);
-    COPY_1_1_FUNC(vkGetImageMemoryRequirements2);
-    COPY_1_1_FUNC(vkBindBufferMemory2);
-    COPY_1_1_FUNC(vkBindImageMemory2);
-    COPY_1_1_FUNC(vkGetPhysicalDeviceMemoryProperties2);
-#undef COPY_FUNC
-#undef COPY_1_1_FUNC
   }
 };
 
@@ -388,94 +144,46 @@ int main(int argc, char **argv) {
   XcbConnection Connection;
   XcbWindow Window = Connection.makeWindow();
 
-  vk::DynamicLoader Loader;
-  assert(Loader.success());
-  auto GetInstanceProcAddr =
-      Loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-  assert(GetInstanceProcAddr);
-  VULKAN_HPP_DEFAULT_DISPATCHER.init(GetInstanceProcAddr);
+  auto Instance = hsh::create_vulkan_instance(
+      AppName.data(), 0, "test-engine", 0,
+      [](vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+         vk::DebugUtilsMessageTypeFlagBitsEXT messageTypes,
+         const vk::DebugUtilsMessengerCallbackDataEXT &pCallbackData) {
+        std::cerr << to_string(messageSeverity) << " "
+                  << to_string(messageTypes) << " " << pCallbackData.pMessage
+                  << "\n";
+      });
+  if (!Instance)
+    return 1;
 
-  auto Instance = vk::createInstanceUnique(MyInstanceCreateInfo()).value;
-  VULKAN_HPP_DEFAULT_DISPATCHER.init(*Instance);
-  hsh::detail::vulkan::Globals.Instance = Instance.get();
+  Instance.enumerate_vulkan_devices(
+      [](const vk::PhysicalDeviceProperties &Props) {
+        std::cerr << "name: " << Props.deviceName
+                  << " type: " << vk::to_string(Props.deviceType) << "\n";
+        return false;
+      });
 
-#ifndef NDEBUG
-  auto Messenger = Instance
-                       ->createDebugUtilsMessengerEXTUnique(
-                           MyDebugUtilsMessengerCreateInfo())
-                       .value;
-#endif
+  unsigned DevIdx = 0;
+  auto Device = Instance.enumerate_vulkan_devices(
+      [&](const vk::PhysicalDeviceProperties &Props) {
+        return (DevIdx++ == 0);
+      });
+  if (!Device) {
+    if (DevIdx == 0)
+      std::cerr << "No vulkan devices found\n";
+    return 1;
+  }
 
-  auto PhysDevices = Instance->enumeratePhysicalDevices().value;
-  for (auto PD : PhysDevices) {
-    hsh::detail::vulkan::Globals.PhysDevice = PD;
-    uint32_t QFIdx = 0;
-    bool HasExtMemoryBudget = false;
-    auto Device =
-        PD.createDeviceUnique(MyDeviceCreateInfo(PD, QFIdx, HasExtMemoryBudget))
-            .value;
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(*Device);
-    hsh::detail::vulkan::Globals.Device = Device.get();
-    hsh::detail::vulkan::Globals.QueueFamilyIdx = QFIdx;
+  auto Surface = hsh::create_surface(Window.Connection, Window.Window);
+  auto RenderTexture = hsh::create_render_texture2d(Surface);
 
-    auto VmaAllocator =
-        vk::createVmaAllocatorUnique(
-            MyVmaAllocatorCreateInfo(Instance.get(), PD, Device.get(),
-                                     HasExtMemoryBudget))
-            .value;
-    hsh::detail::vulkan::Globals.Allocator = VmaAllocator.get();
-    auto UploadPool = hsh::detail::vulkan::CreateUploadPool();
-    hsh::detail::vulkan::Globals.UploadPool = UploadPool.get();
+  PipelineCacheFileManager PCFM;
+  Device.build_pipelines(PCFM);
 
-    std::array<hsh::detail::vulkan::DeletedResources, 2> DeletedResources;
-    hsh::detail::vulkan::Globals.DeletedResourcesArr = &DeletedResources;
-    hsh::detail::vulkan::Globals.DeletedResources = &DeletedResources[0];
+  MyNS::Binding PipelineBind{};
 
-    auto Surface = hsh::create_surface(Window.Connection, Window.Window);
-    auto RenderTexture = hsh::create_render_texture2d(Surface);
-    auto DescriptorSetLayout =
-        Device
-            ->createDescriptorSetLayoutUnique(MyDescriptorSetLayoutCreateInfo())
-            .value;
-    hsh::detail::vulkan::Globals.SetDescriptorSetLayout(
-        DescriptorSetLayout.get());
-    auto PipelineLayout =
-        Device
-            ->createPipelineLayoutUnique(
-                MyPipelineLayoutCreateInfo(DescriptorSetLayout.get()))
-            .value;
-    hsh::detail::vulkan::Globals.PipelineLayout = PipelineLayout.get();
-    hsh::detail::vulkan::DescriptorPoolChain DescriptorPoolChain;
-    hsh::detail::vulkan::Globals.DescriptorPoolChain = &DescriptorPoolChain;
-    hsh::detail::vulkan::Globals.Queue = Device->getQueue(QFIdx, 0);
-    auto CommandPool =
-        Device->createCommandPoolUnique(MyCommandPoolCreateInfo(QFIdx)).value;
-    auto CommandBuffers =
-        Device
-            ->allocateCommandBuffersUnique(
-                MyCommandBufferAllocateInfo(CommandPool.get()))
-            .value;
-    hsh::detail::vulkan::Globals.CommandBuffers = &CommandBuffers;
-    std::array<vk::UniqueFence, 2> CommandFences{
-        Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
-            .value,
-        Device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
-            .value,
-    };
-    hsh::detail::vulkan::Globals.CommandFences = &CommandFences;
-    auto ImageAcquireSem = Device->createSemaphoreUnique({}).value;
-    hsh::detail::vulkan::Globals.ImageAcquireSem = ImageAcquireSem.get();
-    auto RenderCompleteSem = Device->createSemaphoreUnique({}).value;
-    hsh::detail::vulkan::Globals.RenderCompleteSem = RenderCompleteSem.get();
-
-    hsh::detail::GlobalListNode::CreateAll(hsh::ActiveTarget::VULKAN_SPIRV);
-
-    MyNS::Binding PipelineBind;
-
-    Connection.runloop([&]() {
-      // auto start = std::chrono::steady_clock::now();
-      hsh::detail::vulkan::Globals.PreRender();
-
+  Connection.runloop([&]() {
+    Device.enter_draw_context([&]() {
       if (!PipelineBind.Binding)
         PipelineBind = MyNS::BuildPipeline();
 
@@ -491,19 +199,9 @@ int main(int argc, char **argv) {
       hsh::clear_attachments();
       PipelineBind.Binding.draw(0, 3);
       RenderTexture.resolve_surface(Surface.get());
-      hsh::detail::vulkan::Globals.PostRender();
-      // std::cerr << std::chrono::duration_cast<std::chrono::microseconds>(
-      //    std::chrono::steady_clock::now() - start)
-      //    .count() << std::endl;
-      return true;
     });
-
-    Device->waitIdle();
-
-    hsh::detail::GlobalListNode::DestroyAll(hsh::ActiveTarget::VULKAN_SPIRV);
-
-    break;
-  }
+    return true;
+  });
 
   return 0;
 }

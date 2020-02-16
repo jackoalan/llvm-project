@@ -155,6 +155,7 @@ public:
 };
 
 class SurfaceAllocation {
+  friend class DeletedSurfaceAllocation;
   friend class RenderTextureAllocation;
   SurfaceAllocation *Prev = nullptr, *Next = nullptr;
   SourceLocation Location;
@@ -326,6 +327,24 @@ public:
   inline ~DeletedTextureAllocation() noexcept;
 };
 
+class DeletedSurfaceAllocation {
+  vk::UniqueSurfaceKHR Surface;
+  vk::UniqueSwapchainKHR Swapchain;
+  vk::UniqueRenderPass OwnedRenderPass;
+
+public:
+  explicit DeletedSurfaceAllocation(SurfaceAllocation &&Obj) noexcept
+      : Surface(std::move(Obj.Surface)), Swapchain(std::move(Obj.Swapchain)),
+        OwnedRenderPass(std::move(Obj.OwnedRenderPass)) {}
+
+  DeletedSurfaceAllocation(const DeletedSurfaceAllocation &other) = delete;
+  DeletedSurfaceAllocation &
+  operator=(const DeletedSurfaceAllocation &other) = delete;
+  DeletedSurfaceAllocation(DeletedSurfaceAllocation &&other) noexcept = default;
+  DeletedSurfaceAllocation &
+  operator=(DeletedSurfaceAllocation &&other) noexcept = default;
+};
+
 class DeletedRenderTextureAllocation {
   DeletedTextureAllocation ColorTexture;
   vk::UniqueImageView ColorView;
@@ -374,6 +393,7 @@ public:
 class DeletedResources {
   std::vector<DeletedBufferAllocation> Buffers;
   std::vector<DeletedTextureAllocation> Textures;
+  std::vector<DeletedSurfaceAllocation> Surfaces;
   std::vector<DeletedRenderTextureAllocation> RenderTextures;
 
 public:
@@ -383,12 +403,16 @@ public:
   void DeleteLater(TextureAllocation &&Obj) noexcept {
     Textures.emplace_back(std::move(Obj));
   }
+  void DeleteLater(SurfaceAllocation &&Obj) noexcept {
+    Surfaces.emplace_back(std::move(Obj));
+  }
   void DeleteLater(RenderTextureAllocation &&Obj) noexcept {
     RenderTextures.emplace_back(std::move(Obj));
   }
   void Purge() noexcept {
     Buffers.clear();
     Textures.clear();
+    Surfaces.clear();
     RenderTextures.clear();
   }
   DeletedResources() noexcept = default;
@@ -402,6 +426,8 @@ struct VulkanGlobals {
   vk::Device Device;
   vk::VmaAllocator Allocator;
   vk::VmaPool UploadPool;
+  uint8_t PipelineCacheUUID[VK_UUID_SIZE];
+  vk::PipelineCache PipelineCache;
   std::array<vk::DescriptorSetLayout, 64> DescriptorSetLayout;
   vk::PipelineLayout PipelineLayout;
   struct DescriptorPoolChain *DescriptorPoolChain = nullptr;
@@ -415,8 +441,8 @@ struct VulkanGlobals {
   float Anisotropy = 0.f;
   unsigned DynamicBufferIndex = 0;
   vk::DeviceSize DynamicBufferMask = 0;
-  std::vector<vk::UniqueCommandBuffer> *CommandBuffers = nullptr;
-  std::array<vk::UniqueFence, 2> *CommandFences = nullptr;
+  std::array<vk::CommandBuffer, 2> CommandBuffers;
+  std::array<vk::Fence, 2> CommandFences;
   vk::CommandBuffer Cmd;
   vk::Fence CmdFence;
   vk::Pipeline BoundPipeline;
@@ -431,8 +457,8 @@ struct VulkanGlobals {
 
   void PreRender() noexcept {
     uint32_t CurBufferIdx = Frame & 1u;
-    Cmd = (*CommandBuffers)[CurBufferIdx].get();
-    CmdFence = (*CommandFences)[CurBufferIdx].get();
+    Cmd = CommandBuffers[CurBufferIdx];
+    CmdFence = CommandFences[CurBufferIdx];
     Device.waitForFences(CmdFence, VK_TRUE, 500000000);
     DynamicBufferIndex = CurBufferIdx;
     DynamicBufferMask = CurBufferIdx ? ~VkDeviceSize(0) : 0;
@@ -501,6 +527,32 @@ struct VulkanGlobals {
 #endif
 };
 inline VulkanGlobals Globals;
+
+template <typename Mgr>
+inline vk::UniquePipelineCache CreatePipelineCache(Mgr &M) noexcept {
+  vk::UniquePipelineCache Ret;
+  M.ReadPipelineCache(
+      [&](const uint8_t *Data, std::size_t Size) {
+        Ret = Globals.Device
+                  .createPipelineCacheUnique(
+                      vk::PipelineCacheCreateInfo({}, Size, Data))
+                  .value;
+      },
+      Globals.PipelineCacheUUID);
+  if (!Ret)
+    Ret = Globals.Device.createPipelineCacheUnique({}).value;
+  return Ret;
+}
+
+template <typename Mgr> inline void WritePipelineCache(Mgr &M) noexcept {
+  M.WritePipelineCache(
+      [&](auto F) {
+        auto Data =
+            Globals.Device.getPipelineCacheData(Globals.PipelineCache).value;
+        F(Data.data(), Data.size());
+      },
+      Globals.PipelineCacheUUID);
+}
 
 bool SurfaceAllocation::PreRender() noexcept {
   auto Capabilities =
@@ -601,6 +653,7 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
   }
   if (Next)
     Next->Prev = Prev;
+  Globals.DeletedResources->DeleteLater(std::move(*this));
 }
 
 SurfaceAllocation::SurfaceAllocation(const SourceLocation &location,
@@ -798,7 +851,7 @@ struct DescriptorPoolChain {
     }
     struct DescriptorBucket {
       std::array<vk::DescriptorSet, 64> DescriptorSets;
-      UniqueDescriptorSet allocate(struct DescriptorPool &pool, uint64_t &bmp,
+      UniqueDescriptorSet Allocate(struct DescriptorPool &pool, uint64_t &bmp,
                                    std::size_t Index) noexcept {
         assert(bmp != UINT64_MAX && "descriptor bucket full");
         if (!DescriptorSets[0]) {
@@ -823,20 +876,20 @@ struct DescriptorPoolChain {
       }
     };
     std::array<DescriptorBucket, MaxDescriptorPoolSets / 64> Buckets;
-    UniqueDescriptorSet allocate(std::size_t Index) noexcept {
+    UniqueDescriptorSet Allocate(std::size_t Index) noexcept {
       assert(AllocatedSets < MaxDescriptorPoolSets && "descriptor pool full");
       auto BucketsIt = Buckets.begin();
       for (uint64_t &bmp : Bitmap) {
         if (bmp != UINT64_MAX) {
           ++AllocatedSets;
-          return BucketsIt->allocate(*this, bmp, Index);
+          return BucketsIt->Allocate(*this, bmp, Index);
         }
         Index += 64;
         ++BucketsIt;
       }
       return {};
     }
-    void free(std::size_t Index) noexcept {
+    void Free(std::size_t Index) noexcept {
       auto BucketIdx = Index / 64;
       auto BucketRem = Index % 64;
       assert(AllocatedSets && "freed too many descriptor sets from pool");
@@ -846,27 +899,27 @@ struct DescriptorPoolChain {
     }
   };
   std::list<DescriptorPool> Chain;
-  UniqueDescriptorSet allocate() noexcept {
+  UniqueDescriptorSet Allocate() noexcept {
     std::size_t Index = 0;
     for (auto &pool : Chain) {
       if (pool.AllocatedSets != MaxDescriptorPoolSets)
-        return pool.allocate(Index);
+        return pool.Allocate(Index);
       Index += MaxDescriptorPoolSets;
     }
-    return Chain.emplace_back().allocate(Index);
+    return Chain.emplace_back().Allocate(Index);
   }
-  void free(std::size_t Index) noexcept {
+  void Free(std::size_t Index) noexcept {
     auto PoolIdx = Index / MaxDescriptorPoolSets;
     auto PoolRem = Index % MaxDescriptorPoolSets;
     auto PoolIt = Chain.begin();
     std::advance(PoolIt, PoolIdx);
-    PoolIt->free(PoolRem);
+    PoolIt->Free(PoolRem);
   }
 };
 
 UniqueDescriptorSet::~UniqueDescriptorSet() noexcept {
   if (Index != UINT64_MAX)
-    Globals.DescriptorPoolChain->free(Index);
+    Globals.DescriptorPoolChain->Free(Index);
 }
 
 inline VkResult vmaCreateAllocator(const VmaAllocatorCreateInfo &pCreateInfo,
@@ -1073,7 +1126,7 @@ void RenderTextureAllocation::Prepare() noexcept {
               vk::ImageUsageFlagBits::eTransferSrc,
           {}, {}, {}, vk::ImageLayout::eUndefined),
       true);
-  ColorView = vulkan::Globals.Device
+  ColorView = Globals.Device
                   .createImageViewUnique(vk::ImageViewCreateInfo(
                       {}, ColorTexture.GetImage(), vk::ImageViewType::e2D,
                       ColorFormat, {},
@@ -1091,7 +1144,7 @@ void RenderTextureAllocation::Prepare() noexcept {
                               vk::ImageUsageFlagBits::eTransferSrc,
                           {}, {}, {}, vk::ImageLayout::eUndefined),
       true);
-  DepthView = vulkan::Globals.Device
+  DepthView = Globals.Device
                   .createImageViewUnique(vk::ImageViewCreateInfo(
                       {}, DepthTexture.GetImage(), vk::ImageViewType::e2D,
                       vk::Format::eD32Sfloat, {},
@@ -1120,7 +1173,7 @@ void RenderTextureAllocation::Prepare() noexcept {
             {}, {}, {}, vk::ImageLayout::eUndefined),
         true);
     ColorBindings[i].ImageView =
-        vulkan::Globals.Device
+        Globals.Device
             .createImageViewUnique(vk::ImageViewCreateInfo(
                 {}, ColorBindings[i].Texture.GetImage(), vk::ImageViewType::e2D,
                 ColorFormat, {},
@@ -1142,7 +1195,7 @@ void RenderTextureAllocation::Prepare() noexcept {
                             {}, {}, {}, vk::ImageLayout::eUndefined),
         true);
     DepthBindings[i].ImageView =
-        vulkan::Globals.Device
+        Globals.Device
             .createImageViewUnique(vk::ImageViewCreateInfo(
                 {}, DepthBindings[i].Texture.GetImage(), vk::ImageViewType::e2D,
                 vk::Format::eD32Sfloat, {},
@@ -1163,7 +1216,7 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                                        vk::ImageAspectFlagBits Aspect,
                                        vk::Offset3D Offset,
                                        vk::Extent3D Extent) noexcept {
-  vulkan::Globals.Cmd.pipelineBarrier(
+  Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eColorAttachmentOutput,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
       {}, {},
@@ -1192,7 +1245,7 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                       vk::ImageSubresourceLayers(Aspect, 0, 0, 1), Offset,
                       Extent));
   }
-  vulkan::Globals.Cmd.pipelineBarrier(
+  Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eColorAttachmentOutput,
       vk::DependencyFlagBits::eByRegion, {}, {},
@@ -1235,7 +1288,7 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
   if (DelimitRenderPass)
     Globals.Cmd.endRenderPass();
   auto DstImage = Surface->SwapchainImages[Surface->NextImage];
-  vulkan::Globals.Cmd.pipelineBarrier(
+  Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
       {}, {},
@@ -1248,7 +1301,7 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
                                     VK_REMAINING_ARRAY_LAYERS)));
   _Resolve(ColorTexture.GetImage(), DstImage, vk::ImageAspectFlagBits::eColor,
            vk::Offset3D(), vk::Extent3D(Extent, 1));
-  vulkan::Globals.Cmd.pipelineBarrier(
+  Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
       {}, {},
@@ -1292,7 +1345,7 @@ void RenderTextureAllocation::Attach() noexcept {
 
   if (!FirstAttach) {
     FirstAttach = true;
-    vulkan::Globals.Cmd.pipelineBarrier(
+    Globals.Cmd.pipelineBarrier(
         vk::PipelineStageFlagBits::eTopOfPipe,
         vk::PipelineStageFlagBits::eEarlyFragmentTests |
             vk::PipelineStageFlagBits::eLateFragmentTests,
@@ -1307,7 +1360,7 @@ void RenderTextureAllocation::Attach() noexcept {
             vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0,
                                       VK_REMAINING_MIP_LEVELS, 0,
                                       VK_REMAINING_ARRAY_LAYERS)));
-    vulkan::Globals.Cmd.pipelineBarrier(
+    Globals.Cmd.pipelineBarrier(
         vk::PipelineStageFlagBits::eTopOfPipe,
         vk::PipelineStageFlagBits::eColorAttachmentOutput,
         vk::DependencyFlagBits::eByRegion, {}, {},
