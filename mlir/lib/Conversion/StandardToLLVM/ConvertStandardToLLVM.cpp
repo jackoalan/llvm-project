@@ -15,22 +15,25 @@
 #include "mlir/ADT/TypeSwitch.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Module.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/Functional.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/Utils.h"
-
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <functional>
 
 using namespace mlir;
 
@@ -130,6 +133,19 @@ LLVMTypeConverter::LLVMTypeConverter(
       customizations(customs) {
   assert(llvmDialect && "LLVM IR dialect is not registered");
   module = &llvmDialect->getLLVMModule();
+
+  // Register conversions for the standard types.
+  addConversion([&](FloatType type) { return convertFloatType(type); });
+  addConversion([&](FunctionType type) { return convertFunctionType(type); });
+  addConversion([&](IndexType type) { return convertIndexType(type); });
+  addConversion([&](IntegerType type) { return convertIntegerType(type); });
+  addConversion([&](MemRefType type) { return convertMemRefType(type); });
+  addConversion(
+      [&](UnrankedMemRefType type) { return convertUnrankedMemRefType(type); });
+  addConversion([&](VectorType type) { return convertVectorType(type); });
+
+  // LLVMType is legal, so add a pass-through conversion.
+  addConversion([](LLVM::LLVMType type) { return type; });
 }
 
 /// Get the LLVM context.
@@ -359,26 +375,12 @@ Type LLVMTypeConverter::convertVectorType(VectorType type) {
   return vectorType;
 }
 
-// Dispatch based on the actual type.  Return null type on error.
-Type LLVMTypeConverter::convertStandardType(Type t) {
-  return TypeSwitch<Type, Type>(t)
-      .Case([&](FloatType type) { return convertFloatType(type); })
-      .Case([&](FunctionType type) { return convertFunctionType(type); })
-      .Case([&](IndexType type) { return convertIndexType(type); })
-      .Case([&](IntegerType type) { return convertIntegerType(type); })
-      .Case([&](MemRefType type) { return convertMemRefType(type); })
-      .Case([&](UnrankedMemRefType type) {
-        return convertUnrankedMemRefType(type);
-      })
-      .Case([&](VectorType type) { return convertVectorType(type); })
-      .Case([](LLVM::LLVMType type) { return type; })
-      .Default([](Type) { return Type(); });
-}
-
-LLVMOpLowering::LLVMOpLowering(StringRef rootOpName, MLIRContext *context,
-                               LLVMTypeConverter &lowering_,
-                               PatternBenefit benefit)
-    : ConversionPattern(rootOpName, benefit, context), lowering(lowering_) {}
+ConvertToLLVMPattern::ConvertToLLVMPattern(StringRef rootOpName,
+                                           MLIRContext *context,
+                                           LLVMTypeConverter &typeConverter_,
+                                           PatternBenefit benefit)
+    : ConversionPattern(rootOpName, benefit, context),
+      typeConverter(typeConverter_) {}
 
 /*============================================================================*/
 /* StructBuilder implementation                                               */
@@ -702,13 +704,13 @@ namespace {
 // provided as template argument.  Carries a reference to the LLVM dialect in
 // case it is necessary for rewriters.
 template <typename SourceOp>
-class LLVMLegalizationPattern : public LLVMOpLowering {
+class LLVMLegalizationPattern : public ConvertToLLVMPattern {
 public:
   // Construct a conversion pattern.
   explicit LLVMLegalizationPattern(LLVM::LLVMDialect &dialect_,
-                                   LLVMTypeConverter &lowering_)
-      : LLVMOpLowering(SourceOp::getOperationName(), dialect_.getContext(),
-                       lowering_),
+                                   LLVMTypeConverter &typeConverter_)
+      : ConvertToLLVMPattern(SourceOp::getOperationName(),
+                             dialect_.getContext(), typeConverter_),
         dialect(dialect_) {}
 
   // Get the LLVM IR dialect.
@@ -828,16 +830,11 @@ static void wrapExternalFunction(OpBuilder &builder, Location loc,
 
   builder.setInsertionPointToStart(newFuncOp.addEntryBlock());
 
-  // Get a ValueRange containing argument types. Note that ValueRange is
-  // currently not constructible from a pair of iterators pointing to
-  // BlockArgument.
+  // Get a ValueRange containing arguments.
   FunctionType type = funcOp.getType();
   SmallVector<Value, 8> args;
   args.reserve(type.getNumInputs());
-  auto wrapperArgIters = newFuncOp.getArguments();
-  SmallVector<Value, 8> wrapperArgs(wrapperArgIters.begin(),
-                                    wrapperArgIters.end());
-  ValueRange wrapperArgsRange(wrapperArgs);
+  ValueRange wrapperArgsRange(newFuncOp.getArguments());
 
   // Iterate over the inputs of the original function and pack values into
   // memref descriptors if the original type is a memref.
@@ -904,7 +901,7 @@ protected:
     // LLVMTypeConverter provided to this legalization pattern.
     auto varargsAttr = funcOp.getAttrOfType<BoolAttr>("std.varargs");
     TypeConverter::SignatureConversion result(funcOp.getNumArguments());
-    auto llvmType = lowering.convertFunctionSignature(
+    auto llvmType = typeConverter.convertFunctionSignature(
         funcOp.getType(), varargsAttr && varargsAttr.getValue(), result);
 
     // Propagate argument attributes to all converted arguments obtained after
@@ -957,10 +954,10 @@ struct FuncOpConversion : public FuncOpConversionBase {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
     if (emitWrappers) {
       if (newFuncOp.isExternal())
-        wrapExternalFunction(rewriter, op->getLoc(), lowering, funcOp,
+        wrapExternalFunction(rewriter, op->getLoc(), typeConverter, funcOp,
                              newFuncOp);
       else
-        wrapForExternalCallers(rewriter, op->getLoc(), lowering, funcOp,
+        wrapForExternalCallers(rewriter, op->getLoc(), typeConverter, funcOp,
                                newFuncOp);
     }
 
@@ -1014,7 +1011,7 @@ struct BarePtrFuncOpConversion : public FuncOpConversionBase {
             rewriter.create<LLVM::UndefOp>(funcLoc, arg.getType());
         rewriter.replaceUsesOfBlockArgument(arg, placeHolder);
         auto desc = MemRefDescriptor::fromStaticShape(
-            rewriter, funcLoc, lowering, memrefType, arg);
+            rewriter, funcLoc, typeConverter, memrefType, arg);
         rewriter.replaceOp(placeHolder.getDefiningOp(), {desc});
       }
     }
@@ -1119,7 +1116,8 @@ struct OneToOneLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
 
     Type packedType;
     if (numResults != 0) {
-      packedType = this->lowering.packFunctionResults(op->getResultTypes());
+      packedType =
+          this->typeConverter.packFunctionResults(op->getResultTypes());
       if (!packedType)
         return this->matchFailure();
     }
@@ -1139,7 +1137,7 @@ struct OneToOneLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
     SmallVector<Value, 4> results;
     results.reserve(numResults);
     for (unsigned i = 0; i < numResults; ++i) {
-      auto type = this->lowering.convertType(op->getResult(i).getType());
+      auto type = this->typeConverter.convertType(op->getResult(i).getType());
       results.push_back(rewriter.create<LLVM::ExtractValueOp>(
           op->getLoc(), type, newOp.getOperation()->getResult(0),
           rewriter.getI64ArrayAttr(i)));
@@ -1149,7 +1147,8 @@ struct OneToOneLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
   }
 };
 
-template <typename SourceOp, unsigned OpCount> struct OpCountValidator {
+template <typename SourceOp, unsigned OpCount>
+struct OpCountValidator {
   static_assert(
       std::is_base_of<
           typename OpTrait::NOperands<OpCount>::template Impl<SourceOp>,
@@ -1157,13 +1156,45 @@ template <typename SourceOp, unsigned OpCount> struct OpCountValidator {
       "wrong operand count");
 };
 
-template <typename SourceOp> struct OpCountValidator<SourceOp, 1> {
+template <typename SourceOp>
+struct OpCountValidator<SourceOp, 1> {
   static_assert(std::is_base_of<OpTrait::OneOperand<SourceOp>, SourceOp>::value,
                 "expected a single operand");
 };
 
-template <typename SourceOp, unsigned OpCount> void ValidateOpCount() {
+template <typename SourceOp, unsigned OpCount>
+void ValidateOpCount() {
   OpCountValidator<SourceOp, OpCount>();
+}
+
+static LogicalResult HandleMultidimensionalVectors(
+    Operation *op, ArrayRef<Value> operands, LLVMTypeConverter &typeConverter,
+    std::function<Value(LLVM::LLVMType, ValueRange)> createOperand,
+    ConversionPatternRewriter &rewriter) {
+  auto vectorType = op->getResult(0).getType().dyn_cast<VectorType>();
+  if (!vectorType)
+    return failure();
+  auto vectorTypeInfo = extractNDVectorTypeInfo(vectorType, typeConverter);
+  auto llvmVectorTy = vectorTypeInfo.llvmVectorTy;
+  auto llvmArrayTy = operands[0].getType().cast<LLVM::LLVMType>();
+  if (!llvmVectorTy || llvmArrayTy != vectorTypeInfo.llvmArrayTy)
+    return failure();
+
+  auto loc = op->getLoc();
+  Value desc = rewriter.create<LLVM::UndefOp>(loc, llvmArrayTy);
+  nDVectorIterate(vectorTypeInfo, rewriter, [&](ArrayAttr position) {
+    // For this unrolled `position` corresponding to the `linearIndex`^th
+    // element, extract operand vectors
+    SmallVector<Value, 4> extractedOperands;
+    for (auto operand : operands)
+      extractedOperands.push_back(rewriter.create<LLVM::ExtractValueOp>(
+          loc, llvmVectorTy, operand, position));
+    Value newVal = createOperand(llvmVectorTy, extractedOperands);
+    desc = rewriter.create<LLVM::InsertValueOp>(loc, llvmArrayTy, desc, newVal,
+                                                position);
+  });
+  rewriter.replaceOp(op, desc);
+  return success();
 }
 
 // Basic lowering implementation for rewriting from Standard Ops to LLVM Dialect
@@ -1193,7 +1224,6 @@ struct NaryOpLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
         return this->matchFailure();
     }
 
-    auto loc = op->getLoc();
     auto llvmArrayTy = operands[0].getType().cast<LLVM::LLVMType>();
 
     if (!llvmArrayTy.isArrayTy()) {
@@ -1203,30 +1233,15 @@ struct NaryOpLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
       return this->matchSuccess();
     }
 
-    auto vectorType = op->getResult(0).getType().dyn_cast<VectorType>();
-    if (!vectorType)
-      return this->matchFailure();
-    auto vectorTypeInfo = extractNDVectorTypeInfo(vectorType, this->lowering);
-    auto llvmVectorTy = vectorTypeInfo.llvmVectorTy;
-    if (!llvmVectorTy || llvmArrayTy != vectorTypeInfo.llvmArrayTy)
-      return this->matchFailure();
-
-    Value desc = rewriter.create<LLVM::UndefOp>(loc, llvmArrayTy);
-    nDVectorIterate(vectorTypeInfo, rewriter, [&](ArrayAttr position) {
-      // For this unrolled `position` corresponding to the `linearIndex`^th
-      // element, extract operand vectors
-      SmallVector<Value, OpCount> extractedOperands;
-      for (unsigned i = 0; i < OpCount; ++i) {
-        extractedOperands.push_back(rewriter.create<LLVM::ExtractValueOp>(
-            loc, llvmVectorTy, operands[i], position));
-      }
-      Value newVal = rewriter.create<TargetOp>(
-          loc, llvmVectorTy, extractedOperands, op->getAttrs());
-      desc = rewriter.create<LLVM::InsertValueOp>(loc, llvmArrayTy, desc,
-                                                  newVal, position);
-    });
-    rewriter.replaceOp(op, desc);
-    return this->matchSuccess();
+    if (succeeded(HandleMultidimensionalVectors(
+            op, operands, this->typeConverter,
+            [&](LLVM::LLVMType llvmVectorTy, ValueRange operands) {
+              return rewriter.create<TargetOp>(op->getLoc(), llvmVectorTy,
+                                               operands, op->getAttrs());
+            },
+            rewriter)))
+      return this->matchSuccess();
+    return this->matchFailure();
   }
 };
 
@@ -1416,8 +1431,9 @@ struct AllocOpLowering : public LLVMLegalizationPattern<AllocOp> {
     //   %1 = ptrtoint %elementType* %0 to %indexType
     // which is a common pattern of getting the size of a type in bytes.
     auto elementType = type.getElementType();
-    auto convertedPtrType =
-        lowering.convertType(elementType).cast<LLVM::LLVMType>().getPointerTo();
+    auto convertedPtrType = typeConverter.convertType(elementType)
+                                .cast<LLVM::LLVMType>()
+                                .getPointerTo();
     auto nullPtr = rewriter.create<LLVM::NullOp>(loc, convertedPtrType);
     auto one = createIndexConstant(rewriter, loc, 1);
     auto gep = rewriter.create<LLVM::GEPOp>(loc, convertedPtrType,
@@ -1464,7 +1480,7 @@ struct AllocOpLowering : public LLVMLegalizationPattern<AllocOp> {
                       .getResult(0);
     }
 
-    auto structElementType = lowering.convertType(elementType);
+    auto structElementType = typeConverter.convertType(elementType);
     auto elementPtrType = structElementType.cast<LLVM::LLVMType>().getPointerTo(
         type.getMemorySpace());
     Value bitcastAllocated = rewriter.create<LLVM::BitcastOp>(
@@ -1484,7 +1500,7 @@ struct AllocOpLowering : public LLVMLegalizationPattern<AllocOp> {
            "unexpected number of strides");
 
     // Create the MemRef descriptor.
-    auto structType = lowering.convertType(type);
+    auto structType = typeConverter.convertType(type);
     auto memRefDescriptor = MemRefDescriptor::undef(rewriter, loc, structType);
     // Field 1: Allocated pointer, used for malloc/free.
     memRefDescriptor.setAllocatedPtr(rewriter, loc, bitcastAllocated);
@@ -1528,11 +1544,10 @@ struct AllocOpLowering : public LLVMLegalizationPattern<AllocOp> {
       if (strides[index] == MemRefType::getDynamicStrideOrOffset())
         // Identity layout map is enforced in the match function, so we compute:
         //   `runningStride *= sizes[index + 1]`
-        runningStride =
-            runningStride
-                ? rewriter.create<LLVM::MulOp>(loc, runningStride,
-                                               sizes[index + 1])
-                : createIndexConstant(rewriter, loc, 1);
+        runningStride = runningStride
+                            ? rewriter.create<LLVM::MulOp>(loc, runningStride,
+                                                           sizes[index + 1])
+                            : createIndexConstant(rewriter, loc, 1);
       else
         runningStride = createIndexConstant(rewriter, loc, strides[index]);
       strideValues[index] = runningStride;
@@ -1578,11 +1593,12 @@ struct CallOpInterfaceLowering : public LLVMLegalizationPattern<CallOpType> {
     }
 
     if (numResults != 0) {
-      if (!(packedResult = this->lowering.packFunctionResults(resultTypes)))
+      if (!(packedResult =
+                this->typeConverter.packFunctionResults(resultTypes)))
         return this->matchFailure();
     }
 
-    auto promoted = this->lowering.promoteMemRefDescriptors(
+    auto promoted = this->typeConverter.promoteMemRefDescriptors(
         op->getLoc(), /*opOperands=*/op->getOperands(), operands, rewriter);
     auto newOp = rewriter.create<LLVM::CallOp>(op->getLoc(), packedResult,
                                                promoted, op->getAttrs());
@@ -1601,7 +1617,7 @@ struct CallOpInterfaceLowering : public LLVMLegalizationPattern<CallOpType> {
     SmallVector<Value, 4> results;
     results.reserve(numResults);
     for (unsigned i = 0; i < numResults; ++i) {
-      auto type = this->lowering.convertType(op->getResult(i).getType());
+      auto type = this->typeConverter.convertType(op->getResult(i).getType());
       results.push_back(rewriter.create<LLVM::ExtractValueOp>(
           op->getLoc(), type, newOp.getOperation()->getResult(0),
           rewriter.getI64ArrayAttr(i)));
@@ -1663,6 +1679,64 @@ struct DeallocOpLowering : public LLVMLegalizationPattern<DeallocOp> {
   bool useAlloca;
 };
 
+// A `rsqrt` is converted into `1 / sqrt`.
+struct RsqrtOpLowering : public LLVMLegalizationPattern<RsqrtOp> {
+  using LLVMLegalizationPattern<RsqrtOp>::LLVMLegalizationPattern;
+
+  PatternMatchResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    OperandAdaptor<RsqrtOp> transformed(operands);
+    auto operandType =
+        transformed.operand().getType().dyn_cast<LLVM::LLVMType>();
+
+    if (!operandType)
+      return matchFailure();
+
+    auto loc = op->getLoc();
+    auto resultType = *op->result_type_begin();
+    auto floatType = getElementTypeOrSelf(resultType).cast<FloatType>();
+    auto floatOne = rewriter.getFloatAttr(floatType, 1.0);
+
+    if (!operandType.isArrayTy()) {
+      LLVM::ConstantOp one;
+      if (operandType.isVectorTy()) {
+        one = rewriter.create<LLVM::ConstantOp>(
+            loc, operandType,
+            SplatElementsAttr::get(resultType.cast<ShapedType>(), floatOne));
+      } else {
+        one = rewriter.create<LLVM::ConstantOp>(loc, operandType, floatOne);
+      }
+      auto sqrt = rewriter.create<LLVM::SqrtOp>(loc, transformed.operand());
+      rewriter.replaceOpWithNewOp<LLVM::FDivOp>(op, operandType, one, sqrt);
+      return this->matchSuccess();
+    }
+
+    auto vectorType = resultType.dyn_cast<VectorType>();
+    if (!vectorType)
+      return this->matchFailure();
+
+    if (succeeded(HandleMultidimensionalVectors(
+            op, operands, typeConverter,
+            [&](LLVM::LLVMType llvmVectorTy, ValueRange operands) {
+              auto splatAttr = SplatElementsAttr::get(
+                  mlir::VectorType::get({llvmVectorTy.getUnderlyingType()
+                                             ->getVectorNumElements()},
+                                        floatType),
+                  floatOne);
+              auto one = rewriter.create<LLVM::ConstantOp>(loc, llvmVectorTy,
+                                                           splatAttr);
+              auto sqrt =
+                  rewriter.create<LLVM::SqrtOp>(loc, llvmVectorTy, operands[0]);
+              return rewriter.create<LLVM::FDivOp>(loc, llvmVectorTy, one,
+                                                   sqrt);
+            },
+            rewriter)))
+      return this->matchSuccess();
+    return this->matchFailure();
+  }
+};
+
 // A `tanh` is converted into a call to the `tanh` function.
 struct TanhOpLowering : public LLVMLegalizationPattern<TanhOp> {
   using LLVMLegalizationPattern<TanhOp>::LLVMLegalizationPattern;
@@ -1676,7 +1750,7 @@ struct TanhOpLowering : public LLVMLegalizationPattern<TanhOp> {
 
     OperandAdaptor<TanhOp> transformed(operands);
     LLVMTypeT operandType =
-        transformed.operand().getType().dyn_cast_or_null<LLVM::LLVMType>();
+        transformed.operand().getType().dyn_cast<LLVM::LLVMType>();
 
     if (!operandType)
       return matchFailure();
@@ -1749,7 +1823,7 @@ struct MemRefCastOpLowering : public LLVMLegalizationPattern<MemRefCastOp> {
 
     auto srcType = memRefCastOp.getOperand().getType();
     auto dstType = memRefCastOp.getType();
-    auto targetStructType = lowering.convertType(memRefCastOp.getType());
+    auto targetStructType = typeConverter.convertType(memRefCastOp.getType());
     auto loc = op->getLoc();
 
     if (srcType.isa<MemRefType>() && dstType.isa<MemRefType>()) {
@@ -1766,15 +1840,15 @@ struct MemRefCastOpLowering : public LLVMLegalizationPattern<MemRefCastOp> {
       auto srcMemRefType = srcType.cast<MemRefType>();
       int64_t rank = srcMemRefType.getRank();
       // ptr = AllocaOp sizeof(MemRefDescriptor)
-      auto ptr = lowering.promoteOneMemRefDescriptor(loc, transformed.source(),
-                                                     rewriter);
+      auto ptr = typeConverter.promoteOneMemRefDescriptor(
+          loc, transformed.source(), rewriter);
       // voidptr = BitCastOp srcType* to void*
       auto voidPtr =
           rewriter.create<LLVM::BitcastOp>(loc, getVoidPtrType(), ptr)
               .getResult();
       // rank = ConstantOp srcRank
       auto rankVal = rewriter.create<LLVM::ConstantOp>(
-          loc, lowering.convertType(rewriter.getIntegerType(64)),
+          loc, typeConverter.convertType(rewriter.getIntegerType(64)),
           rewriter.getI64IntegerAttr(rank));
       // undef = UndefOp
       UnrankedMemRefDescriptor memRefDesc =
@@ -1805,6 +1879,24 @@ struct MemRefCastOpLowering : public LLVMLegalizationPattern<MemRefCastOp> {
     } else {
       llvm_unreachable("Unsuppored unranked memref to unranked memref cast");
     }
+  }
+};
+
+struct DialectCastOpLowering
+    : public LLVMLegalizationPattern<LLVM::DialectCastOp> {
+  using LLVMLegalizationPattern<LLVM::DialectCastOp>::LLVMLegalizationPattern;
+
+  PatternMatchResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto castOp = cast<LLVM::DialectCastOp>(op);
+    OperandAdaptor<LLVM::DialectCastOp> transformed(operands);
+    if (transformed.in().getType() !=
+        typeConverter.convertType(castOp.getType())) {
+      return matchFailure();
+    }
+    rewriter.replaceOp(op, transformed.in());
+    return matchSuccess();
   }
 };
 
@@ -1967,7 +2059,7 @@ struct PrefetchOpLowering : public LoadStoreOpLowering<PrefetchOp> {
                                transformed.indices(), rewriter, getModule());
 
     // Replace with llvm.prefetch.
-    auto llvmI32Type = lowering.convertType(rewriter.getIntegerType(32));
+    auto llvmI32Type = typeConverter.convertType(rewriter.getIntegerType(32));
     auto isWrite = rewriter.create<LLVM::ConstantOp>(
         op->getLoc(), llvmI32Type,
         rewriter.getI32IntegerAttr(prefetchOp.isWrite()));
@@ -1998,7 +2090,7 @@ struct IndexCastOpLowering : public LLVMLegalizationPattern<IndexCastOp> {
     auto indexCastOp = cast<IndexCastOp>(op);
 
     auto targetType =
-        this->lowering.convertType(indexCastOp.getResult().getType())
+        this->typeConverter.convertType(indexCastOp.getResult().getType())
             .cast<LLVM::LLVMType>();
     auto sourceType = transformed.in().getType().cast<LLVM::LLVMType>();
     unsigned targetBits = targetType.getUnderlyingType()->getIntegerBitWidth();
@@ -2033,7 +2125,7 @@ struct CmpIOpLowering : public LLVMLegalizationPattern<CmpIOp> {
     CmpIOpOperandAdaptor transformed(operands);
 
     rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
-        op, lowering.convertType(cmpiOp.getResult().getType()),
+        op, typeConverter.convertType(cmpiOp.getResult().getType()),
         rewriter.getI64IntegerAttr(static_cast<int64_t>(
             convertCmpPredicate<LLVM::ICmpPredicate>(cmpiOp.getPredicate()))),
         transformed.lhs(), transformed.rhs());
@@ -2052,7 +2144,7 @@ struct CmpFOpLowering : public LLVMLegalizationPattern<CmpFOp> {
     CmpFOpOperandAdaptor transformed(operands);
 
     rewriter.replaceOpWithNewOp<LLVM::FCmpOp>(
-        op, lowering.convertType(cmpfOp.getResult().getType()),
+        op, typeConverter.convertType(cmpfOp.getResult().getType()),
         rewriter.getI64IntegerAttr(static_cast<int64_t>(
             convertCmpPredicate<LLVM::FCmpPredicate>(cmpfOp.getPredicate()))),
         transformed.lhs(), transformed.rhs());
@@ -2098,13 +2190,10 @@ struct OneToOneLLVMTerminatorLowering
   using Super = OneToOneLLVMTerminatorLowering<SourceOp, TargetOp>;
 
   PatternMatchResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> properOperands,
-                  ArrayRef<Block *> destinations,
-                  ArrayRef<ArrayRef<Value>> operands,
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<ValueRange, 2> operandRanges(operands.begin(), operands.end());
-    rewriter.replaceOpWithNewOp<TargetOp>(op, properOperands, destinations,
-                                          operandRanges, op->getAttrs());
+    rewriter.replaceOpWithNewOp<TargetOp>(op, operands, op->getSuccessors(),
+                                          op->getAttrs());
     return this->matchSuccess();
   }
 };
@@ -2126,20 +2215,19 @@ struct ReturnOpLowering : public LLVMLegalizationPattern<ReturnOp> {
     // If ReturnOp has 0 or 1 operand, create it and return immediately.
     if (numArguments == 0) {
       rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(
-          op, ArrayRef<Value>(), ArrayRef<Block *>(), op->getAttrs());
+          op, ArrayRef<Type>(), ArrayRef<Value>(), op->getAttrs());
       return matchSuccess();
     }
     if (numArguments == 1) {
       rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(
-          op, ArrayRef<Value>(operands.front()), ArrayRef<Block *>(),
-          op->getAttrs());
+          op, ArrayRef<Type>(), operands.front(), op->getAttrs());
       return matchSuccess();
     }
 
     // Otherwise, we need to pack the arguments into an LLVM struct type before
     // returning.
-    auto packedType =
-        lowering.packFunctionResults(llvm::to_vector<4>(op->getOperandTypes()));
+    auto packedType = typeConverter.packFunctionResults(
+        llvm::to_vector<4>(op->getOperandTypes()));
 
     Value packed = rewriter.create<LLVM::UndefOp>(op->getLoc(), packedType);
     for (unsigned i = 0; i < numArguments; ++i) {
@@ -2147,8 +2235,8 @@ struct ReturnOpLowering : public LLVMLegalizationPattern<ReturnOp> {
           op->getLoc(), packedType, packed, operands[i],
           rewriter.getI64ArrayAttr(i));
     }
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(
-        op, llvm::makeArrayRef(packed), ArrayRef<Block *>(), op->getAttrs());
+    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, ArrayRef<Type>(), packed,
+                                                op->getAttrs());
     return matchSuccess();
   }
 };
@@ -2177,10 +2265,10 @@ struct SplatOpLowering : public LLVMLegalizationPattern<SplatOp> {
       return matchFailure();
 
     // First insert it into an undef vector so we can shuffle it.
-    auto vectorType = lowering.convertType(splatOp.getType());
+    auto vectorType = typeConverter.convertType(splatOp.getType());
     Value undef = rewriter.create<LLVM::UndefOp>(op->getLoc(), vectorType);
     auto zero = rewriter.create<LLVM::ConstantOp>(
-        op->getLoc(), lowering.convertType(rewriter.getIntegerType(32)),
+        op->getLoc(), typeConverter.convertType(rewriter.getIntegerType(32)),
         rewriter.getZeroAttr(rewriter.getIntegerType(32)));
 
     auto v = rewriter.create<LLVM::InsertElementOp>(
@@ -2213,7 +2301,7 @@ struct SplatNdOpLowering : public LLVMLegalizationPattern<SplatOp> {
 
     // First insert it into an undef vector so we can shuffle it.
     auto loc = op->getLoc();
-    auto vectorTypeInfo = extractNDVectorTypeInfo(resultType, lowering);
+    auto vectorTypeInfo = extractNDVectorTypeInfo(resultType, typeConverter);
     auto llvmArrayTy = vectorTypeInfo.llvmArrayTy;
     auto llvmVectorTy = vectorTypeInfo.llvmVectorTy;
     if (!llvmArrayTy || !llvmVectorTy)
@@ -2226,7 +2314,7 @@ struct SplatNdOpLowering : public LLVMLegalizationPattern<SplatOp> {
     // places within the returned descriptor.
     Value vdesc = rewriter.create<LLVM::UndefOp>(loc, llvmVectorTy);
     auto zero = rewriter.create<LLVM::ConstantOp>(
-        loc, lowering.convertType(rewriter.getIntegerType(32)),
+        loc, typeConverter.convertType(rewriter.getIntegerType(32)),
         rewriter.getZeroAttr(rewriter.getIntegerType(32)));
     Value v = rewriter.create<LLVM::InsertElementOp>(loc, llvmVectorTy, vdesc,
                                                      adaptor.input(), zero);
@@ -2278,14 +2366,15 @@ struct SubViewOpLowering : public LLVMLegalizationPattern<SubViewOp> {
 
     auto sourceMemRefType = viewOp.source().getType().cast<MemRefType>();
     auto sourceElementTy =
-        lowering.convertType(sourceMemRefType.getElementType())
+        typeConverter.convertType(sourceMemRefType.getElementType())
             .dyn_cast_or_null<LLVM::LLVMType>();
 
     auto viewMemRefType = viewOp.getType();
-    auto targetElementTy = lowering.convertType(viewMemRefType.getElementType())
-                               .dyn_cast<LLVM::LLVMType>();
-    auto targetDescTy =
-        lowering.convertType(viewMemRefType).dyn_cast_or_null<LLVM::LLVMType>();
+    auto targetElementTy =
+        typeConverter.convertType(viewMemRefType.getElementType())
+            .dyn_cast<LLVM::LLVMType>();
+    auto targetDescTy = typeConverter.convertType(viewMemRefType)
+                            .dyn_cast_or_null<LLVM::LLVMType>();
     if (!sourceElementTy || !targetDescTy)
       return matchFailure();
 
@@ -2333,7 +2422,7 @@ struct SubViewOpLowering : public LLVMLegalizationPattern<SubViewOp> {
       strideValues.push_back(sourceMemRef.stride(rewriter, loc, i));
 
     // Fill in missing dynamic sizes.
-    auto llvmIndexType = lowering.convertType(rewriter.getIndexType());
+    auto llvmIndexType = typeConverter.convertType(rewriter.getIndexType());
     if (dynamicSizes.empty()) {
       dynamicSizes.reserve(viewMemRefType.getRank());
       auto shape = viewMemRefType.getShape();
@@ -2424,10 +2513,11 @@ struct ViewOpLowering : public LLVMLegalizationPattern<ViewOp> {
     ViewOpOperandAdaptor adaptor(operands);
 
     auto viewMemRefType = viewOp.getType();
-    auto targetElementTy = lowering.convertType(viewMemRefType.getElementType())
-                               .dyn_cast<LLVM::LLVMType>();
+    auto targetElementTy =
+        typeConverter.convertType(viewMemRefType.getElementType())
+            .dyn_cast<LLVM::LLVMType>();
     auto targetDescTy =
-        lowering.convertType(viewMemRefType).dyn_cast<LLVM::LLVMType>();
+        typeConverter.convertType(viewMemRefType).dyn_cast<LLVM::LLVMType>();
     if (!targetDescTy)
       return op->emitWarning("Target descriptor type not converted to LLVM"),
              matchFailure();
@@ -2497,10 +2587,208 @@ struct ViewOpLowering : public LLVMLegalizationPattern<ViewOp> {
   }
 };
 
+struct AssumeAlignmentOpLowering
+    : public LLVMLegalizationPattern<AssumeAlignmentOp> {
+  using LLVMLegalizationPattern<AssumeAlignmentOp>::LLVMLegalizationPattern;
+
+  PatternMatchResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    OperandAdaptor<AssumeAlignmentOp> transformed(operands);
+    Value memref = transformed.memref();
+    unsigned alignment = cast<AssumeAlignmentOp>(op).alignment().getZExtValue();
+
+    MemRefDescriptor memRefDescriptor(memref);
+    Value ptr = memRefDescriptor.alignedPtr(rewriter, memref.getLoc());
+
+    // Emit llvm.assume(memref.alignedPtr & (alignment - 1) == 0). Notice that
+    // the asserted memref.alignedPtr isn't used anywhere else, as the real
+    // users like load/store/views always re-extract memref.alignedPtr as they
+    // get lowered.
+    //
+    // This relies on LLVM's CSE optimization (potentially after SROA), since
+    // after CSE all memref.alignedPtr instances get de-duplicated into the same
+    // pointer SSA value.
+    Value zero =
+        createIndexAttrConstant(rewriter, op->getLoc(), getIndexType(), 0);
+    Value mask = createIndexAttrConstant(rewriter, op->getLoc(), getIndexType(),
+                                         alignment - 1);
+    Value ptrValue =
+        rewriter.create<LLVM::PtrToIntOp>(op->getLoc(), getIndexType(), ptr);
+    rewriter.create<LLVM::AssumeOp>(
+        op->getLoc(),
+        rewriter.create<LLVM::ICmpOp>(
+            op->getLoc(), LLVM::ICmpPredicate::eq,
+            rewriter.create<LLVM::AndOp>(op->getLoc(), ptrValue, mask), zero));
+
+    rewriter.eraseOp(op);
+    return matchSuccess();
+  }
+};
+
+} // namespace
+
+/// Try to match the kind of a std.atomic_rmw to determine whether to use a
+/// lowering to llvm.atomicrmw or fallback to llvm.cmpxchg.
+static Optional<LLVM::AtomicBinOp> matchSimpleAtomicOp(AtomicRMWOp atomicOp) {
+  switch (atomicOp.kind()) {
+  case AtomicRMWKind::addf:
+    return LLVM::AtomicBinOp::fadd;
+  case AtomicRMWKind::addi:
+    return LLVM::AtomicBinOp::add;
+  case AtomicRMWKind::assign:
+    return LLVM::AtomicBinOp::xchg;
+  case AtomicRMWKind::maxs:
+    return LLVM::AtomicBinOp::max;
+  case AtomicRMWKind::maxu:
+    return LLVM::AtomicBinOp::umax;
+  case AtomicRMWKind::mins:
+    return LLVM::AtomicBinOp::min;
+  case AtomicRMWKind::minu:
+    return LLVM::AtomicBinOp::umin;
+  default:
+    return llvm::None;
+  }
+  llvm_unreachable("Invalid AtomicRMWKind");
+}
+
+namespace {
+
+struct AtomicRMWOpLowering : public LoadStoreOpLowering<AtomicRMWOp> {
+  using Base::Base;
+
+  PatternMatchResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto atomicOp = cast<AtomicRMWOp>(op);
+    auto maybeKind = matchSimpleAtomicOp(atomicOp);
+    if (!maybeKind)
+      return matchFailure();
+    OperandAdaptor<AtomicRMWOp> adaptor(operands);
+    auto resultType = adaptor.value().getType();
+    auto memRefType = atomicOp.getMemRefType();
+    auto dataPtr = getDataPtr(op->getLoc(), memRefType, adaptor.memref(),
+                              adaptor.indices(), rewriter, getModule());
+    rewriter.replaceOpWithNewOp<LLVM::AtomicRMWOp>(
+        op, resultType, *maybeKind, dataPtr, adaptor.value(),
+        LLVM::AtomicOrdering::acq_rel);
+    return matchSuccess();
+  }
+};
+
+/// Wrap a llvm.cmpxchg operation in a while loop so that the operation can be
+/// retried until it succeeds in atomically storing a new value into memory.
+///
+///      +---------------------------------+
+///      |   <code before the AtomicRMWOp> |
+///      |   <compute initial %loaded>     |
+///      |   br loop(%loaded)              |
+///      +---------------------------------+
+///             |
+///  -------|   |
+///  |      v   v
+///  |   +--------------------------------+
+///  |   | loop(%loaded):                 |
+///  |   |   <body contents>              |
+///  |   |   %pair = cmpxchg              |
+///  |   |   %ok = %pair[0]               |
+///  |   |   %new = %pair[1]              |
+///  |   |   cond_br %ok, end, loop(%new) |
+///  |   +--------------------------------+
+///  |          |        |
+///  |-----------        |
+///                      v
+///      +--------------------------------+
+///      | end:                           |
+///      |   <code after the AtomicRMWOp> |
+///      +--------------------------------+
+///
+struct AtomicCmpXchgOpLowering : public LoadStoreOpLowering<AtomicRMWOp> {
+  using Base::Base;
+
+  PatternMatchResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto atomicOp = cast<AtomicRMWOp>(op);
+    auto maybeKind = matchSimpleAtomicOp(atomicOp);
+    if (maybeKind)
+      return matchFailure();
+
+    LLVM::FCmpPredicate predicate;
+    switch (atomicOp.kind()) {
+    case AtomicRMWKind::maxf:
+      predicate = LLVM::FCmpPredicate::ogt;
+      break;
+    case AtomicRMWKind::minf:
+      predicate = LLVM::FCmpPredicate::olt;
+      break;
+    default:
+      return matchFailure();
+    }
+
+    OperandAdaptor<AtomicRMWOp> adaptor(operands);
+    auto loc = op->getLoc();
+    auto valueType = adaptor.value().getType().cast<LLVM::LLVMType>();
+
+    // Split the block into initial, loop, and ending parts.
+    auto *initBlock = rewriter.getInsertionBlock();
+    auto initPosition = rewriter.getInsertionPoint();
+    auto *loopBlock = rewriter.splitBlock(initBlock, initPosition);
+    auto loopArgument = loopBlock->addArgument(valueType);
+    auto loopPosition = rewriter.getInsertionPoint();
+    auto *endBlock = rewriter.splitBlock(loopBlock, loopPosition);
+
+    // Compute the loaded value and branch to the loop block.
+    rewriter.setInsertionPointToEnd(initBlock);
+    auto memRefType = atomicOp.getMemRefType();
+    auto dataPtr = getDataPtr(loc, memRefType, adaptor.memref(),
+                              adaptor.indices(), rewriter, getModule());
+    Value init = rewriter.create<LLVM::LoadOp>(loc, dataPtr);
+    rewriter.create<LLVM::BrOp>(loc, init, loopBlock);
+
+    // Prepare the body of the loop block.
+    rewriter.setInsertionPointToStart(loopBlock);
+    auto predicateI64 =
+        rewriter.getI64IntegerAttr(static_cast<int64_t>(predicate));
+    auto boolType = LLVM::LLVMType::getInt1Ty(&getDialect());
+    auto lhs = loopArgument;
+    auto rhs = adaptor.value();
+    auto cmp =
+        rewriter.create<LLVM::FCmpOp>(loc, boolType, predicateI64, lhs, rhs);
+    auto select = rewriter.create<LLVM::SelectOp>(loc, cmp, lhs, rhs);
+
+    // Prepare the epilog of the loop block.
+    rewriter.setInsertionPointToEnd(loopBlock);
+    // Append the cmpxchg op to the end of the loop block.
+    auto successOrdering = LLVM::AtomicOrdering::acq_rel;
+    auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+    auto pairType = LLVM::LLVMType::getStructTy(valueType, boolType);
+    auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+        loc, pairType, dataPtr, loopArgument, select, successOrdering,
+        failureOrdering);
+    // Extract the %new_loaded and %ok values from the pair.
+    Value newLoaded = rewriter.create<LLVM::ExtractValueOp>(
+        loc, valueType, cmpxchg, rewriter.getI64ArrayAttr({0}));
+    Value ok = rewriter.create<LLVM::ExtractValueOp>(
+        loc, boolType, cmpxchg, rewriter.getI64ArrayAttr({1}));
+
+    // Conditionally branch to the end or back to the loop depending on %ok.
+    rewriter.create<LLVM::CondBrOp>(loc, ok, endBlock, ArrayRef<Value>(),
+                                    loopBlock, newLoaded);
+
+    // The 'result' of the atomic_rmw op is the newly loaded value.
+    rewriter.replaceOp(op, {newLoaded});
+
+    return matchSuccess();
+  }
+};
+
 } // namespace
 
 static void ensureDistinctSuccessors(Block &bb) {
-  auto *terminator = bb.getTerminator();
+  Operation *terminator = bb.getTerminator();
+  if (terminator->getNumSuccessors() < 2)
+    return;
 
   // Find repeated successors with arguments.
   llvm::SmallDenseMap<Block *, SmallVector<int, 4>> successorPositions;
@@ -2519,21 +2807,15 @@ static void ensureDistinctSuccessors(Block &bb) {
   // There is no need to pass arguments to the dummy block because it will be
   // dominated by the original block and can therefore use any values defined in
   // the original block.
+  OpBuilder builder(terminator->getContext());
   for (const auto &successor : successorPositions) {
-    const auto &positions = successor.second;
     // Start from the second occurrence of a block in the successor list.
-    for (auto position = std::next(positions.begin()), end = positions.end();
-         position != end; ++position) {
-      auto *dummyBlock = new Block();
-      bb.getParent()->push_back(dummyBlock);
-      auto builder = OpBuilder(dummyBlock);
-      SmallVector<Value, 8> operands(
-          terminator->getSuccessorOperands(*position));
-      builder.create<BranchOp>(terminator->getLoc(), successor.first, operands);
-      terminator->setSuccessor(dummyBlock, *position);
-      for (int i = 0, e = terminator->getNumSuccessorOperands(*position); i < e;
-           ++i)
-        terminator->eraseSuccessorOperand(*position, i);
+    for (int position : llvm::drop_begin(successor.second, 1)) {
+      Block *dummyBlock = builder.createBlock(bb.getParent());
+      terminator->setSuccessor(dummyBlock, position);
+      dummyBlock->addArguments(successor.first->getArgumentTypes());
+      builder.create<BranchOp>(terminator->getLoc(), successor.first,
+                               dummyBlock->getArguments());
     }
   }
 }
@@ -2556,6 +2838,8 @@ void mlir::populateStdToLLVMNonMemoryConversionPatterns(
       AddFOpLowering,
       AddIOpLowering,
       AndOpLowering,
+      AtomicCmpXchgOpLowering,
+      AtomicRMWOpLowering,
       BranchOpLowering,
       CallIndirectOpLowering,
       CallOpLowering,
@@ -2566,6 +2850,7 @@ void mlir::populateStdToLLVMNonMemoryConversionPatterns(
       CopySignOpLowering,
       CosOpLowering,
       ConstLLVMOpLowering,
+      DialectCastOpLowering,
       DivFOpLowering,
       ExpOpLowering,
       LogOpLowering,
@@ -2581,6 +2866,7 @@ void mlir::populateStdToLLVMNonMemoryConversionPatterns(
       PrefetchOpLowering,
       RemFOpLowering,
       ReturnOpLowering,
+      RsqrtOpLowering,
       SIToFPLowering,
       SelectOpLowering,
       ShiftLeftOpLowering,
@@ -2608,6 +2894,7 @@ void mlir::populateStdToLLVMMemoryConversionPatters(
     bool useAlloca) {
   // clang-format off
   patterns.insert<
+      AssumeAlignmentOpLowering,
       DimOpLowering,
       LoadOpLowering,
       MemRefCastOpLowering,
@@ -2649,9 +2936,6 @@ void mlir::populateStdToLLVMBarePtrConversionPatterns(
   populateStdToLLVMNonMemoryConversionPatterns(converter, patterns);
   populateStdToLLVMMemoryConversionPatters(converter, patterns, useAlloca);
 }
-
-// Convert types using the stored LLVM IR module.
-Type LLVMTypeConverter::convertType(Type t) { return convertStandardType(t); }
 
 // Create an LLVM IR structure type if there is more than one result.
 Type LLVMTypeConverter::packFunctionResults(ArrayRef<Type> types) {
@@ -2755,8 +3039,7 @@ struct LLVMLoweringPass : public ModulePass<LLVMLoweringPass> {
       populateStdToLLVMConversionPatterns(typeConverter, patterns, useAlloca,
                                           emitCWrappers);
 
-    ConversionTarget target(getContext());
-    target.addLegalDialect<LLVM::LLVMDialect>();
+    LLVMConversionTarget target(getContext());
     if (failed(applyPartialConversion(m, target, patterns, &typeConverter)))
       signalPassFailure();
   }
@@ -2781,6 +3064,12 @@ struct LLVMLoweringPass : public ModulePass<LLVMLoweringPass> {
       llvm::cl::init(false)};
 };
 } // end namespace
+
+mlir::LLVMConversionTarget::LLVMConversionTarget(MLIRContext &ctx)
+    : ConversionTarget(ctx) {
+  this->addLegalDialect<LLVM::LLVMDialect>();
+  this->addIllegalOp<LLVM::DialectCastOp>();
+}
 
 std::unique_ptr<OpPassBase<ModuleOp>>
 mlir::createLowerToLLVMPass(bool useAlloca, bool useBarePtrCallConv,

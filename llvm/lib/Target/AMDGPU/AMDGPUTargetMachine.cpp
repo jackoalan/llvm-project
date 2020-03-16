@@ -30,6 +30,7 @@
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/Localizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/MIRParser/MIParser.h"
 #include "llvm/CodeGen/Passes.h"
@@ -138,6 +139,13 @@ static cl::opt<bool, true> EnableAMDGPUFunctionCallsOpt(
   cl::init(true),
   cl::Hidden);
 
+static cl::opt<bool, true> EnableAMDGPUFixedFunctionABIOpt(
+  "amdgpu-fixed-function-abi",
+  cl::desc("Enable all implicit function arguments"),
+  cl::location(AMDGPUTargetMachine::EnableFixedFunctionABI),
+  cl::init(false),
+  cl::Hidden);
+
 // Enable lib calls simplifications
 static cl::opt<bool> EnableLibCallSimplify(
   "amdgpu-simplify-libcall",
@@ -217,6 +225,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPULowerKernelAttributesPass(*PR);
   initializeAMDGPULowerIntrinsicsPass(*PR);
   initializeAMDGPUOpenCLEnqueuedBlockLoweringPass(*PR);
+  initializeAMDGPUPostLegalizerCombinerPass(*PR);
   initializeAMDGPUPreLegalizerCombinerPass(*PR);
   initializeAMDGPUPromoteAllocaPass(*PR);
   initializeAMDGPUCodeGenPreparePass(*PR);
@@ -370,6 +379,7 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, const Triple &TT,
 
 bool AMDGPUTargetMachine::EnableLateStructurizeCFG = false;
 bool AMDGPUTargetMachine::EnableFunctionCalls = false;
+bool AMDGPUTargetMachine::EnableFixedFunctionABI = false;
 
 AMDGPUTargetMachine::~AMDGPUTargetMachine() = default;
 
@@ -622,6 +632,7 @@ public:
   bool addIRTranslator() override;
   void addPreLegalizeMachineIR() override;
   bool addLegalizeMachineIR() override;
+  void addPreRegBankSelect() override;
   bool addRegBankSelect() override;
   bool addGlobalInstructionSelect() override;
   void addFastRegAlloc() override;
@@ -902,11 +913,17 @@ bool GCNPassConfig::addIRTranslator() {
 void GCNPassConfig::addPreLegalizeMachineIR() {
   bool IsOptNone = getOptLevel() == CodeGenOpt::None;
   addPass(createAMDGPUPreLegalizeCombiner(IsOptNone));
+  addPass(new Localizer());
 }
 
 bool GCNPassConfig::addLegalizeMachineIR() {
   addPass(new Legalizer());
   return false;
+}
+
+void GCNPassConfig::addPreRegBankSelect() {
+  bool IsOptNone = getOptLevel() == CodeGenOpt::None;
+  addPass(createAMDGPUPostLegalizeCombiner(IsOptNone));
 }
 
 bool GCNPassConfig::addRegBankSelect() {

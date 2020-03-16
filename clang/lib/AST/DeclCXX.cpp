@@ -663,7 +663,7 @@ bool CXXRecordDecl::lambdaIsDefaultConstructibleAndAssignable() const {
   // C++17 [expr.prim.lambda]p21:
   //   The closure type associated with a lambda-expression has no default
   //   constructor and a deleted copy assignment operator.
-  if (getLambdaCaptureDefault() != LCD_None || 
+  if (getLambdaCaptureDefault() != LCD_None ||
       getLambdaData().NumCaptures != 0)
     return false;
   return getASTContext().getLangOpts().CPlusPlus2a;
@@ -2152,7 +2152,7 @@ CXXMethodDecl *CXXMethodDecl::getDevirtualizedMethod(const Expr *Base,
     return DevirtualizedMethod;
 
   // Similarly, if the class itself or its destructor is marked 'final',
-  // the class can't be derived from and we can therefore devirtualize the 
+  // the class can't be derived from and we can therefore devirtualize the
   // member function call.
   if (BestDynamicDecl->isEffectivelyFinal())
     return DevirtualizedMethod;
@@ -2364,17 +2364,15 @@ QualType CXXMethodDecl::getThisType() const {
   // volatile X*, and if the member function is declared const volatile,
   // the type of this is const volatile X*.
   assert(isInstance() && "No 'this' for static methods!");
-
-  return CXXMethodDecl::getThisType(getType()->getAs<FunctionProtoType>(),
+  return CXXMethodDecl::getThisType(getType()->castAs<FunctionProtoType>(),
                                     getParent());
 }
 
 QualType CXXMethodDecl::getThisObjectType() const {
   // Ditto getThisType.
   assert(isInstance() && "No 'this' for static methods!");
-
-  return CXXMethodDecl::getThisObjectType(getType()->getAs<FunctionProtoType>(),
-                                          getParent());
+  return CXXMethodDecl::getThisObjectType(
+      getType()->castAs<FunctionProtoType>(), getParent());
 }
 
 bool CXXMethodDecl::hasInlineBody() const {
@@ -3096,7 +3094,7 @@ VarDecl *BindingDecl::getHoldingVar() const {
   if (!DRE)
     return nullptr;
 
-  auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+  auto *VD = cast<VarDecl>(DRE->getDecl());
   assert(VD->isImplicit() && "holding var for binding decl not implicit");
   return VD;
 }

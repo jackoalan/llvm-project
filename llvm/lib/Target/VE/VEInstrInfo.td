@@ -216,6 +216,12 @@ def getGOT        : Operand<iPTR>;
 // GETFUNPLT for PIC
 def GetFunPLT : SDNode<"VEISD::GETFUNPLT", SDTIntUnaryOp>;
 
+// GETTLSADDR for TLS
+def GetTLSAddr : SDNode<"VEISD::GETTLSADDR", SDT_SPCall,
+                        [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+                         SDNPVariadic]>;
+
+
 
 //===----------------------------------------------------------------------===//
 // VE Flag Conditions
@@ -462,65 +468,6 @@ multiclass RRIm<string opcStr, bits<8>opc,
     opc, (outs RC:$sx), (ins immOp:$sy),
     !strconcat(opcStr, " $sx, $sy"),
     [(set Ty:$sx, (OpNode 0, (i32 simm7:$sy)))]> {
-    let cy = 0;
-    let cz = 0;
-    let sz = 0;
-    let hasSideEffects = 0;
-  }
-}
-
-// Multiclass for RR type instructions without dag pattern
-//   Used by sra.w.zx, sla.w.zx, and others
-
-multiclass RRINDm<string opcStr, bits<8>opc,
-               RegisterClass RC, ValueType Ty, Operand immOp, Operand immOp2> {
-  def rr : RR<
-    opc, (outs RC:$sx), (ins RC:$sz, I32:$sy),
-    !strconcat(opcStr, " $sx, $sz, $sy")> {
-    let cy = 1;
-    let cz = 1;
-    let hasSideEffects = 0;
-  }
-  def ri : RR<
-    opc, (outs RC:$sx), (ins RC:$sz, immOp:$sy),
-    !strconcat(opcStr, " $sx, $sz, $sy")> {
-    let cy = 0;
-    let cz = 1;
-    let hasSideEffects = 0;
-  }
-  def rm0 : RR<
-    opc, (outs RC:$sx), (ins immOp2:$sz, I32:$sy),
-    !strconcat(opcStr, " $sx, (${sz})0, $sy")> {
-    let cy = 1;
-    let cz = 0;
-    let sz{6} = 1;
-    let hasSideEffects = 0;
-  }
-  def rm1 : RR<
-    opc, (outs RC:$sx), (ins immOp2:$sz, I32:$sy),
-    !strconcat(opcStr, " $sx, (${sz})1, $sy")> {
-    let cy = 1;
-    let cz = 0;
-    let hasSideEffects = 0;
-  }
-  def im0 : RR<
-    opc, (outs RC:$sx), (ins immOp2:$sz, immOp:$sy),
-    !strconcat(opcStr, " $sx, (${sz})0, $sy")> {
-    let cy = 0;
-    let cz = 0;
-    let sz{6} = 1;
-    let hasSideEffects = 0;
-  }
-  def im1 : RR<
-    opc, (outs RC:$sx), (ins immOp2:$sz, immOp:$sy),
-    !strconcat(opcStr, " $sx, (${sz})1, $sy")> {
-    let cy = 0;
-    let cz = 0;
-    let hasSideEffects = 0;
-  }
-  def zi : RR<
-    opc, (outs RC:$sx), (ins immOp:$sy),
-    !strconcat(opcStr, " $sx, $sy")> {
     let cy = 0;
     let cz = 0;
     let sz = 0;
@@ -831,14 +778,14 @@ defm SRAX : RRIm<"sra.l", 0x77, I64, i64, simm7Op32, uimm6Op64, sra>;
 let cx = 0 in
 defm SRA : RRIm<"sra.w.sx", 0x76, I32, i32, simm7Op32, uimm6Op32, sra>;
 let cx = 1 in
-defm SRAU : RRINDm<"sra.w.zx", 0x76, I32, i32, simm7Op32, uimm6Op32>;
+defm SRAU : RRIm<"sra.w.zx", 0x76, I32, i32, simm7Op32, uimm6Op32>;
 
 let cx = 0 in
 defm SLL : RRIm<"sll", 0x65, I64, i64, simm7Op32, uimm6Op64, shl>;
 let cx = 0 in
 defm SLA : RRIm<"sla.w.sx", 0x66, I32, i32, simm7Op32, uimm6Op32, shl>;
 let cx = 1 in
-defm SLAU : RRINDm<"sla.w.zx", 0x66, I32, i32, simm7Op32, uimm6Op32>;
+defm SLAU : RRIm<"sla.w.zx", 0x66, I32, i32, simm7Op32, uimm6Op32>;
 let cx = 0 in
 defm SRL : RRIm<"srl", 0x75, I64, i64, simm7Op32, uimm6Op64, srl>;
 
@@ -1027,6 +974,11 @@ def RET : CF<
     "b.l (,%lr)",
     [(retflag)]>;
 
+// Branch and Save IC
+
+let cx = 0, cy = 0, cy = 0, cz = 1, hasSideEffects = 0 /* , Uses = [IC] */ in
+def BSIC : RM<0x08, (outs), (ins I64:$sx, I64:$sz), "bsic $sx, (, ${sz})">;
+
 // Branch instruction
 let cx = 0, cx2 = 0, bpf = 0 /* NONE */ in
 defm BCRL : BCRm<"br${cf}.l", "br.l", 0x18, I64, i64, simm7Op64, uimm6Op64>;
@@ -1197,6 +1149,13 @@ def : Pat<(add (VEhi tglobaladdr:$in1), (VElo tglobaladdr:$in2)),
           (LEASLrzi (ANDrm0 (LEAzzi tglobaladdr:$in2), 32),
                     (tglobaladdr:$in1))>;
 
+// GlobalTLS address calculation and its optimization
+def : Pat<(VEhi tglobaltlsaddr:$in), (LEASLzzi tglobaltlsaddr:$in)>;
+def : Pat<(VElo tglobaltlsaddr:$in), (ANDrm0 (LEAzzi tglobaltlsaddr:$in), 32)>;
+def : Pat<(add (VEhi tglobaltlsaddr:$in1), (VElo tglobaltlsaddr:$in2)),
+          (LEASLrzi (ANDrm0 (LEAzzi tglobaltlsaddr:$in2), 32),
+                    (tglobaltlsaddr:$in1))>;
+
 // Address calculation and its optimization
 def : Pat<(VEhi texternalsym:$in), (LEASLzzi texternalsym:$in)>;
 def : Pat<(VElo texternalsym:$in), (ANDrm0 (LEAzzi texternalsym:$in), 32)>;
@@ -1247,6 +1206,14 @@ def : Pat<(GetFunPLT tglobaladdr:$dst),
 def : Pat<(GetFunPLT texternalsym:$dst),
           (GETFUNPLT texternalsym:$dst)>;
 
+// GETTLSADDR for TLS
+let Defs = [SX0, SX10, SX12], hasSideEffects = 0 in
+def GETTLSADDR : Pseudo<(outs), (ins i64imm:$addr),
+                        "# GETTLSADDR $addr",
+                        [(GetTLSAddr tglobaltlsaddr:$addr)] >;
+
+def : Pat<(GetTLSAddr tglobaltlsaddr:$dst),
+          (GETTLSADDR tglobaltlsaddr:$dst)>;
 
 let Defs = [SX11], Uses = [SX11], hasSideEffects = 0 in {
 def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i64imm:$amt, i64imm:$amt2),

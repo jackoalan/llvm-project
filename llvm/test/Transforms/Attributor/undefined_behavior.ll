@@ -264,10 +264,9 @@ e:
 ; undef of a previous instruction.
 define i32 @cond_br_on_undef3() {
 ; ATTRIBUTOR-LABEL: @cond_br_on_undef3(
-; ATTRIBUTOR-NEXT:    %cond = icmp ne i32 1, undef
-; ATTRIBUTOR-NEXT:    br i1 %cond, label %t, label %e
+; ATTRIBUTOR-NEXT:    br label %t
 ; ATTRIBUTOR:       t:
-; ATTRIBUTOR-NEXT:    unreachable
+; ATTRIBUTOR-NEXT:    ret i32 1
 ; ATTRIBUTOR:       e:
 ; ATTRIBUTOR-NEXT:    unreachable
 
@@ -298,4 +297,28 @@ t:
   ret i32 1
 e:
   ret i32 2
+}
+
+; Note that the `load` has UB (so it will be changed to unreachable)
+; and the branch is a terminator that can be constant-folded.
+; We want to test that doing both won't cause a segfault.
+define internal i32 @callee(i1 %C, i32* %A) {
+; ATTRIBUTOR-NOT: @callee(
+;
+entry:
+  %A.0 = load i32, i32* null
+  br i1 %C, label %T, label %F
+
+T:
+  ret i32 %A.0
+
+F:
+  ret i32 1
+}
+
+define i32 @foo() {
+; ATTRIBUTOR-LABEL: @foo()
+; ATTRIBUTOR-NEXT:    ret i32 1
+  %X = call i32 @callee(i1 false, i32* null)
+  ret i32 %X
 }

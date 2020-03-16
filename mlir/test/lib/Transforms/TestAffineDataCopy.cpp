@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Analysis/Passes.h"
+#include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/AffineOps/AffineOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"
@@ -37,31 +38,35 @@ private:
       llvm::cl::desc(
           "Enable memref filter testing in affine data copy optimization"),
       llvm::cl::init(false)};
+  Option<bool> clTestGenerateCopyForMemRegion{
+      *this, "for-memref-region",
+      llvm::cl::desc("Test copy generation for a single memref region"),
+      llvm::cl::init(false)};
 };
 
 } // end anonymous namespace
 
 void TestAffineDataCopy::runOnFunction() {
   // Gather all AffineForOps by loop depth.
-  DenseMap<unsigned, SmallVector<AffineForOp, 2>> depthToLoops;
+  std::vector<SmallVector<AffineForOp, 2>> depthToLoops;
   gatherLoops(getFunction(), depthToLoops);
   assert(depthToLoops.size() && "Loop nest not found");
 
   // Only support tests with a single loop nest and a single innermost loop
   // for now.
-  unsigned innermostLoopIdx = depthToLoops.size() - 2;
+  unsigned innermostLoopIdx = depthToLoops.size() - 1;
   if (depthToLoops[0].size() != 1 || depthToLoops[innermostLoopIdx].size() != 1)
     return;
 
   auto loopNest = depthToLoops[0][0];
   auto innermostLoop = depthToLoops[innermostLoopIdx][0];
-  Optional<Value> memrefFilter;
-  if (clMemRefFilter) {
+  AffineLoadOp load;
+  if (clMemRefFilter || clTestGenerateCopyForMemRegion) {
     // Gather MemRef filter. For simplicity, we use the first loaded memref
     // found in the innermost loop.
     for (auto &op : *innermostLoop.getBody()) {
-      if (auto load = dyn_cast<AffineLoadOp>(op)) {
-        memrefFilter = load.getMemRef();
+      if (auto ld = dyn_cast<AffineLoadOp>(op)) {
+        load = ld;
         break;
       }
     }
@@ -72,10 +77,15 @@ void TestAffineDataCopy::runOnFunction() {
                                    /*fastMemorySpace=*/0,
                                    /*tagMemorySpace=*/0,
                                    /*fastMemCapacityBytes=*/32 * 1024 * 1024UL};
-  DenseSet<Operation *> copyNests;
-  affineDataCopyGenerate(loopNest.getBody()->begin(),
-                         std::prev(loopNest.getBody()->end()), copyOptions,
-                         memrefFilter, copyNests);
+  if (clMemRefFilter) {
+    DenseSet<Operation *> copyNests;
+    affineDataCopyGenerate(loopNest, copyOptions, load.getMemRef(), copyNests);
+  } else if (clTestGenerateCopyForMemRegion) {
+    CopyGenerateResult result;
+    MemRefRegion region(loopNest.getLoc());
+    region.compute(load, /*loopDepth=*/0);
+    generateCopyForMemRegion(region, loopNest, copyOptions, result);
+  }
 }
 
 namespace mlir {

@@ -103,6 +103,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -231,6 +232,8 @@ struct IRPosition {
   /// Create a position describing the argument of \p ACS at position \p ArgNo.
   static const IRPosition callsite_argument(AbstractCallSite ACS,
                                             unsigned ArgNo) {
+    if (ACS.getNumArgOperands() <= ArgNo)
+      return IRPosition();
     int CSArgNo = ACS.getCallArgOperandNo(ArgNo);
     if (CSArgNo >= 0)
       return IRPosition::callsite_argument(
@@ -409,22 +412,6 @@ struct IRPosition {
                 SmallVectorImpl<Attribute> &Attrs,
                 bool IgnoreSubsumingPositions = false) const;
 
-  /// Return the attribute of kind \p AK existing in the IR at this position.
-  Attribute getAttr(Attribute::AttrKind AK) const {
-    if (getPositionKind() == IRP_INVALID || getPositionKind() == IRP_FLOAT)
-      return Attribute();
-
-    AttributeList AttrList;
-    if (ImmutableCallSite ICS = ImmutableCallSite(&getAnchorValue()))
-      AttrList = ICS.getAttributes();
-    else
-      AttrList = getAssociatedFunction()->getAttributes();
-
-    if (AttrList.hasAttribute(getAttrIdx(), AK))
-      return AttrList.getAttribute(getAttrIdx(), AK);
-    return Attribute();
-  }
-
   /// Remove the attribute of kind \p AKs existing in the IR at this position.
   void removeAttrs(ArrayRef<Attribute::AttrKind> AKs) const {
     if (getPositionKind() == IRP_INVALID || getPositionKind() == IRP_FLOAT)
@@ -478,6 +465,10 @@ private:
 
   /// Verify internal invariants.
   void verify();
+
+  /// Return the attributes of kind \p AK existing in the IR as attribute.
+  bool getAttrsFromIRAttr(Attribute::AttrKind AK,
+                          SmallVectorImpl<Attribute> &Attrs) const;
 
 protected:
   /// The value this position is anchored at.
@@ -567,8 +558,10 @@ private:
 struct InformationCache {
   InformationCache(const Module &M, AnalysisGetter &AG,
                    SetVector<Function *> *CGSCC)
-      : DL(M.getDataLayout()), Explorer(/* ExploreInterBlock */ true), AG(AG),
-        CGSCC(CGSCC) {}
+      : DL(M.getDataLayout()),
+        Explorer(/* ExploreInterBlock */ true, /* ExploreCFGForward */ true,
+                 /* ExploreCFGBackward */ true),
+        AG(AG), CGSCC(CGSCC) {}
 
   /// A map type from opcodes to instructions with this opcode.
   using OpcodeInstMapTy = DenseMap<unsigned, SmallVector<Instruction *, 32>>;
@@ -643,6 +636,9 @@ private:
 
   /// The underlying CGSCC, or null if not available.
   SetVector<Function *> *CGSCC;
+
+  /// Set of inlineable functions
+  SmallPtrSet<const Function *, 8> InlineableFunctions;
 
   /// Give the Attributor access to the members so
   /// Attributor::identifyDefaultAbstractAttributes(...) can initialize them.
@@ -773,6 +769,12 @@ struct Attributor {
   /// Return the internal information cache.
   InformationCache &getInfoCache() { return InfoCache; }
 
+  /// Return true if this is a module pass, false otherwise.
+  bool isModulePass() const {
+    return !Functions.empty() &&
+           Functions.size() == Functions.front()->getParent()->size();
+  }
+
   /// Determine opportunities to derive 'default' attributes in \p F and create
   /// abstract attribute objects for them.
   ///
@@ -790,6 +792,14 @@ struct Attributor {
   /// This method needs to be called for all function that might be looked at
   /// through the information cache interface *prior* to looking at them.
   void initializeInformationCache(Function &F);
+
+  /// Determine whether the function \p F is IPO amendable
+  ///
+  /// If a function is exactly defined or it has alwaysinline attribute
+  /// and is viable to be inlined, we say it is IPO amendable
+  bool isFunctionIPOAmendable(const Function &F) {
+    return F.hasExactDefinition() || InfoCache.InlineableFunctions.count(&F);
+  }
 
   /// Mark the internal function \p F as live.
   ///
@@ -1341,6 +1351,13 @@ struct IntegerStateBase : public AbstractState {
     handleNewAssumedValue(R.getAssumed());
   }
 
+  /// "Clamp" this state with \p R. The result is subtype dependent but it is
+  /// intended that information known in either state will be known in
+  /// this one afterwards.
+  void operator+=(const IntegerStateBase<base_t, BestState, WorstState> &R) {
+    handleNewKnownValue(R.getKnown());
+  }
+
   void operator|=(const IntegerStateBase<base_t, BestState, WorstState> &R) {
     joinOR(R.getAssumed(), R.getKnown());
   }
@@ -1714,7 +1731,7 @@ struct IRAttribute : public IRPosition, public Base {
     // TODO: We could always determine abstract attributes and if sufficient
     //       information was found we could duplicate the functions that do not
     //       have an exact definition.
-    if (IsFnInterface && (!FnScope || !FnScope->hasExactDefinition()))
+    if (IsFnInterface && (!FnScope || !A.isFunctionIPOAmendable(*FnScope)))
       this->getState().indicatePessimisticFixpoint();
   }
 
@@ -2296,6 +2313,13 @@ struct DerefState : AbstractState {
     return *this;
   }
 
+  /// See IntegerStateBase::operator+=
+  DerefState operator+=(const DerefState &R) {
+    DerefBytesState += R.DerefBytesState;
+    GlobalState += R.GlobalState;
+    return *this;
+  }
+
   /// See IntegerStateBase::operator&=
   DerefState operator&=(const DerefState &R) {
     DerefBytesState &= R.DerefBytesState;
@@ -2508,7 +2532,8 @@ struct AAPrivatizablePtr : public StateWrapper<BooleanState, AbstractAttribute>,
   static const char ID;
 };
 
-/// An abstract interface for all memory related attributes.
+/// An abstract interface for memory access kind related attributes
+/// (readnone/readonly/writeonly).
 struct AAMemoryBehavior
     : public IRAttribute<
           Attribute::ReadNone,
@@ -2524,6 +2549,7 @@ struct AAMemoryBehavior
 
     BEST_STATE = NO_ACCESSES,
   };
+  static_assert(BEST_STATE == getBestState(), "Unexpected BEST_STATE value");
 
   /// Return true if we know that the underlying value is not read or accessed
   /// in its respective scope.
@@ -2552,6 +2578,163 @@ struct AAMemoryBehavior
   /// Create an abstract attribute view for the position \p IRP.
   static AAMemoryBehavior &createForPosition(const IRPosition &IRP,
                                              Attributor &A);
+
+  /// Unique ID (due to the unique address)
+  static const char ID;
+};
+
+/// An abstract interface for all memory location attributes
+/// (readnone/argmemonly/inaccessiblememonly/inaccessibleorargmemonly).
+struct AAMemoryLocation
+    : public IRAttribute<
+          Attribute::ReadNone,
+          StateWrapper<BitIntegerState<uint32_t, 511>, AbstractAttribute>> {
+  using MemoryLocationsKind = StateType::base_t;
+
+  AAMemoryLocation(const IRPosition &IRP) : IRAttribute(IRP) {}
+
+  /// Encoding of different locations that could be accessed by a memory
+  /// access.
+  enum {
+    ALL_LOCATIONS = 0,
+    NO_LOCAL_MEM = 1 << 0,
+    NO_CONST_MEM = 1 << 1,
+    NO_GLOBAL_INTERNAL_MEM = 1 << 2,
+    NO_GLOBAL_EXTERNAL_MEM = 1 << 3,
+    NO_GLOBAL_MEM = NO_GLOBAL_INTERNAL_MEM | NO_GLOBAL_EXTERNAL_MEM,
+    NO_ARGUMENT_MEM = 1 << 4,
+    NO_INACCESSIBLE_MEM = 1 << 5,
+    NO_MALLOCED_MEM = 1 << 6,
+    NO_UNKOWN_MEM = 1 << 7,
+    NO_LOCATIONS = NO_LOCAL_MEM | NO_CONST_MEM | NO_GLOBAL_INTERNAL_MEM |
+                   NO_GLOBAL_EXTERNAL_MEM | NO_ARGUMENT_MEM |
+                   NO_INACCESSIBLE_MEM | NO_MALLOCED_MEM | NO_UNKOWN_MEM,
+
+    // Helper bit to track if we gave up or not.
+    VALID_STATE = NO_LOCATIONS + 1,
+
+    BEST_STATE = NO_LOCATIONS | VALID_STATE,
+  };
+  static_assert(BEST_STATE == getBestState(), "Unexpected BEST_STATE value");
+
+  /// Return true if we know that the associated functions has no observable
+  /// accesses.
+  bool isKnownReadNone() const { return isKnown(NO_LOCATIONS); }
+
+  /// Return true if we assume that the associated functions has no observable
+  /// accesses.
+  bool isAssumedReadNone() const {
+    return isAssumed(NO_LOCATIONS) | isAssumedStackOnly();
+  }
+
+  /// Return true if we know that the associated functions has at most
+  /// local/stack accesses.
+  bool isKnowStackOnly() const {
+    return isKnown(inverseLocation(NO_LOCAL_MEM, true, true));
+  }
+
+  /// Return true if we assume that the associated functions has at most
+  /// local/stack accesses.
+  bool isAssumedStackOnly() const {
+    return isAssumed(inverseLocation(NO_LOCAL_MEM, true, true));
+  }
+
+  /// Return true if we know that the underlying value will only access
+  /// inaccesible memory only (see Attribute::InaccessibleMemOnly).
+  bool isKnownInaccessibleMemOnly() const {
+    return isKnown(inverseLocation(NO_INACCESSIBLE_MEM, true, true));
+  }
+
+  /// Return true if we assume that the underlying value will only access
+  /// inaccesible memory only (see Attribute::InaccessibleMemOnly).
+  bool isAssumedInaccessibleMemOnly() const {
+    return isAssumed(inverseLocation(NO_INACCESSIBLE_MEM, true, true));
+  }
+
+  /// Return true if we know that the underlying value will only access
+  /// argument pointees (see Attribute::ArgMemOnly).
+  bool isKnownArgMemOnly() const {
+    return isKnown(inverseLocation(NO_ARGUMENT_MEM, true, true));
+  }
+
+  /// Return true if we assume that the underlying value will only access
+  /// argument pointees (see Attribute::ArgMemOnly).
+  bool isAssumedArgMemOnly() const {
+    return isAssumed(inverseLocation(NO_ARGUMENT_MEM, true, true));
+  }
+
+  /// Return true if we know that the underlying value will only access
+  /// inaccesible memory or argument pointees (see
+  /// Attribute::InaccessibleOrArgMemOnly).
+  bool isKnownInaccessibleOrArgMemOnly() const {
+    return isKnown(
+        inverseLocation(NO_INACCESSIBLE_MEM | NO_ARGUMENT_MEM, true, true));
+  }
+
+  /// Return true if we assume that the underlying value will only access
+  /// inaccesible memory or argument pointees (see
+  /// Attribute::InaccessibleOrArgMemOnly).
+  bool isAssumedInaccessibleOrArgMemOnly() const {
+    return isAssumed(
+        inverseLocation(NO_INACCESSIBLE_MEM | NO_ARGUMENT_MEM, true, true));
+  }
+
+  /// Return true if the underlying value may access memory through arguement
+  /// pointers of the associated function, if any.
+  bool mayAccessArgMem() const { return !isAssumed(NO_ARGUMENT_MEM); }
+
+  /// Return true if only the memory locations specififed by \p MLK are assumed
+  /// to be accessed by the associated function.
+  bool isAssumedSpecifiedMemOnly(MemoryLocationsKind MLK) const {
+    return isAssumed(MLK);
+  }
+
+  /// Return the locations that are assumed to be not accessed by the associated
+  /// function, if any.
+  MemoryLocationsKind getAssumedNotAccessedLocation() const {
+    return getAssumed();
+  }
+
+  /// Return the inverse of location \p Loc, thus for NO_XXX the return
+  /// describes ONLY_XXX. The flags \p AndLocalMem and \p AndConstMem determine
+  /// if local (=stack) and constant memory are allowed as well. Most of the
+  /// time we do want them to be included, e.g., argmemonly allows accesses via
+  /// argument pointers or local or constant memory accesses.
+  static MemoryLocationsKind
+  inverseLocation(MemoryLocationsKind Loc, bool AndLocalMem, bool AndConstMem) {
+    return NO_LOCATIONS & ~(Loc | (AndLocalMem ? NO_LOCAL_MEM : 0) |
+                            (AndConstMem ? NO_CONST_MEM : 0));
+  };
+
+  /// Return the locations encoded by \p MLK as a readable string.
+  static std::string getMemoryLocationsAsStr(MemoryLocationsKind MLK);
+
+  /// Simple enum to distinguish read/write/read-write accesses.
+  enum AccessKind {
+    NONE = 0,
+    READ = 1 << 0,
+    WRITE = 1 << 1,
+    READ_WRITE = READ | WRITE,
+  };
+
+  /// Check \p Pred on all accesses to the memory kinds specified by \p MLK.
+  ///
+  /// This method will evaluate \p Pred on all accesses (access instruction +
+  /// underlying accessed memory pointer) and it will return true if \p Pred
+  /// holds every time.
+  virtual bool checkForAllAccessesToMemoryKind(
+      const function_ref<bool(const Instruction *, const Value *, AccessKind,
+                              MemoryLocationsKind)> &Pred,
+      MemoryLocationsKind MLK) const = 0;
+
+  /// Create an abstract attribute view for the position \p IRP.
+  static AAMemoryLocation &createForPosition(const IRPosition &IRP,
+                                             Attributor &A);
+
+  /// See AbstractState::getAsStr().
+  const std::string getAsStr() const override {
+    return getMemoryLocationsAsStr(getAssumedNotAccessedLocation());
+  }
 
   /// Unique ID (due to the unique address)
   static const char ID;
@@ -2591,7 +2774,8 @@ struct AAValueConstantRange : public IntegerRangeState,
   /// Return an assumed constant for the assocaited value a program point \p
   /// CtxI.
   Optional<ConstantInt *>
-  getAssumedConstantInt(Attributor &A, const Instruction *CtxI = nullptr) const {
+  getAssumedConstantInt(Attributor &A,
+                        const Instruction *CtxI = nullptr) const {
     ConstantRange RangeV = getAssumedConstantRange(A, CtxI);
     if (auto *C = RangeV.getSingleElement())
       return cast<ConstantInt>(

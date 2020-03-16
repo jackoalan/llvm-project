@@ -27,6 +27,7 @@
 #include "mlir/Dialect/FxpMathOps/Passes.h"
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/LoopOps/Passes.h"
 #include "mlir/Dialect/QuantOps/Passes.h"
 #include "mlir/Dialect/SPIRV/Passes.h"
 #include "mlir/Quantizer/Transforms/Passes.h"
@@ -106,6 +107,11 @@ inline void registerAllPasses() {
   createConvertLinalgToAffineLoopsPass();
   createConvertLinalgToLLVMPass();
 
+  // LoopOps
+  createParallelLoopFusionPass();
+  createParallelLoopSpecializationPass();
+  createParallelLoopTilingPass();
+
   // QuantOps
   quant::createConvertSimulatedQuantPass();
   quant::createConvertConstPass();
@@ -116,13 +122,15 @@ inline void registerAllPasses() {
   // SPIR-V
   spirv::createDecorateSPIRVCompositeTypeLayoutPass();
   spirv::createLowerABIAttributesPass();
+  spirv::createUpdateVersionCapabilityExtensionPass();
   createConvertGPUToSPIRVPass();
   createConvertStandardToSPIRVPass();
   createLegalizeStdOpsForSPIRVLoweringPass();
   createLinalgToSPIRVPass();
 
   // Vulkan
-  createConvertGpuLaunchFuncToVulkanCallsPass();
+  createConvertGpuLaunchFuncToVulkanLaunchFuncPass();
+  createConvertVulkanLaunchFuncToVulkanCallsPass();
 }
 
 } // namespace mlir

@@ -62,9 +62,12 @@ public:
   /// provide a valid type for the attribute.
   virtual void printAttributeWithoutType(Attribute attr) = 0;
 
-  /// Print a successor, and use list, of a terminator operation given the
-  /// terminator and the successor index.
-  virtual void printSuccessorAndUseList(Operation *term, unsigned index) = 0;
+  /// Print the given successor.
+  virtual void printSuccessor(Block *successor) = 0;
+
+  /// Print the successor and its operands.
+  virtual void printSuccessorAndUseList(Block *successor,
+                                        ValueRange succOperands) = 0;
 
   /// If the specified operation has attributes, print out an attribute
   /// dictionary with their values.  elidedAttrs allows the client to ignore
@@ -120,8 +123,7 @@ public:
 
   /// Print the complete type of an operation in functional form.
   void printFunctionalType(Operation *op) {
-    printFunctionalType(op->getNonSuccessorOperands().getTypes(),
-                        op->getResultTypes());
+    printFunctionalType(op->getOperandTypes(), op->getResultTypes());
   }
   /// Print the two given type ranges in a functional form.
   template <typename InputRangeT, typename ResultRangeT>
@@ -188,10 +190,14 @@ inline OpAsmPrinter &operator<<(OpAsmPrinter &p, bool value) {
   return p << (value ? StringRef("true") : "false");
 }
 
-template <typename IteratorT>
-inline OpAsmPrinter &
-operator<<(OpAsmPrinter &p,
-           const iterator_range<ValueTypeIterator<IteratorT>> &types) {
+inline OpAsmPrinter &operator<<(OpAsmPrinter &p, Block *value) {
+  p.printSuccessor(value);
+  return p;
+}
+
+template <typename ValueRangeT>
+inline OpAsmPrinter &operator<<(OpAsmPrinter &p,
+                                const ValueTypeRange<ValueRangeT> &types) {
   interleaveComma(types, p);
   return p;
 }
@@ -497,6 +503,12 @@ public:
         return failure();
     return success();
   }
+  template <typename Operands>
+  ParseResult resolveOperands(Operands &&operands, Type type, llvm::SMLoc loc,
+                              SmallVectorImpl<Value> &result) {
+    return resolveOperands(std::forward<Operands>(operands),
+                           ArrayRef<Type>(type), loc, result);
+  }
   template <typename Operands, typename Types>
   ParseResult resolveOperands(Operands &&operands, Types &&types,
                               llvm::SMLoc loc, SmallVectorImpl<Value> &result) {
@@ -569,6 +581,12 @@ public:
   // Successor Parsing
   //===--------------------------------------------------------------------===//
 
+  /// Parse a single operation successor.
+  virtual ParseResult parseSuccessor(Block *&dest) = 0;
+
+  /// Parse an optional operation successor.
+  virtual OptionalParseResult parseOptionalSuccessor(Block *&dest) = 0;
+
   /// Parse a single operation successor and its operand list.
   virtual ParseResult
   parseSuccessorAndUseList(Block *&dest, SmallVectorImpl<Value> &operands) = 0;
@@ -609,6 +627,9 @@ public:
     return success();
   }
 
+  /// Parse an arrow followed by a type list.
+  virtual ParseResult parseArrowTypeList(SmallVectorImpl<Type> &result) = 0;
+
   /// Parse an optional arrow followed by a type list.
   virtual ParseResult
   parseOptionalArrowTypeList(SmallVectorImpl<Type> &result) = 0;
@@ -641,6 +662,13 @@ public:
   /// have at least one type.
   virtual ParseResult
   parseOptionalColonTypeList(SmallVectorImpl<Type> &result) = 0;
+
+  /// Parse a list of assignments of the form
+  /// (%x1 = %y1 : type1, %x2 = %y2 : type2, ...).
+  /// The list must contain at least one entry
+  virtual ParseResult
+  parseAssignmentList(SmallVectorImpl<OperandType> &lhs,
+                      SmallVectorImpl<OperandType> &rhs) = 0;
 
   /// Parse a keyword followed by a type.
   ParseResult parseKeywordType(const char *keyword, Type &result) {

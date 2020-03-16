@@ -107,9 +107,6 @@
 #ifndef OPENMP_DISTRIBUTE_CLAUSE
 #define OPENMP_DISTRIBUTE_CLAUSE(Name)
 #endif
-#ifndef OPENMP_DEFAULT_KIND
-#  define OPENMP_DEFAULT_KIND(Name)
-#endif
 #ifndef OPENMP_SCHEDULE_KIND
 #define OPENMP_SCHEDULE_KIND(Name)
 #endif
@@ -212,6 +209,9 @@
 #ifndef OPENMP_FLUSH_CLAUSE
 #define OPENMP_FLUSH_CLAUSE(Name)
 #endif
+#ifndef OPENMP_DEPOBJ_CLAUSE
+#define OPENMP_DEPOBJ_CLAUSE(Name)
+#endif
 
 // OpenMP clauses.
 OPENMP_CLAUSE(allocator, OMPAllocatorClause)
@@ -275,6 +275,8 @@ OPENMP_CLAUSE(atomic_default_mem_order, OMPAtomicDefaultMemOrderClause)
 OPENMP_CLAUSE(allocate, OMPAllocateClause)
 OPENMP_CLAUSE(nontemporal, OMPNontemporalClause)
 OPENMP_CLAUSE(order, OMPOrderClause)
+OPENMP_CLAUSE(depobj, OMPDepobjClause)
+OPENMP_CLAUSE(destroy, OMPDestroyClause)
 
 // Clauses allowed for OpenMP directive 'parallel'.
 OPENMP_PARALLEL_CLAUSE(if)
@@ -351,10 +353,6 @@ OPENMP_SINGLE_CLAUSE(allocate)
 // Clauses allowed for OpenMP directive 'cancel'.
 OPENMP_CANCEL_CLAUSE(if)
 
-// Static attributes for 'default' clause.
-OPENMP_DEFAULT_KIND(none)
-OPENMP_DEFAULT_KIND(shared)
-
 // Static attributes for 'schedule' clause.
 OPENMP_SCHEDULE_KIND(static)
 OPENMP_SCHEDULE_KIND(dynamic)
@@ -386,6 +384,7 @@ OPENMP_DEPEND_KIND(in)
 OPENMP_DEPEND_KIND(out)
 OPENMP_DEPEND_KIND(inout)
 OPENMP_DEPEND_KIND(mutexinoutset)
+OPENMP_DEPEND_KIND(depobj)
 OPENMP_DEPEND_KIND(source)
 OPENMP_DEPEND_KIND(sink)
 
@@ -1085,6 +1084,12 @@ OPENMP_FLUSH_CLAUSE(acq_rel)
 OPENMP_FLUSH_CLAUSE(acquire)
 OPENMP_FLUSH_CLAUSE(release)
 
+// Clauses allowed for OpenMP directive 'depobj'.
+OPENMP_DEPOBJ_CLAUSE(depend)
+OPENMP_DEPOBJ_CLAUSE(destroy)
+OPENMP_DEPOBJ_CLAUSE(update)
+
+#undef OPENMP_DEPOBJ_CLAUSE
 #undef OPENMP_FLUSH_CLAUSE
 #undef OPENMP_ORDER_KIND
 #undef OPENMP_LASTPRIVATE_KIND
@@ -1103,7 +1108,6 @@ OPENMP_FLUSH_CLAUSE(release)
 #undef OPENMP_DEPEND_KIND
 #undef OPENMP_SCHEDULE_MODIFIER
 #undef OPENMP_SCHEDULE_KIND
-#undef OPENMP_DEFAULT_KIND
 #undef OPENMP_CLAUSE
 #undef OPENMP_CRITICAL_CLAUSE
 #undef OPENMP_ORDERED_CLAUSE

@@ -1116,8 +1116,12 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
         return C1;
       // undef << X -> 0
       return Constant::getNullValue(C1->getType());
-    case Instruction::FAdd:
     case Instruction::FSub:
+      // -0.0 - undef --> undef (consistent with "fneg undef")
+      if (match(C1, m_NegZeroFP()) && isa<UndefValue>(C2))
+        return C2;
+      LLVM_FALLTHROUGH;
+    case Instruction::FAdd:
     case Instruction::FMul:
     case Instruction::FDiv:
     case Instruction::FRem:
@@ -1836,7 +1840,7 @@ Constant *llvm::ConstantFoldCompareInstruction(unsigned short pred,
   Type *ResultTy;
   if (VectorType *VT = dyn_cast<VectorType>(C1->getType()))
     ResultTy = VectorType::get(Type::getInt1Ty(C1->getContext()),
-                               VT->getNumElements());
+                               VT->getElementCount());
   else
     ResultTy = Type::getInt1Ty(C1->getContext());
 
@@ -1967,6 +1971,11 @@ Constant *llvm::ConstantFoldCompareInstruction(unsigned short pred,
                                         R==APFloat::cmpEqual);
     }
   } else if (C1->getType()->isVectorTy()) {
+    // Do not iterate on scalable vector. The number of elements is unknown at
+    // compile-time.
+    if (C1->getType()->getVectorIsScalable())
+      return nullptr;
+
     // If we can constant fold the comparison of each element, constant fold
     // the whole vector comparison.
     SmallVector<Constant*, 4> ResElts;
@@ -2225,8 +2234,7 @@ Constant *llvm::ConstantFoldGetElementPtr(Type *PointeeTy, Constant *C,
   Constant *Idx0 = cast<Constant>(Idxs[0]);
   if (Idxs.size() == 1 && (Idx0->isNullValue() || isa<UndefValue>(Idx0)))
     return GEPTy->isVectorTy() && !C->getType()->isVectorTy()
-               ? ConstantVector::getSplat(
-                     cast<VectorType>(GEPTy)->getNumElements(), C)
+               ? ConstantVector::getSplat(GEPTy->getVectorElementCount(), C)
                : C;
 
   if (C->isNullValue()) {

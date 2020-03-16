@@ -11,14 +11,6 @@ class TestGDBRemoteClient(GDBRemoteTestBase):
         def readRegisters(self):
             return '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
 
-    def setUp(self):
-        super(TestGDBRemoteClient, self).setUp()
-        self._initial_platform = lldb.DBG.GetSelectedPlatform()
-
-    def tearDown(self):
-        lldb.DBG.SetSelectedPlatform(self._initial_platform)
-        super(TestGDBRemoteClient, self).tearDown()
-
     def test_connect(self):
         """Test connecting to a remote gdb server"""
         target = self.createTarget("a.yaml")
@@ -63,6 +55,7 @@ class TestGDBRemoteClient(GDBRemoteTestBase):
             def A(self, packet):
                 return "E47"
 
+        self.runCmd("log enable gdb-remote packets")
         self.server.responder = MyResponder()
 
         target = self.createTarget("a.yaml")
@@ -72,7 +65,7 @@ class TestGDBRemoteClient(GDBRemoteTestBase):
         error = lldb.SBError()
         target.Launch(lldb.SBListener(), None, None, None, None, None,
                 None, 0, True, error)
-        self.assertEquals("process launch failed: 'A' packet returned an error: 71", error.GetCString())
+        self.assertEquals("'A' packet returned an error: 71", error.GetCString())
 
     def test_read_registers_using_g_packets(self):
         """Test reading registers using 'g' packets (default behavior)"""

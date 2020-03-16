@@ -42,14 +42,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override;
 };
 
-/// Pattern to erase a loop::TerminatorOp.
-class TerminatorOpConversion final
-    : public SPIRVOpLowering<loop::TerminatorOp> {
+/// Pattern to erase a loop::YieldOp.
+class TerminatorOpConversion final : public SPIRVOpLowering<loop::YieldOp> {
 public:
-  using SPIRVOpLowering<loop::TerminatorOp>::SPIRVOpLowering;
+  using SPIRVOpLowering<loop::YieldOp>::SPIRVOpLowering;
 
   PatternMatchResult
-  matchAndRewrite(loop::TerminatorOp terminatorOp, ArrayRef<Value> operands,
+  matchAndRewrite(loop::YieldOp terminatorOp, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.eraseOp(terminatorOp);
     return matchSuccess();
@@ -377,13 +376,10 @@ PatternMatchResult GPUFuncOpConversion::matchAndRewrite(
 PatternMatchResult GPUModuleConversion::matchAndRewrite(
     gpu::GPUModuleOp moduleOp, ArrayRef<Value> operands,
     ConversionPatternRewriter &rewriter) const {
-  // TODO : Generalize this to account for different extensions,
-  // capabilities, extended_instruction_sets, other addressing models
-  // and memory models.
   auto spvModule = rewriter.create<spirv::ModuleOp>(
       moduleOp.getLoc(), spirv::AddressingModel::Logical,
-      spirv::MemoryModel::GLSL450, spirv::Capability::Shader,
-      spirv::Extension::SPV_KHR_storage_buffer_storage_class);
+      spirv::MemoryModel::GLSL450);
+
   // Move the region from the module op into the SPIR-V module.
   Region &spvModuleRegion = spvModule.body();
   rewriter.inlineRegionBefore(moduleOp.body(), spvModuleRegion,

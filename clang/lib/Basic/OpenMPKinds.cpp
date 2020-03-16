@@ -25,7 +25,14 @@ OpenMPClauseKind clang::getOpenMPClauseKind(StringRef Str) {
   // clause for 'flush' directive. If the 'flush' clause is explicitly specified
   // the Parser should generate a warning about extra tokens at the end of the
   // directive.
-  if (Str == "flush")
+  // 'depobj' clause cannot be specified explicitly, because this is an implicit
+  // clause for 'depobj' directive. If the 'depobj' clause is explicitly
+  // specified the Parser should generate a warning about extra tokens at the
+  // end of the directive.
+  if (llvm::StringSwitch<bool>(Str)
+          .Case("flush", true)
+          .Case("depobj", true)
+          .Default(false))
     return OMPC_unknown;
   return llvm::StringSwitch<OpenMPClauseKind>(Str)
 #define OPENMP_CLAUSE(Name, Class) .Case(#Name, OMPC_##Name)
@@ -61,10 +68,10 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
                                           StringRef Str) {
   switch (Kind) {
   case OMPC_default:
-    return llvm::StringSwitch<OpenMPDefaultClauseKind>(Str)
-#define OPENMP_DEFAULT_KIND(Name) .Case(#Name, OMPC_DEFAULT_##Name)
-#include "clang/Basic/OpenMPKinds.def"
-        .Default(OMPC_DEFAULT_unknown);
+    return llvm::StringSwitch<unsigned>(Str)
+#define OMP_DEFAULT_KIND(Enum, Name) .Case(Name, unsigned(Enum))
+#include "llvm/Frontend/OpenMP/OMPKinds.def"
+        .Default(unsigned(llvm::omp::OMP_DEFAULT_unknown));
   case OMPC_proc_bind:
     return llvm::StringSwitch<unsigned>(Str)
 #define OMP_PROC_BIND_KIND(Enum, Name, Value) .Case(Name, Value)
@@ -142,6 +149,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
 #define OPENMP_ORDER_KIND(Name) .Case(#Name, OMPC_ORDER_##Name)
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_ORDER_unknown);
+  case OMPC_update:
+    return llvm::StringSwitch<OpenMPDependClauseKind>(Str)
+#define OPENMP_DEPEND_KIND(Name) .Case(#Name, OMPC_DEPEND_##Name)
+#include "clang/Basic/OpenMPKinds.def"
+        .Default(OMPC_DEPEND_unknown);
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
@@ -166,9 +178,9 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:
+  case OMPC_depobj:
   case OMPC_read:
   case OMPC_write:
-  case OMPC_update:
   case OMPC_capture:
   case OMPC_seq_cst:
   case OMPC_acq_rel:
@@ -194,6 +206,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_dynamic_allocators:
   case OMPC_match:
   case OMPC_nontemporal:
+  case OMPC_destroy:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -203,13 +216,11 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
                                                  unsigned Type) {
   switch (Kind) {
   case OMPC_default:
-    switch (Type) {
-    case OMPC_DEFAULT_unknown:
-      return "unknown";
-#define OPENMP_DEFAULT_KIND(Name)                                              \
-  case OMPC_DEFAULT_##Name:                                                    \
-    return #Name;
-#include "clang/Basic/OpenMPKinds.def"
+    switch (llvm::omp::DefaultKind(Type)) {
+#define OMP_DEFAULT_KIND(Enum, Name)                                           \
+  case Enum:                                                                   \
+    return Name;
+#include "llvm/Frontend/OpenMP/OMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'default' clause type");
   case OMPC_proc_bind:
@@ -358,6 +369,16 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'order' clause type");
+  case OMPC_update:
+    switch (Type) {
+    case OMPC_DEPEND_unknown:
+      return "unknown";
+#define OPENMP_DEPEND_KIND(Name)                                               \
+  case OMPC_DEPEND_##Name:                                                     \
+    return #Name;
+#include "clang/Basic/OpenMPKinds.def"
+    }
+    llvm_unreachable("Invalid OpenMP 'depend' clause type");
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
@@ -382,9 +403,9 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:
+  case OMPC_depobj:
   case OMPC_read:
   case OMPC_write:
-  case OMPC_update:
   case OMPC_capture:
   case OMPC_seq_cst:
   case OMPC_acq_rel:
@@ -410,6 +431,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_dynamic_allocators:
   case OMPC_match:
   case OMPC_nontemporal:
+  case OMPC_destroy:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -551,6 +573,20 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
   case OMPC_##Name:                                                            \
     return true;
 #include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    break;
+  case OMPD_depobj:
+    if (OpenMPVersion < 50)
+      return false;
+    switch (CKind) {
+#define OPENMP_DEPOBJ_CLAUSE(Name)                                             \
+  case OMPC_##Name:                                                            \
+    return true;
+#include "clang/Basic/OpenMPKinds.def"
+    case OMPC_depobj:
+      return true;
     default:
       break;
     }
@@ -1197,6 +1233,7 @@ void clang::getOpenMPCaptureRegions(
   case OMPD_cancellation_point:
   case OMPD_cancel:
   case OMPD_flush:
+  case OMPD_depobj:
   case OMPD_declare_reduction:
   case OMPD_declare_mapper:
   case OMPD_declare_simd:

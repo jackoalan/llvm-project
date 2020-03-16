@@ -49,6 +49,10 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Coroutines.h"
+#include "llvm/Transforms/Coroutines/CoroCleanup.h"
+#include "llvm/Transforms/Coroutines/CoroEarly.h"
+#include "llvm/Transforms/Coroutines/CoroElide.h"
+#include "llvm/Transforms/Coroutines/CoroSplit.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
@@ -351,7 +355,7 @@ static TargetLibraryInfoImpl *createTLII(llvm::Triple &TargetTriple,
     break;
   case CodeGenOptions::MASSV:
     TLII->addVectorizableFunctionsFromVecLib(TargetLibraryInfoImpl::MASSV);
-    break;    
+    break;
   case CodeGenOptions::SVML:
     TLII->addVectorizableFunctionsFromVecLib(TargetLibraryInfoImpl::SVML);
     break;
@@ -483,6 +487,7 @@ static void initTargetOptions(llvm::TargetOptions &Options,
   Options.EmitAddrsig = CodeGenOpts.Addrsig;
   Options.EnableDebugEntryValues = CodeGenOpts.EnableDebugEntryValues;
   Options.ForceDwarfFrameSection = CodeGenOpts.ForceDwarfFrameSection;
+  Options.EmitCallSiteInfo = CodeGenOpts.EmitCallSiteInfo;
 
   Options.MCOptions.SplitDwarfFile = CodeGenOpts.SplitDwarfFile;
   Options.MCOptions.MCRelaxAll = CodeGenOpts.RelaxAll;
@@ -957,6 +962,22 @@ static PassBuilder::OptimizationLevel mapToLevel(const CodeGenOptions &Opts) {
   }
 }
 
+static void addCoroutinePassesAtO0(ModulePassManager &MPM,
+                                   const LangOptions &LangOpts,
+                                   const CodeGenOptions &CodeGenOpts) {
+  if (!LangOpts.Coroutines)
+    return;
+
+  MPM.addPass(createModuleToFunctionPassAdaptor(CoroEarlyPass()));
+
+  CGSCCPassManager CGPM(CodeGenOpts.DebugPassManager);
+  CGPM.addPass(CoroSplitPass());
+  CGPM.addPass(createCGSCCToFunctionPassAdaptor(CoroElidePass()));
+  MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
+
+  MPM.addPass(createModuleToFunctionPassAdaptor(CoroCleanupPass()));
+}
+
 static void addSanitizersAtO0(ModulePassManager &MPM,
                               const Triple &TargetTriple,
                               const LangOptions &LangOpts,
@@ -1076,6 +1097,7 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
   PTO.LoopInterleaving = CodeGenOpts.UnrollLoops;
   PTO.LoopVectorization = CodeGenOpts.VectorizeLoop;
   PTO.SLPVectorization = CodeGenOpts.VectorizeSLP;
+  PTO.Coroutines = LangOpts.Coroutines;
 
   PassInstrumentationCallbacks PIC;
   StandardInstrumentations SI;
@@ -1279,6 +1301,7 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
     }
 
     if (CodeGenOpts.OptimizationLevel == 0) {
+      addCoroutinePassesAtO0(MPM, LangOpts, CodeGenOpts);
       addSanitizersAtO0(MPM, TargetTriple, LangOpts, CodeGenOpts);
     }
   }

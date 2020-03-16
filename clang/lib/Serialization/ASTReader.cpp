@@ -3224,8 +3224,7 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
     case MODULAR_CODEGEN_DECLS:
       // FIXME: Skip reading this record if our ASTConsumer doesn't care about
       // them (ie: if we're not codegenerating this module).
-      if (F.Kind == MK_MainFile ||
-          getContext().getLangOpts().BuildingPCHWithObjectFile)
+      if (F.Kind == MK_MainFile)
         for (unsigned I = 0, N = Record.size(); I != N; ++I)
           EagerlyDeserializedDecls.push_back(getGlobalDeclID(F, Record[I]));
       break;
@@ -4503,7 +4502,7 @@ ASTReader::ReadASTCore(StringRef FileName,
     if (ShouldFinalizePCM)
       MC.finalizePCM(FileName);
     else
-      MC.tryToRemovePCM(FileName);
+      MC.tryToDropPCM(FileName);
   });
   ModuleFile &F = *M;
   BitstreamCursor &Stream = F.Stream;
@@ -8492,10 +8491,10 @@ unsigned ASTReader::getModuleFileID(ModuleFile *F) {
   return (I - PCHModules.end()) << 1;
 }
 
-llvm::Optional<ExternalASTSource::ASTSourceDescriptor>
+llvm::Optional<ASTSourceDescriptor>
 ASTReader::getSourceDescriptor(unsigned ID) {
   if (const Module *M = getSubmodule(ID))
-    return ExternalASTSource::ASTSourceDescriptor(*M);
+    return ASTSourceDescriptor(*M);
 
   // If there is only a single PCH, return it instead.
   // Chained PCH are not supported.
@@ -8504,8 +8503,8 @@ ASTReader::getSourceDescriptor(unsigned ID) {
     ModuleFile &MF = ModuleMgr.getPrimaryModule();
     StringRef ModuleName = llvm::sys::path::filename(MF.OriginalSourceFileName);
     StringRef FileName = llvm::sys::path::filename(MF.FileName);
-    return ASTReader::ASTSourceDescriptor(ModuleName, MF.OriginalDir, FileName,
-                                          MF.Signature);
+    return ASTSourceDescriptor(ModuleName, MF.OriginalDir, FileName,
+                               MF.Signature);
   }
   return None;
 }
@@ -11658,7 +11657,7 @@ OMPClause *OMPClauseReader::readClause() {
     C = new (Context) OMPWriteClause();
     break;
   case OMPC_update:
-    C = new (Context) OMPUpdateClause();
+    C = OMPUpdateClause::CreateEmpty(Context, Record.readInt());
     break;
   case OMPC_capture:
     C = new (Context) OMPCaptureClause();
@@ -11737,6 +11736,9 @@ OMPClause *OMPClauseReader::readClause() {
     break;
   case OMPC_flush:
     C = OMPFlushClause::CreateEmpty(Context, Record.readInt());
+    break;
+  case OMPC_depobj:
+    C = OMPDepobjClause::CreateEmpty(Context);
     break;
   case OMPC_depend: {
     unsigned NumVars = Record.readInt();
@@ -11825,6 +11827,9 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_order:
     C = new (Context) OMPOrderClause();
     break;
+  case OMPC_destroy:
+    C = new (Context) OMPDestroyClause();
+    break;
   }
   assert(C && "Unknown OMPClause type");
 
@@ -11887,8 +11892,7 @@ void OMPClauseReader::VisitOMPCollapseClause(OMPCollapseClause *C) {
 }
 
 void OMPClauseReader::VisitOMPDefaultClause(OMPDefaultClause *C) {
-  C->setDefaultKind(
-       static_cast<OpenMPDefaultClauseKind>(Record.readInt()));
+  C->setDefaultKind(static_cast<llvm::omp::DefaultKind>(Record.readInt()));
   C->setLParenLoc(Record.readSourceLocation());
   C->setDefaultKindKwLoc(Record.readSourceLocation());
 }
@@ -11934,7 +11938,13 @@ void OMPClauseReader::VisitOMPReadClause(OMPReadClause *) {}
 
 void OMPClauseReader::VisitOMPWriteClause(OMPWriteClause *) {}
 
-void OMPClauseReader::VisitOMPUpdateClause(OMPUpdateClause *) {}
+void OMPClauseReader::VisitOMPUpdateClause(OMPUpdateClause *C) {
+  if (C->isExtended()) {
+    C->setLParenLoc(Record.readSourceLocation());
+    C->setArgumentLoc(Record.readSourceLocation());
+    C->setDependencyKind(Record.readEnum<OpenMPDependClauseKind>());
+  }
+}
 
 void OMPClauseReader::VisitOMPCaptureClause(OMPCaptureClause *) {}
 
@@ -11953,6 +11963,8 @@ void OMPClauseReader::VisitOMPThreadsClause(OMPThreadsClause *) {}
 void OMPClauseReader::VisitOMPSIMDClause(OMPSIMDClause *) {}
 
 void OMPClauseReader::VisitOMPNogroupClause(OMPNogroupClause *) {}
+
+void OMPClauseReader::VisitOMPDestroyClause(OMPDestroyClause *) {}
 
 void OMPClauseReader::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {}
 
@@ -12249,6 +12261,11 @@ void OMPClauseReader::VisitOMPFlushClause(OMPFlushClause *C) {
   for (unsigned i = 0; i != NumVars; ++i)
     Vars.push_back(Record.readSubExpr());
   C->setVarRefs(Vars);
+}
+
+void OMPClauseReader::VisitOMPDepobjClause(OMPDepobjClause *C) {
+  C->setDepobj(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
 }
 
 void OMPClauseReader::VisitOMPDependClause(OMPDependClause *C) {
@@ -12613,10 +12630,10 @@ void OMPClauseReader::VisitOMPOrderClause(OMPOrderClause *C) {
   C->setKindKwLoc(Record.readSourceLocation());
 }
 
-OMPTraitInfo *ASTRecordReader::readOMPTraitInfo() {
-  OMPTraitInfo *TI = new OMPTraitInfo();
-  TI->Sets.resize(readUInt32());
-  for (auto &Set : TI->Sets) {
+OMPTraitInfo ASTRecordReader::readOMPTraitInfo() {
+  OMPTraitInfo TI;
+  TI.Sets.resize(readUInt32());
+  for (auto &Set : TI.Sets) {
     Set.Kind = readEnum<llvm::omp::TraitSet>();
     Set.Selectors.resize(readUInt32());
     for (auto &Selector : Set.Selectors) {
