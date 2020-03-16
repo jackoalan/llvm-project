@@ -145,7 +145,8 @@ struct PrintingPolicy {
         PrintCanonicalTypes(false), SuppressNestedQualifiers(false),
         SuppressListInitialization(false), SeparateConditionVarDecls(false),
         ConstantExprsAsInt(false), SilentNullStatement(false),
-        NeverSuppressScope(false), UseStdOffsetOf(false) {}
+        NeverSuppressScope(false), UseStdOffsetOf(false),
+        NoLoopInitVar(false) {}
 
   /// Adjust this printing policy for cases where it's known that we're
   /// printing C++ code (for instance, if AST dumping reaches a C++-only
@@ -335,6 +336,8 @@ struct PrintingPolicy {
   unsigned NeverSuppressScope : 1;
 
   unsigned UseStdOffsetOf : 1;
+
+  unsigned NoLoopInitVar : 1;
 
   StringRef FieldPrefix;
 

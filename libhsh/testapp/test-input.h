@@ -38,4 +38,5 @@ struct Binding {
   hsh::binding_typeless Binding;
 };
 Binding BuildPipeline();
+Binding BuildPipelineTemplated(bool Something, MyNS::AlphaMode AM);
 }

@@ -1,7 +1,7 @@
 #pragma once
 
+#include <sstream>
 #include <string_view>
-using namespace std::literals;
 
 namespace hsh::detail {
 
@@ -689,7 +689,7 @@ template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
     auto Result = vulkan::Globals.Device.createGraphicsPipelines(
         vulkan::Globals.PipelineCache, Infos.size(), Infos.data(), nullptr,
         Pipelines.data());
-    assert(Result == vk::Result::eSuccess);
+    HSH_ASSERT_VK_SUCCESS(Result);
     (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
   template <typename... B> static void CreatePipelines() noexcept {
@@ -911,6 +911,8 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
 
 namespace vulkan {
 
+using namespace std::literals;
+
 struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
   struct MyApplicationInfo : vk::ApplicationInfo {
     constexpr MyApplicationInfo(const char *AppName, uint32_t AppVersion,
@@ -945,11 +947,11 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
     return false;
   }
 
-  static constexpr std::string_view WantedLayers[] = {
 #if !defined(NDEBUG)
-    "VK_LAYER_LUNARG_standard_validation"sv,
-#endif
+  static constexpr std::string_view WantedLayers[] = {
+      "VK_LAYER_LUNARG_standard_validation"sv,
   };
+#endif
 
   static constexpr std::string_view WantedExtensions[] = {
     "VK_KHR_surface"sv,
@@ -969,12 +971,14 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
     Layers = vk::enumerateInstanceLayerProperties().value;
     Extensions = vk::enumerateInstanceExtensionProperties().value;
 
+#if !defined(NDEBUG)
     for (auto WL : WantedLayers) {
       if (!enableLayer(WL)) {
         MissingLayer(WL);
         Success = false;
       }
     }
+#endif
 
     for (auto WE : WantedExtensions) {
       if (!enableExtension(WE)) {
@@ -1020,11 +1024,11 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
     return false;
   }
 
-  static constexpr std::string_view WantedLayers[] = {
 #if !defined(NDEBUG)
-    "VK_LAYER_LUNARG_standard_validation"sv,
-#endif
+  static constexpr std::string_view WantedLayers[] = {
+      "VK_LAYER_LUNARG_standard_validation"sv,
   };
+#endif
 
   static constexpr std::string_view WantedExtensions[] = {
       "VK_KHR_swapchain"sv, "VK_KHR_get_memory_requirements2"sv,
@@ -1045,12 +1049,14 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
     Layers = PD.enumerateDeviceLayerProperties().value;
     Extensions = PD.enumerateDeviceExtensionProperties().value;
 
+#if !defined(NDEBUG)
     for (auto WL : WantedLayers) {
       if (!enableLayer(WL)) {
         MissingLayer(WL);
         Success = false;
       }
     }
+#endif
 
     for (auto WE : WantedExtensions) {
       if (!enableExtension(WE)) {
@@ -1228,6 +1234,8 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
 
 } // namespace hsh::detail
 
+#if HSH_ENABLE_VULKAN
+
 namespace hsh {
 class vulkan_device_owner {
   friend class vulkan_instance_owner;
@@ -1331,10 +1339,10 @@ class vulkan_instance_owner {
   struct Data {
     vk::DynamicLoader Loader;
     vk::UniqueInstance Instance;
+    detail::vulkan::ErrorHandler ErrHandler;
 #ifndef NDEBUG
     vk::UniqueDebugUtilsMessengerEXT Messenger;
 #endif
-    detail::vulkan::ErrorHandler ErrHandler;
   };
   std::unique_ptr<Data> Data;
 
@@ -1534,3 +1542,7 @@ inline vulkan_instance_owner create_vulkan_instance(
   return Ret;
 }
 } // namespace hsh
+
+#endif
+
+#undef HSH_ASSERT_VK_SUCCESS

@@ -6,6 +6,10 @@
 #define HSH_TARGET(Enumeration)
 #endif
 
+#if HSH_PROFILE_MODE
+#undef HSH_ENABLE_VULKAN
+#endif
+
 #if HSH_ENABLE_VULKAN
 HSH_ACTIVE_TARGET(VULKAN_SPIRV)
 #endif

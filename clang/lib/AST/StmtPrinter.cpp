@@ -355,7 +355,16 @@ void StmtPrinter::VisitSwitchStmt(SwitchStmt *Node) {
     Indent() << "switch (";
     if (Node->getInit())
       PrintInitStmt(Node->getInit(), 8);
+    bool BuiltinCast = false;
+    if (Policy.Callbacks) {
+      if (auto *Builtin = Node->getCond()->getType()->getAs<BuiltinType>()) {
+        OS << Policy.Callbacks->overrideBuiltinTypeName(Builtin) << "(";
+        BuiltinCast = true;
+      }
+    }
     PrintCondDecl();
+    if (BuiltinCast)
+      OS << ")";
     OS << ")";
     PrintControlledStmt(Node->getBody());
   });
@@ -387,8 +396,18 @@ void StmtPrinter::VisitDoStmt(DoStmt *Node) {
 }
 
 void StmtPrinter::VisitForStmt(ForStmt *Node) {
+  auto *Init = dyn_cast_or_null<DeclStmt>(Node->getInit());
+  bool NoLoopInitVar = Policy.NoLoopInitVar && Init;
+  if (NoLoopInitVar) {
+    Indent() << "{\n";
+    IndentLevel += Policy.Indentation;
+    for (auto *D : Init->decls()) {
+      D->print(Indent(), Policy);
+      OS << ";\n";
+    }
+  }
   Indent() << "for (";
-  if (Node->getInit())
+  if (!NoLoopInitVar && Node->getInit())
     PrintInitStmt(Node->getInit(), 5);
   else
     OS << (Node->getCond() ? "; " : ";");
@@ -401,6 +420,10 @@ void StmtPrinter::VisitForStmt(ForStmt *Node) {
   }
   OS << ")";
   PrintControlledStmt(Node->getBody());
+  if (NoLoopInitVar) {
+    IndentLevel -= Policy.Indentation;
+    Indent() << "}\n";
+  }
 }
 
 void StmtPrinter::VisitObjCForCollectionStmt(ObjCForCollectionStmt *Node) {

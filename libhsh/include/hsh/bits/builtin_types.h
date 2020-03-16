@@ -25,6 +25,9 @@ struct float4 {
     z *= other.z;
     w *= other.w;
   }
+  float4 operator*(float other) noexcept {
+    return float4{x * other, y * other, z * other, w * other};
+  }
   float4 operator/(float other) noexcept {
     return float4{x / other, y / other, z / other, w / other};
   }
@@ -64,6 +67,9 @@ struct float3 {
   }
   float3 operator+(const float3 &other) const noexcept {
     return float3{x + other.x, y + other.y, z + other.z};
+  }
+  float3 operator-(const float3 &other) const noexcept {
+    return float3{x - other.x, y - other.y, z - other.z};
   }
   float3 &operator+=(const float3 &other) noexcept {
     x += other.x;

@@ -91,16 +91,23 @@ private:
   static void do_format_param(std::ostream &out, T arg) noexcept {
     hsh::value_formatter::format(out, arg);
   }
-  static void format_param_next(std::ostream &out) noexcept {}
-  template <typename T>
-  static void format_param_next(std::ostream &out, T arg) noexcept {
-    out << ", ";
-    do_format_param(out, arg);
+  static void format_param_next(std::ostream &out, bool &needs_comma) noexcept {
   }
-  template <typename T, typename... Args>
-  static void format_params(std::ostream &out, T arg, Args... rest) noexcept {
+  template <typename T>
+  static void format_param_next(std::ostream &out, bool &needs_comma,
+                                T arg) noexcept {
+    if (!std::is_same_v<T, pop> && needs_comma)
+      out << ", ";
+    else
+      needs_comma = true;
     do_format_param(out, arg);
-    (format_param_next(out, rest), ...);
+    if constexpr (std::is_same_v<T, push>)
+      needs_comma = false;
+  }
+  template <typename... Args>
+  static void format_params(std::ostream &out, Args... args) noexcept {
+    bool needs_comma = false;
+    (format_param_next(out, needs_comma, args), ...);
   }
   void write_header(std::ostream &out) const noexcept {
     unsigned idx = 0;
@@ -150,6 +157,7 @@ public:
       }
     }
   }
+  ~profile_context() noexcept { write_headers(); }
 };
 
 inline profile_context profile_context::instance{};

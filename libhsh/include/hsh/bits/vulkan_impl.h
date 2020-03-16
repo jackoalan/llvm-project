@@ -2,6 +2,12 @@
 
 #if HSH_ENABLE_VULKAN
 
+#ifndef NDEBUG
+#define HSH_ASSERT_VK_SUCCESS(...) assert((__VA_ARGS__) == vk::Result::eSuccess)
+#else
+#define HSH_ASSERT_VK_SUCCESS(...) (void)(__VA_ARGS__)
+#endif
+
 namespace VULKAN_HPP_NAMESPACE {
 template <> struct ObjectDestroy<Instance, VULKAN_HPP_DEFAULT_DISPATCHER_TYPE> {
 public:
@@ -864,7 +870,7 @@ struct DescriptorPoolChain {
           } AllocateInfo(pool.Pool.get());
           auto Result = Globals.Device.allocateDescriptorSets(
               &AllocateInfo, DescriptorSets.data());
-          assert(Result == vk::Result::eSuccess);
+          HSH_ASSERT_VK_SUCCESS(Result);
         }
         for (unsigned i = 0; i < 64; ++i) {
           if ((bmp & (1u << i)) == 0) {
@@ -1014,7 +1020,7 @@ AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
   VmaLocationStrSetter LocationStr(CreateInfo, location);
   auto Result = vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
                                 CreateInfo, &Buffer, &Allocation, nullptr);
-  assert(Result == VK_SUCCESS);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return BufferAllocation(Buffer, Allocation);
 }
@@ -1041,7 +1047,7 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
   auto Result =
       vmaCreateDoubleBuffer(vk::BufferCreateInfo({}, size, usage), CreateInfo,
                             &Buffer, &Allocation, &AllocInfo, &SecondOffset);
-  assert(Result == VK_SUCCESS);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return DynamicBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
                                  SecondOffset);
@@ -1068,7 +1074,7 @@ inline vk::UniqueVmaPool CreateUploadPool() noexcept {
       vk::BufferCreateInfo({}, 32ull * 1024 * 1024,
                            vk::BufferUsageFlagBits::eTransferSrc),
       UploadBufferAllocationCreateInfo(), &CreateInfo.memoryTypeIndex);
-  assert(Result == VK_SUCCESS);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   return Globals.Allocator.createVmaPoolUnique(CreateInfo).value;
 }
 
@@ -1083,7 +1089,7 @@ AllocateUploadBuffer(const SourceLocation &location,
   auto Result = vmaCreateBuffer(
       vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
       CreateInfo, &Buffer, &Allocation, &AllocInfo);
-  assert(Result == VK_SUCCESS);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
   return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
 }
@@ -1110,7 +1116,7 @@ inline TextureAllocation AllocateTexture(const SourceLocation &location,
       vmaCreateImage(Globals.Allocator,
                      reinterpret_cast<const VkImageCreateInfo *>(&CreateInfo),
                      &AllocationCreateInfo, &Image, &Allocation, nullptr);
-  assert(Result == VK_SUCCESS);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Image(Image));
   return TextureAllocation(Image, Allocation);
 }

@@ -4,5 +4,12 @@
 
 BUILTIN_FUNCTION(dot2, dot, dot, dot, dot, false, const struct hsh::float2 &, const struct hsh::float2 &)
 BUILTIN_FUNCTION(dot3, dot, dot, dot, dot, false, const struct hsh::float3 &, const struct hsh::float3 &)
+BUILTIN_FUNCTION(normalize3, normalize, normalize, normalize, normalize, false, const struct hsh::float3 &)
+BUILTIN_FUNCTION(length3, length, length, length, length, false, const struct hsh::float3 &)
+BUILTIN_FUNCTION(max, max, max, max, max, false, float, float)
+BUILTIN_FUNCTION(saturate1, saturate, saturate, saturate, saturate, false, float)
+BUILTIN_FUNCTION(saturate3, saturate, saturate, saturate, saturate, false, const struct hsh::float3 &)
+BUILTIN_FUNCTION(exp21, exp2, exp2, exp2, exp2, false, float)
+BUILTIN_FUNCTION(lerp4, lerp, lerp, lerp, lerp, false, const struct hsh::float4 &, const struct hsh::float4 &, float)
 
 #undef BUILTIN_FUNCTION

@@ -8,8 +8,11 @@
 using namespace std::literals;
 
 #include "test-input.h"
+#include "urde-test.h"
 
 constexpr std::string_view AppName = "Hello Triangle"sv;
+
+#if !HSH_PROFILE_MODE
 
 struct XcbConnection;
 struct XcbWindow {
@@ -181,11 +184,27 @@ int main(int argc, char **argv) {
   Device.build_pipelines(PCFM);
 
   MyNS::Binding PipelineBind{};
+  MyNS::Binding PipelineTemplate1Bind{};
+  MyNS::Binding PipelineTemplate2Bind{};
+  MyNS::Binding PipelineTemplate3Bind{};
+
+  ModelInfo ModInfo{};
+  MaterialInfo MatInfo{};
+  ModelResources ModRes{};
+  hsh::binding_typeless ModelBinding;
 
   Connection.runloop([&]() {
     Device.enter_draw_context([&]() {
-      if (!PipelineBind.Binding)
+      if (!PipelineBind.Binding) {
         PipelineBind = MyNS::BuildPipeline();
+        PipelineTemplate1Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
+        PipelineTemplate2Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
+        PipelineTemplate3Bind = MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
+        //ModInfo = CreateModelInfo();
+        //MatInfo = CreateMaterialInfo();
+        //ModRes = CreateModelResources();
+        //ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+      }
 
       MyNS::UniformData UniData{};
       UniData.xf[0][0] = 1.f;
@@ -205,3 +224,22 @@ int main(int argc, char **argv) {
 
   return 0;
 }
+
+#else
+
+int main(int argc, char **argv) {
+  MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
+  MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
+  MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
+
+  ModelInfo ModInfo = CreateModelInfo();
+  MaterialInfo MatInfo = CreateMaterialInfo();
+  ModelResources ModRes = CreateModelResources();
+  BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+
+  return 0;
+}
+
+#endif
+
+
