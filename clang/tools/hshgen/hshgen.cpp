@@ -113,6 +113,11 @@ int main(int argc, const char **argv) {
           "Output concatenated generated shader sources instead of header"),
       cl::cat(HshCategory));
 
+  static cl::opt<std::string> HshProfile(
+      "hsh-profile",
+      cl::desc("Path to read profile-guided hsh specializations from"),
+      cl::cat(HshCategory));
+
   struct TargetOption {
     hshgen::HshTarget Target;
     cl::opt<bool> Opt;
@@ -157,10 +162,6 @@ int main(int argc, const char **argv) {
     args.push_back(Dir);
   }
   for (const auto &Def : CompileDefs) {
-    constexpr llvm::StringLiteral TestLiteral{"HSH_PROFILE_MODE"};
-    if (StringRef(Def).startswith(TestLiteral) &&
-        (Def.size() == TestLiteral.size() || Def[TestLiteral.size()] == '='))
-      continue;
     args.emplace_back("-D");
     args.push_back(Def);
   }
@@ -193,9 +194,10 @@ int main(int argc, const char **argv) {
 
   llvm::IntrusiveRefCntPtr<FileManager> fman(
       new FileManager(FileSystemOptions()));
-  tooling::ToolInvocation TI(
-      std::move(args),
-      std::make_unique<hshgen::GenerateAction>(Targets, DebugInfo, SourceDump), fman.get());
+  tooling::ToolInvocation TI(std::move(args),
+                             std::make_unique<hshgen::GenerateAction>(
+                                 Targets, DebugInfo, SourceDump, HshProfile),
+                             fman.get());
   if (!TI.run())
     return 1;
 

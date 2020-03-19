@@ -4,7 +4,7 @@
 
 #include <iostream>
 #include <sstream>
-#include <unordered_map>
+#include <map>
 
 namespace hsh {
 struct value_formatter {
@@ -64,13 +64,13 @@ private:
       hsh::value_formatter::format(ss, arg);
       return children[ss.str()].get(rest...);
     }
-    void write(std::ostream &out, const char *src, unsigned &idx) const
+    void write(std::ostream &out, const char *src) const
         noexcept {
       if (!children.empty()) {
         for (auto [key, node] : children)
-          node.write(out, src, idx);
+          node.write(out, src);
       } else {
-        out << "using s" << idx++ << " = " << src << leaf << ";\n";
+        out << "template " << src << leaf << ";\n";
       }
     }
   } root;
@@ -83,7 +83,7 @@ private:
   }
   template <typename T>
   static void do_format_param(std::ostream &out, cast<T> arg) noexcept {
-    out << arg.type << '(';
+    out << "static_cast<" << arg.type << ">(";
     hsh::value_formatter::format(out, arg.val);
     out << ')';
   }
@@ -110,8 +110,7 @@ private:
     (format_param_next(out, needs_comma, args), ...);
   }
   void write_header(std::ostream &out) const noexcept {
-    unsigned idx = 0;
-    root.write(out, source, idx);
+    root.write(out, source);
   }
 
 public:
@@ -127,17 +126,15 @@ public:
 
 class profile_context {
   struct File {
-    const char *fwds = nullptr;
-    std::unordered_map<std::string, profiler> profilers;
+    std::map<std::string, profiler> profilers;
   };
-  std::unordered_map<std::string, File> files;
+  std::map<std::string, File> files;
 
 public:
   static profile_context instance;
-  profiler &get(const char *filename, const char *fwds, const char *binding,
+  profiler &get(const char *filename, const char *binding,
                 const char *source) noexcept {
     auto &file = files[filename];
-    file.fwds = fwds;
     auto &ret = file.profilers[binding];
     ret.source = source;
     return ret;
@@ -149,11 +146,9 @@ public:
         std::cerr << "Unable to open '" << filename << "' for writing\n";
         continue;
       }
-      out << file.fwds;
       for (auto &[binding, prof] : file.profilers) {
-        out << "namespace " << binding << "_specializations {\n";
+        out << "// " << binding << "\n";
         prof.write_header(out);
-        out << "}\n";
       }
     }
   }

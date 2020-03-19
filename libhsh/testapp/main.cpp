@@ -200,10 +200,10 @@ int main(int argc, char **argv) {
         PipelineTemplate1Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
         PipelineTemplate2Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
         PipelineTemplate3Bind = MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
-        //ModInfo = CreateModelInfo();
-        //MatInfo = CreateMaterialInfo();
-        //ModRes = CreateModelResources();
-        //ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+        ModInfo = CreateModelInfo();
+        MatInfo = CreateMaterialInfo();
+        ModRes = CreateModelResources();
+        ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
       }
 
       MyNS::UniformData UniData{};

@@ -23,6 +23,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
+#include "clang/Basic/FileManager.h"
 #include "clang/Config/config.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Hsh/HshGenerator.h"
@@ -1724,15 +1725,18 @@ public:
     return Ret;
   }
 
-  HshStage determineParmVarStage(const ParmVarDecl *PVD) const {
-    if (getVertexAttributeRecord(PVD))
-      return HshVertexStage;
-    else if (auto *SA = PVD->getAttr<HshStageAttr>())
+  HshStage determineVarStage(const VarDecl *VD) const {
+    if (auto *PVD = dyn_cast<ParmVarDecl>(VD)) {
+      if (getVertexAttributeRecord(PVD))
+        return HshVertexStage;
+      else if (auto *SA = PVD->getAttr<HshStageAttr>())
+        return HshStage(SA->getStageIndex());
+      else if (isTextureType(identifyBuiltinType(PVD->getType())))
+        return HshFragmentStage;
+    } else if (auto *SA = VD->getAttr<HshStageAttr>()) {
       return HshStage(SA->getStageIndex());
-    else if (isTextureType(identifyBuiltinType(PVD->getType())))
-      return HshFragmentStage;
-    else
-      return HshNoStage;
+    }
+    return HshNoStage;
   }
 
   HshStage determinePipelineFieldStage(const FieldDecl *FD) const {
@@ -2037,7 +2041,7 @@ public:
 
     auto *VD = VarDecl::Create(
         Context, DC, {}, {},
-        &Context.Idents.get(llvm::Twine("cdata_", ECD->getName()).str()),
+        &Context.Idents.get(Twine("cdata_", ECD->getName()).str()),
         TSI->getType(), nullptr, SC_Static);
     VD->setConstexpr(true);
     VD->setInitStyle(VarDecl::ListInit);
@@ -2069,7 +2073,7 @@ public:
 
     return VarDecl::Create(
         Context, DC, {}, {},
-        &Context.Idents.get(llvm::Twine("data_", ECD->getName()).str()),
+        &Context.Idents.get(Twine("data_", ECD->getName()).str()),
         TSI->getType(), nullptr, SC_Static);
   }
 
@@ -2822,7 +2826,9 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     if (const auto *AT =
             dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
       unsigned Size = AT->getSize().getZExtValue();
-      Twine ArrayFieldName = FieldName + Twine('[') + Twine(Size) + Twine(']');
+      Twine Tw1 = Twine('[') + Twine(Size);
+      Twine Tw2 = Tw1 + Twine(']');
+      Twine ArrayFieldName = FieldName + Tw2;
 
       if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
         if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
@@ -2883,10 +2889,9 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     for (auto *FD : Record->fields()) {
       auto Offset = BaseOffset + Context.toCharUnitsFromBits(
                                      RL.getFieldOffset(FD->getFieldIndex()));
+      Twine Tw1 = PrefixName + Twine('_');
       PrintPackoffsetField(OS, Context, FD->getType(),
-                           WaitingForArray
-                               ? PrefixName
-                               : PrefixName + Twine('_') + FD->getName(),
+                           WaitingForArray ? PrefixName : Tw1 + FD->getName(),
                            WaitingForArray, Offset);
     }
   }
@@ -2906,7 +2911,9 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     if (const auto *AT =
             dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
       unsigned Size = AT->getSize().getZExtValue();
-      Twine ArrayFieldName = FieldName + Twine('[') + Twine(Size) + Twine(']');
+      Twine Tw1 = Twine('[') + Twine(Size);
+      Twine Tw2 = Tw1 + Twine(']');
+      Twine ArrayFieldName = FieldName + Tw2;
 
       if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
         if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
@@ -3052,10 +3059,9 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
       for (const auto &Attribute : Attributes) {
         for (const auto *FD : Attribute.Record->fields()) {
           QualType Tp = FD->getType().getUnqualifiedType();
-          PrintAttributeField(OS, Context, Tp,
-                              Twine(Attribute.Name) + Twine('_') +
-                                  FD->getName(),
-                              false, 1, Location, 1);
+          Twine Tw1 = Twine(Attribute.Name) + Twine('_');
+          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(), false, 1,
+                              Location, 1);
         }
       }
       OS << "};\n";
@@ -4054,9 +4060,9 @@ class StageStmtPartitioner {
       }
       for (auto *MS : DepInfo.MutatorStmts)
         Partitioner.StmtMap[MS].Dependents.insert(DRE);
-      if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
-        DepInfo.Stage = std::max(
-            DepInfo.Stage, Partitioner.Builtins.determineParmVarStage(PVD));
+      if (auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+        DepInfo.Stage =
+            std::max(DepInfo.Stage, Partitioner.Builtins.determineVarStage(VD));
       }
       Partitioner.StmtMap[DRE].setPrimaryStage(DepInfo.Stage);
       return DepInfo.Stage;
@@ -5339,6 +5345,7 @@ class GenerateConsumer : public ASTConsumer {
   Preprocessor &PP;
   ArrayRef<HshTarget> Targets;
   bool DebugInfo, SourceDump;
+  SmallString<256> ProfilePath;
   std::unique_ptr<raw_pwrite_stream> OS;
   llvm::DenseSet<uint64_t> SeenHashes;
   llvm::DenseSet<uint64_t> SeenSamplerHashes;
@@ -5346,8 +5353,6 @@ class GenerateConsumer : public ASTConsumer {
   raw_string_ostream AnonOS{AnonNSString};
   std::string CoordinatorSpecString;
   raw_string_ostream CoordinatorSpecOS{CoordinatorSpecString};
-  std::string ProfileString;
-  raw_string_ostream ProfileOS{ProfileString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
   struct HshExpansion {
     SourceRange Range;
@@ -5454,11 +5459,12 @@ class GenerateConsumer : public ASTConsumer {
 
 public:
   explicit GenerateConsumer(CompilerInstance &CI, ArrayRef<HshTarget> Targets,
-                            bool DebugInfo, bool SourceDump)
+                            bool DebugInfo, bool SourceDump,
+                            StringRef ProfilePath)
       : CI(CI), Context(CI.getASTContext()),
         HostPolicy(Context.getPrintingPolicy()), AnalysisMgr(Context),
         PP(CI.getPreprocessor()), Targets(Targets), DebugInfo(DebugInfo),
-        SourceDump(SourceDump) {
+        SourceDump(SourceDump), ProfilePath(ProfilePath) {
     AnalysisMgr.getCFGBuildOptions().OmitLogicalBinaryOperators = true;
   }
 
@@ -5467,19 +5473,6 @@ public:
     raw_string_ostream HexOS(HashStr);
     llvm::write_hex(HexOS, Hash, HexPrintStyle::Upper, {16});
     return HashStr;
-  }
-
-  static void PrintNSDecl(raw_ostream &OS, DeclContext *DC, bool &PrintedNS) {
-    if (!DC->isNamespace())
-      DC = DC->getEnclosingNamespaceContext();
-    if (auto *NS = dyn_cast<NamespaceDecl>(DC)) {
-      PrintNSDecl(OS, NS->getParent(), PrintedNS);
-      if (PrintedNS)
-        OS << "::";
-      else
-        PrintedNS = true;
-      OS << NS->getName();
-    }
   }
 
   void handlePipelineDerivative(NamedDecl *Decl) {
@@ -5499,34 +5492,6 @@ public:
                                 "file or namespace scope"));
       return;
     }
-
-    /*
-     * Forward declarations of source pipeline derivatives are emitted to aid
-     * code generated by runtime profiling.
-     */
-    bool InNamespace = RedeclContext->isNamespace();
-    if (InNamespace) {
-      ProfileOS << "namespace ";
-      bool PrintedNS = false;
-      PrintNSDecl(ProfileOS, RedeclContext, PrintedNS);
-      ProfileOS << " { ";
-    }
-
-    {
-      bool OrigIsCompleteDef = CD->isCompleteDefinition();
-      CD->setCompleteDefinition(false);
-      if (CTD)
-        CTD->print(ProfileOS, HostPolicy);
-      else
-        CD->print(ProfileOS, HostPolicy);
-      ProfileOS << ';';
-      CD->setCompleteDefinition(OrigIsCompleteDef);
-    }
-
-    if (InNamespace)
-      ProfileOS << " }";
-
-    ProfileOS << '\n';
 
     SmallString<32> BindingName("hshbinding_"_ll);
     BindingName += Decl->getName();
@@ -5940,79 +5905,74 @@ public:
         NTTP->getType().print(*OS, HostPolicy, NTTP->getName());
         *OS << ", ";
       });
-      SmallString<32> ProfName(Expansion.Name);
-      assert(ProfName.size() >= 3);
-      ProfName.insert(ProfName.begin() + 3, {'p', 'r', 'o', 'f'});
       *OS << "Res... Resources) noexcept {\n"
-             "#if HSH_PROFILE_MODE\n"
-             "hsh::profile_context::instance\n"
-             ".get(\""
-          << AbsProfFile
-          << "\",\n"
-             "R\"("
-          << ProfileOS.str()
-          << ")\",\n"
-             "\""
-          << ProfName << "\", \"";
-      auto PrintFullyQualType = [&](TypeDecl *Decl) {
-        if (auto *ET = TypeName::getFullyQualifiedType(
-                           QualType{Decl->getTypeForDecl(), 0}, Context)
-                           ->getAsAdjusted<ElaboratedType>()) {
-          if (auto *NNS = ET->getQualifier())
-            NNS->print(*OS, HostPolicy);
-        }
-        Decl->printName(*OS);
-      };
-      PrintFullyQualType(Decl);
-      *OS << "\")\n.add(";
-      bool NeedsAddComma = false;
-      auto AddComma = [&]() {
-        if (NeedsAddComma)
-          *OS << ", ";
-        else
-          NeedsAddComma = true;
-      };
-      unsigned PushCount = 0;
-      TraverseNonConstExprs(
-          NonConstExprs,
-          [&](NonTypeTemplateParmDecl *NTTP) {
-            AddComma();
-            if (auto *EnumTp = NTTP->getType()->getAs<EnumType>()) {
-              *OS << "hsh::profiler::cast{\"";
-              PrintFullyQualType(EnumTp->getDecl());
-              *OS << "\", ";
-              NTTP->printName(*OS);
-              *OS << '}';
-            } else {
-              NTTP->printName(*OS);
-            }
-          },
-          [&](ClassTemplateSpecializationDecl *Spec) {
-            ++PushCount;
-            if (PushCount == 1)
-              return;
-            AddComma();
-            *OS << "hsh::profiler::push{\"";
-            auto *CTD = Spec->getSpecializedTemplateOrPartial()
-                            .get<ClassTemplateDecl *>();
-            PrintFullyQualType(CTD->getTemplatedDecl());
-            *OS << "\"}";
-          },
-          [&]() {
-            --PushCount;
-            if (PushCount == 0)
-              return;
-            AddComma();
-            *OS << "hsh::profiler::pop{}";
-          },
-          [&](const APSInt &Int, QualType IntType) {
-            AddComma();
-            *OS << '\"';
-            TemplateArgument(Context, Int, IntType).print(HostPolicy, *OS);
-            *OS << '\"';
-          });
-      *OS << ");\n"
-             "#else\n"
+             "#if HSH_PROFILE_MODE\n";
+      if (!AbsProfFile.empty()) {
+        *OS << "hsh::profile_context::instance\n"
+               ".get(\""
+            << AbsProfFile << "\",\n\"" << Expansion.Name << "\", \"";
+        auto PrintFullyQualType = [&](TypeDecl *Decl) {
+          if (auto *TD = dyn_cast<TagDecl>(Decl))
+            *OS << TD->getKindName() << ' ';
+          if (auto *ET = TypeName::getFullyQualifiedType(
+                             QualType{Decl->getTypeForDecl(), 0}, Context)
+                             ->getAsAdjusted<ElaboratedType>()) {
+            if (auto *NNS = ET->getQualifier())
+              NNS->print(*OS, HostPolicy);
+          }
+          Decl->printName(*OS);
+        };
+        PrintFullyQualType(Decl);
+        *OS << "\")\n.add(";
+        bool NeedsAddComma = false;
+        auto AddComma = [&]() {
+          if (NeedsAddComma)
+            *OS << ", ";
+          else
+            NeedsAddComma = true;
+        };
+        unsigned PushCount = 0;
+        TraverseNonConstExprs(
+            NonConstExprs,
+            [&](NonTypeTemplateParmDecl *NTTP) {
+              AddComma();
+              if (auto *EnumTp = NTTP->getType()->getAs<EnumType>()) {
+                *OS << "hsh::profiler::cast{\"";
+                PrintFullyQualType(EnumTp->getDecl());
+                *OS << "\", ";
+                NTTP->printName(*OS);
+                *OS << '}';
+              } else {
+                NTTP->printName(*OS);
+              }
+            },
+            [&](ClassTemplateSpecializationDecl *Spec) {
+              ++PushCount;
+              if (PushCount == 1)
+                return;
+              AddComma();
+              *OS << "hsh::profiler::push{\"";
+              auto *CTD = Spec->getSpecializedTemplateOrPartial()
+                              .get<ClassTemplateDecl *>();
+              PrintFullyQualType(CTD->getTemplatedDecl());
+              *OS << "\"}";
+            },
+            [&]() {
+              --PushCount;
+              if (PushCount == 0)
+                return;
+              AddComma();
+              *OS << "hsh::profiler::pop{}";
+            },
+            [&](const APSInt &Int, QualType IntType) {
+              AddComma();
+              *OS << '\"';
+              TemplateArgument(Context, Int, IntType).print(HostPolicy, *OS);
+              *OS << '\"';
+            });
+        *OS << ");\n";
+      }
+      *OS << "#else\n"
              "#pragma GCC diagnostic push\n"
              "#pragma GCC diagnostic ignored \"-Wcovered-switch-default\"\n";
 
@@ -6178,28 +6138,34 @@ public:
     if (!SourceDump) {
       AnonOS << "}\n\n";
 
-      *OS << AnonOS.str()
-          << "template <> hsh::detail::PipelineCoordinatorNode<\n"
-          << CoordinatorSpecOS.str() << ">::Impl>\n"
-          << CoordinatorSpecOS.str() << ">::global{};\n\n";
+      *OS << "namespace hsh::detail {\n"
+             "template struct "
+             "ValidateBuiltTargets<std::integer_sequence<hsh::Target";
+      for (auto Target : Targets) {
+        *OS << ", ";
+        Builtins.printTargetEnumString(*OS, HostPolicy, Target);
+      }
+      *OS << ">>;\n"
+             "}\n\n";
+
+      *OS << AnonOS.str();
+
+      if (NeedsCoordinatorComma) {
+        *OS << "template <> hsh::detail::PipelineCoordinatorNode<\n"
+            << CoordinatorSpecOS.str() << ">::Impl>\n"
+            << CoordinatorSpecOS.str() << ">::global{};\n\n";
+      }
 
       /*
        * Emit binding macro functions
        */
-      StringRef OutFileRef =
-          sys::path::filename(CI.getFrontendOpts().OutputFile);
-      SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
-      sys::path::replace_extension(ProfFile, ".hshprof");
-      SmallString<128> AbsProfFile(ProfFile);
-      sys::fs::make_absolute(AbsProfFile);
-
       *OS << "namespace {\n";
       for (auto &Exp : SeenHshExpansions)
-        handleHshExpansion(Exp.second, SeenDecls, AbsProfFile);
+        handleHshExpansion(Exp.second, SeenDecls, ProfilePath);
       *OS << "}\n";
     }
 
-    DxcLibrary::SharedInstance.reset();
+    //DxcLibrary::SharedInstance.reset();
   }
 
   void registerHshHeadInclude(SourceLocation HashLoc,
@@ -6283,24 +6249,16 @@ public:
     Preprocessor &PP;
     FileManager &FM;
     SourceManager &SM;
-    std::string DummyInclude = "#include <hsh/hsh.h>\n";
+
+    static constexpr llvm::StringLiteral DummyInclude{"#include <hsh/hsh.h>\n"};
 
   public:
     explicit PPCallbacks(GenerateConsumer &Consumer, Preprocessor &PP,
                          FileManager &FM, SourceManager &SM)
         : Consumer(Consumer), PP(PP), FM(FM), SM(SM) {
-      StringRef OutFileRef =
-          sys::path::filename(Consumer.CI.getFrontendOpts().OutputFile);
-      SmallString<64> ProfFile(OutFileRef.begin(), OutFileRef.end());
-      sys::path::replace_extension(ProfFile, ".hshprof");
-      raw_string_ostream DummyOS(DummyInclude);
-      DummyOS << "#if __has_include(\"" << ProfFile
-              << "\")\n"
-                 "#include \""
-              << ProfFile
-              << "\"\n"
-                 "#endif\n";
+      PP.setTokenWatcher([this](const clang::Token &T) { TokenWatcher(T); });
     }
+
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
       if (FileName.endswith_lower(".hshhead"_ll)) {
@@ -6329,6 +6287,13 @@ public:
       }
     }
 
+    SmallVector<llvm::unique_function<void(const clang::Token &)>, 4>
+        TokenWatcherStack;
+    void TokenWatcher(const clang::Token &T) {
+      if (!TokenWatcherStack.empty())
+        TokenWatcherStack.back()(T);
+    }
+
     void MacroExpands(const Token &MacroNameTok, const MacroDefinition &MD,
                       SourceRange Range, const MacroArgs *Args) override {
       if (MacroNameTok.is(tok::identifier)) {
@@ -6339,41 +6304,61 @@ public:
            * finished lexing the expression containing the hsh_ macro expansion.
            */
           auto SrcTokens = Args->getUnexpArguments();
-          PP.setTokenWatcher([this,
-                              PassTokens = std::vector<Token>(SrcTokens.begin(),
-                                                              SrcTokens.end()),
-                              PassRange = Range,
-                              PassName = Name](const clang::Token &T) {
-            /*
-             * setTokenWatcher(nullptr) will delete storage of captured values;
-             * move them here before calling it.
-             */
-            PPCallbacks *CB = this;
-            auto Tokens(std::move(PassTokens));
-            SourceRange Range = PassRange;
-            StringRef Name = PassName;
-            auto *P = static_cast<Parser *>(CB->PP.getCodeCompletionHandler());
-            CB->PP.setTokenWatcher(nullptr);
-            CB->PP.EnterTokenStream(Tokens, false, false);
-            {
-              /*
-               * Parse the contents of the hsh_ macro, which should result
-               * in a CXXTemporaryObjectExpr. The parsing checks are relaxed
-               * to permit non ICE expressions within template parameters.
-               */
-              Parser::RevertingTentativeParsingAction PA(*P, true);
-              P->getActions().InHshBindingMacro = true;
-              P->ConsumeToken();
-              ExprResult Res;
-              if (P->getCurToken().isOneOf(tok::identifier, tok::coloncolon))
-                Res = P->ParseExpression();
-              P->getActions().InHshBindingMacro = false;
-              CB->Consumer.registerHshExpansion(Range, Name, Res);
-            }
-            CB->PP.RemoveTopOfLexerStack();
-          });
+          TokenWatcherStack.emplace_back(
+              [this,
+               PassTokens =
+                   std::vector<Token>(SrcTokens.begin(), SrcTokens.end()),
+               PassRange = Range, PassName = Name](const clang::Token &T) {
+                /*
+                 * popping token watcher will delete storage of captured values;
+                 * move them here before calling it.
+                 */
+                PPCallbacks *CB = this;
+                auto Tokens(std::move(PassTokens));
+                SourceRange Range = PassRange;
+                StringRef Name = PassName;
+                auto *P =
+                    static_cast<Parser *>(CB->PP.getCodeCompletionHandler());
+                TokenWatcherStack.pop_back();
+                CB->PP.EnterTokenStream(Tokens, false, false);
+                {
+                  /*
+                   * Parse the contents of the hsh_ macro, which should result
+                   * in a CXXTemporaryObjectExpr. The parsing checks are relaxed
+                   * to permit non ICE expressions within template parameters.
+                   */
+                  Parser::RevertingTentativeParsingAction PA(*P, true);
+                  P->getActions().InHshBindingMacro = true;
+                  P->ConsumeToken();
+                  ExprResult Res;
+                  if (P->getCurToken().isOneOf(tok::identifier,
+                                               tok::coloncolon))
+                    Res = P->ParseExpression();
+                  P->getActions().InHshBindingMacro = false;
+                  CB->Consumer.registerHshExpansion(Range, Name, Res);
+                }
+                CB->PP.RemoveTopOfLexerStack();
+              });
         }
       }
+    }
+
+    bool DidPostdefines = false;
+    bool RequestPostdefines() override {
+      if (DidPostdefines)
+        return false;
+
+      if (!Consumer.ProfilePath.empty()) {
+        if (auto FE = FM.getFile(Consumer.ProfilePath)) {
+          auto FID = SM.createFileID(*FE, {}, SrcMgr::C_User);
+          PP.EnterSourceFile(FID, nullptr, {});
+          PP.getDiagnostics().setSuppressAllDiagnostics(true);
+          DidPostdefines = true;
+          return true;
+        }
+      }
+
+      return false;
     }
   };
 };
@@ -6385,8 +6370,8 @@ namespace clang::hshgen {
 std::unique_ptr<ASTConsumer>
 GenerateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   dumper().setPrintingPolicy(CI.getASTContext().getPrintingPolicy());
-  auto Consumer =
-      std::make_unique<GenerateConsumer>(CI, Targets, DebugInfo, SourceDump);
+  auto Consumer = std::make_unique<GenerateConsumer>(CI, Targets, DebugInfo,
+                                                     SourceDump, ProfilePath);
   CI.getPreprocessor().addPPCallbacks(
       std::make_unique<GenerateConsumer::PPCallbacks>(
           *Consumer, CI.getPreprocessor(), CI.getFileManager(),

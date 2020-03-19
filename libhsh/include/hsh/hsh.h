@@ -13,10 +13,6 @@
 #include <type_traits>
 #include <utility>
 
-// TODO: Make CMake set these
-#define HSH_ENABLE_VULKAN 1
-#define HSH_PROFILE_MODE 0
-
 #include "bits/common.h"
 #include "bits/builtin_types.h"
 #include "bits/source_location.h"
@@ -296,6 +292,12 @@ protected:
 inline void clear_attachments(bool color = true, bool depth = true) noexcept {
   detail::ActiveTargetTraits::ClearAttachments(color, depth);
 }
+
+#if __hsh__
+#define HSH_VAR_STAGE(stage) [[hsh::stage]]
+#else
+#define HSH_VAR_STAGE(stage)
+#endif
 
 }
 

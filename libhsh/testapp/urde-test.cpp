@@ -8,14 +8,14 @@ struct PassTraits {
   static constexpr bool SampleAlpha_ = SampleAlpha;
 };
 
-#include "urde-test.cpp.hshhead"
-
 template <bool CubeReflection>
 struct DynReflectionTex { using type = hsh::texture2d<float>; };
 template <>
 struct DynReflectionTex<true> { using type = hsh::texturecube<float>; };
 template <bool CubeReflection>
 using DynReflectionTexType = typename DynReflectionTex<CubeReflection>::type;
+
+#include "urde-test.cpp.hshhead"
 
 constexpr hsh::sampler Samp;
 constexpr hsh::sampler ClampSamp(hsh::Linear, hsh::Linear, hsh::Linear,
@@ -50,7 +50,7 @@ struct DrawModel
           cull_mode<Cull>, depth_compare<DepthCompare>, depth_write<DepthWrite>,
           early_depth_stencil<!AlphaTest>> {
   DrawModel(hsh::dynamic_uniform_buffer<VertUniform<NSkinSlots>> vu,
-            hsh::dynamic_uniform_buffer<FragmentUniform<Post>> fragu [[hsh::fragment]],
+            hsh::dynamic_uniform_buffer<FragmentUniform<Post>> fragu HSH_VAR_STAGE(fragment),
             hsh::dynamic_uniform_buffer<std::array<TCGMatrix, 8>> tcgu,
             hsh::dynamic_uniform_buffer<ReflectMtx> refu,
             hsh::texture2d<float> Lightmap,
@@ -71,7 +71,7 @@ struct DrawModel
 
     hsh::float4 objPos;
     hsh::float4 objNorm;
-    if constexpr (NSkinSlots) {
+    if constexpr (NSkinSlots != 0) {
       objPos = hsh::float4(0.f);
       objNorm = hsh::float4(0.f);
       for (uint32_t i = 0; i < NSkinSlots; ++i) {
@@ -236,7 +236,7 @@ EMIT_TCG(Alpha)
       break;
     }
 
-    hsh::float3 DynReflectionSample;
+    hsh::float3 DynReflectionSample HSH_VAR_STAGE(fragment);
     switch (ReflectionType) {
     case RT_None:
       DynReflectionSample = hsh::float3(0.f);

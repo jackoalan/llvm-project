@@ -28,6 +28,15 @@ constexpr enum Target FirstStaticallyActiveTarget() noexcept {
   return Target::NullTarget;
 }
 inline enum Target CurrentTarget = FirstStaticallyActiveTarget();
+
+template <typename Ts> struct ValidateBuiltTargets {};
+template <hsh::Target... Ts>
+struct ValidateBuiltTargets<std::integer_sequence<hsh::Target, Ts...>> {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  static_assert(((Ts == Target::Enumeration) || ...),                          \
+                "hshgen not ran for one or more active targets");
+#include "targets.def"
+};
 } // namespace detail
 } // namespace hsh
 
@@ -40,15 +49,6 @@ inline enum Target CurrentTarget = FirstStaticallyActiveTarget();
 #endif
 
 namespace hsh::detail {
-// TODO: Make CMake define these in project-scope
-#define HSH_MAX_UNIFORMS 8
-#define HSH_MAX_IMAGES 8
-#define HSH_MAX_SAMPLERS 8
-#define HSH_MAX_VERTEX_BUFFERS 8
-#define HSH_MAX_INDEX_BUFFERS 8
-#define HSH_MAX_RENDER_TEXTURE_BINDINGS 4
-#define HSH_DESCRIPTOR_POOL_SIZE 8192
-
 #ifndef HSH_MAX_UNIFORMS
 #error HSH_MAX_UNIFORMS definition is mandatory!
 #endif

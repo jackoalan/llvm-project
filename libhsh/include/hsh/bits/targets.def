@@ -6,7 +6,11 @@
 #define HSH_TARGET(Enumeration)
 #endif
 
-#if HSH_PROFILE_MODE
+/*
+ * Neither profile mode or hshgen itself need backend functionality.
+ * Disabling them speeds up compile/generation time significantly.
+ */
+#if HSH_PROFILE_MODE || __hsh__
 #undef HSH_ENABLE_VULKAN
 #endif
 

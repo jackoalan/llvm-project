@@ -370,6 +370,10 @@ public:
   /// \param IfLoc the source location of the \#if/\#ifdef/\#ifndef directive.
   virtual void Endif(SourceLocation Loc, SourceLocation IfLoc) {
   }
+
+  virtual bool RequestPostdefines() {
+    return false;
+  }
 };
 
 /// Simple wrapper class for chaining callbacks.
@@ -603,6 +607,12 @@ public:
   void Endif(SourceLocation Loc, SourceLocation IfLoc) override {
     First->Endif(Loc, IfLoc);
     Second->Endif(Loc, IfLoc);
+  }
+
+  bool RequestPostdefines() override {
+    bool Ret = First->RequestPostdefines();
+    Ret |= Second->RequestPostdefines();
+    return Ret;
   }
 };
 

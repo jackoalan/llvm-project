@@ -55,12 +55,14 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
 
 class GenerateAction : public ASTFrontendAction {
   OwningArrayRef<HshTarget> Targets;
+  SmallString<256> ProfilePath;
   bool DebugInfo, SourceDump;
 
 public:
   explicit GenerateAction(ArrayRef<HshTarget> Targets, bool DebugInfo = false,
-                          bool SourceDump = false)
-      : Targets(Targets), DebugInfo(DebugInfo), SourceDump(SourceDump) {}
+                          bool SourceDump = false, StringRef ProfilePath = {})
+      : Targets(Targets), ProfilePath(ProfilePath), DebugInfo(DebugInfo),
+        SourceDump(SourceDump) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
 };
