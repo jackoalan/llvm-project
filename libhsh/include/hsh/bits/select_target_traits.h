@@ -73,12 +73,12 @@ template <unsigned NSTs> struct SelectTargetTraits {
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const SourceLocation &location, Args... args) {
+  CreateResource(const SourceLocation &location, Args &&... args) {
     switch (detail::CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   case Target::Enumeration:                                                    \
-    return decltype(ResourceFactory<T>::_##Enumeration)::Create(location,      \
-                                                                args...);
+    return decltype(ResourceFactory<T>::_##Enumeration)::Create(               \
+        location, std::forward<Args>(args)...);
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -171,16 +171,16 @@ template <> struct SelectTargetTraits<1> {
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const SourceLocation &location, Args... args) {
+  CreateResource(const SourceLocation &location, Args &&... args) {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  return decltype(ResourceFactory<T>::_##Enumeration)::Create(location,        \
-                                                              args...);
+  return decltype(ResourceFactory<T>::_##Enumeration)::Create(                 \
+      location, std::forward<Args>(args)...);
 #include "targets.def"
   }
 
   static void ClearAttachments(bool color, bool depth) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-    TargetTraits::ClearAttachments(color, depth);
+  TargetTraits::ClearAttachments(color, depth);
 #include "targets.def"
   }
 };
@@ -256,7 +256,7 @@ template <> struct SelectTargetTraits<0> {
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const SourceLocation &location, Args... args) {
+  CreateResource(const SourceLocation &location, Args &&... args) {
     return {};
   }
 

@@ -166,18 +166,27 @@ int main(int argc, char **argv) {
         return false;
       });
 
-  unsigned DevIdx = 0;
-  auto Device = Instance.enumerate_vulkan_devices(
-      [&](const vk::PhysicalDeviceProperties &Props) {
-        return (DevIdx++ == 0);
-      });
-  if (!Device) {
-    if (DevIdx == 0)
-      std::cerr << "No vulkan devices found\n";
+  auto PhysSurface = Instance.create_phys_surface(Connection, Window.Window);
+  if (!PhysSurface) {
+    std::cerr << "Unable to create XCB surface\n";
     return 1;
   }
 
-  auto Surface = hsh::create_surface(Window.Connection, Window.Window);
+  auto Device = Instance.enumerate_vulkan_devices(
+      [&](const vk::PhysicalDeviceProperties &Props) {
+        return true;
+      }, *PhysSurface);
+  if (!Device) {
+    std::cerr << "No vulkan devices found\n";
+    return 1;
+  }
+
+  auto Surface = hsh::create_surface(std::move(PhysSurface));
+  if (!Surface) {
+    std::cerr << "PhysSurface not compatible\n";
+    return 1;
+  }
+
   auto RenderTexture = hsh::create_render_texture2d(Surface);
 
   PipelineCacheFileManager PCFM;
@@ -203,7 +212,7 @@ int main(int argc, char **argv) {
         ModInfo = CreateModelInfo();
         MatInfo = CreateMaterialInfo();
         ModRes = CreateModelResources();
-        ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+        //ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
       }
 
       MyNS::UniformData UniData{};

@@ -884,29 +884,15 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
 template <>
 struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
   static auto Create(const SourceLocation &location,
-                     vk::UniqueSurfaceKHR Surface) noexcept {
+                     vk::UniqueSurfaceKHR &&Surface) noexcept {
     vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
                                        Surface.get());
-    if (!vulkan::Globals.CheckSurfaceSupported(Surface.get())) {
-      // TODO: make this return a detectable null object
-      assert(false && "surface not supported");
+    if (!vulkan::Globals.CheckSurfaceSupported(Surface.get()))
       return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{};
-    }
     return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{
         std::make_unique<vulkan::SurfaceAllocation>(location,
                                                     std::move(Surface))};
   }
-
-#ifdef VK_USE_PLATFORM_XCB_KHR
-  static auto Create(const SourceLocation &location, xcb_connection_t *Conn,
-                     xcb_window_t Window) noexcept {
-    return Create(location,
-                  vulkan::Globals.Instance
-                      .createXcbSurfaceKHRUnique(
-                          vk::XcbSurfaceCreateInfoKHR({}, Conn, Window))
-                      .value);
-  }
-#endif
 };
 
 namespace vulkan {
@@ -1351,7 +1337,9 @@ public:
   operator bool() const noexcept { return success(); }
 
   template <typename Func>
-  vulkan_device_owner enumerate_vulkan_devices(Func Acceptor) const noexcept {
+  vulkan_device_owner
+  enumerate_vulkan_devices(Func Acceptor,
+                           vk::SurfaceKHR CheckSurface = {}) const noexcept {
     vulkan_device_owner Ret;
     vk::Instance Instance = Data->Instance.get();
     auto &ErrHandler = Data->ErrHandler;
@@ -1361,11 +1349,7 @@ public:
       auto Properties = PD.getProperties();
       if (Properties.apiVersion < VK_VERSION_1_1)
         continue;
-      if (!Acceptor(Properties))
-        continue;
 
-      Ret.Data = std::make_unique<struct vulkan_device_owner::Data>();
-      auto &Data = *Ret.Data;
       detail::vulkan::Globals.PhysDevice = PD;
       uint32_t QFIdx = 0;
       bool HasExtMemoryBudget = false;
@@ -1375,8 +1359,8 @@ public:
           [&](std::string_view MissingLayer) {
             std::ostringstream ss;
             ss << "Required instance layer '" << MissingLayer
-               << "' not available.";
-            ErrHandler(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+               << "' not available in " << Properties.deviceName << ".";
+            ErrHandler(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
                        vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
                        vk::DebugUtilsMessengerCallbackDataEXT(
                            {}, "Missing instance layer", {}, ss.str().c_str()));
@@ -1384,23 +1368,42 @@ public:
           [&](std::string_view MissingExtension) {
             std::ostringstream ss;
             ss << "Required instance extension '" << MissingExtension
-               << "' not available.";
+               << "' not available in " << Properties.deviceName << ".";
             ErrHandler(
-                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
                 vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
                 vk::DebugUtilsMessengerCallbackDataEXT(
                     {}, "Missing instance extension", {}, ss.str().c_str()));
           },
           [&]() {
+            std::ostringstream ss;
+            ss << "No graphics queue family in " << Properties.deviceName
+               << ".";
             ErrHandler(
-                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
                 vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
                 vk::DebugUtilsMessengerCallbackDataEXT(
-                    {}, "Missing graphics queue family", {},
-                    "Selected device does not have a graphics queue family."));
+                    {}, "Missing graphics queue family", {}, ss.str().c_str()));
           });
       if (!DeviceCreateInfo.Success)
-        return {};
+        continue;
+
+      if (CheckSurface && !PD.getSurfaceSupportKHR(QFIdx, CheckSurface).value) {
+        std::ostringstream ss;
+        ss << "Surface is not supported by " << Properties.deviceName << ".";
+        ErrHandler(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
+                   vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral,
+                   vk::DebugUtilsMessengerCallbackDataEXT(
+                       {}, "Incompatible surface", {}, ss.str().c_str()));
+        continue;
+      }
+
+      if (!Acceptor(Properties))
+        continue;
+
+      Ret.Data = std::make_unique<struct vulkan_device_owner::Data>();
+      auto &Data = *Ret.Data;
+
       Data.Device = PD.createDeviceUnique(DeviceCreateInfo).value;
       VULKAN_HPP_DEFAULT_DISPATCHER.init(*Data.Device);
       detail::vulkan::Globals.Device = Data.Device.get();
@@ -1465,6 +1468,16 @@ public:
 
     return {};
   }
+
+#ifdef VK_USE_PLATFORM_XCB_KHR
+  vk::UniqueSurfaceKHR create_phys_surface(xcb_connection_t *Connection,
+                                           xcb_window_t Window) {
+    return Data->Instance
+        ->createXcbSurfaceKHRUnique(
+            vk::XcbSurfaceCreateInfoKHR({}, Connection, Window))
+        .value;
+  }
+#endif
 };
 
 inline vulkan_instance_owner create_vulkan_instance(

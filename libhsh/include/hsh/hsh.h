@@ -13,8 +13,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "bits/common.h"
 #include "bits/builtin_types.h"
+#include "bits/common.h"
 #include "bits/source_location.h"
 #include "bits/vulkan.h"
 
@@ -70,6 +70,8 @@ template <typename T> struct resource_owner_base {
   resource_owner_base &
   operator=(resource_owner_base &&other) noexcept = default;
 
+  operator bool() const noexcept { return Owner.IsValid(); }
+
   T get() const noexcept { return T(typename decltype(Owner)::Binding(Owner)); }
   operator T() const noexcept { return get(); }
 };
@@ -118,15 +120,15 @@ struct resource_owner<dynamic_vertex_buffer<T>>
 
 template <typename T, typename... Args>
 inline resource_owner<T> create_resource(const SourceLocation &location,
-                                         Args... args) noexcept {
-  return resource_owner<T>(
-      detail::ActiveTargetTraits::CreateResource<T>(location, args...));
+                                         Args &&... args) noexcept {
+  return resource_owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
+      location, std::forward<Args>(args)...));
 }
 
 template <typename T, typename... Args>
-inline resource_owner<T> create_resource(Args... args) noexcept {
+inline resource_owner<T> create_resource(Args &&... args) noexcept {
   return resource_owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
-      SourceLocation::current(), args...));
+      SourceLocation::current(), std::forward<Args>(args)...));
 }
 
 template <typename T, typename CopyFunc>
@@ -237,11 +239,11 @@ template <> struct resource_owner<render_texture2d> {
     Owner.ResolveSurface(surface.Binding, reattach);
   }
   void resolve_color_binding(uint32_t idx, rect2d region,
-                           bool reattach = true) noexcept {
+                             bool reattach = true) noexcept {
     Owner.ResolveColorBinding(idx, region, reattach);
   }
   void resolve_depth_binding(uint32_t idx, rect2d region,
-                           bool reattach = true) noexcept {
+                             bool reattach = true) noexcept {
     Owner.ResolveDepthBinding(idx, region, reattach);
   }
 };
@@ -260,11 +262,11 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
   }
 };
 
-#ifdef VK_USE_PLATFORM_XCB_KHR
+#if HSH_ENABLE_VULKAN
 inline resource_owner<surface> create_surface(
-    xcb_connection_t *Conn, xcb_window_t Window,
+    vk::UniqueSurfaceKHR &&Surface,
     const SourceLocation &location = SourceLocation::current()) noexcept {
-  return create_resource<surface>(location, Conn, Window);
+  return create_resource<surface>(location, std::move(Surface));
 }
 #endif
 
@@ -299,6 +301,6 @@ inline void clear_attachments(bool color = true, bool depth = true) noexcept {
 #define HSH_VAR_STAGE(stage)
 #endif
 
-}
+} // namespace hsh
 
 #include "bits/profile.h"
