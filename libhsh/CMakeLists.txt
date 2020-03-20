@@ -3,9 +3,15 @@ cmake_minimum_required(VERSION 3.4.3)
 set(LIBHSH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LIBHSH_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-install(FILES include/hsh.h
+# Install headers
+install(DIRECTORY include/hsh
         DESTINATION include
         COMPONENT libhsh-headers
+        FILES_MATCHING
+        PATTERN "*.def"
+        PATTERN "*.h"
+        PATTERN "config.h" EXCLUDE
+        PATTERN ".svn" EXCLUDE
         )
 
 add_custom_target(libhsh-headers)
