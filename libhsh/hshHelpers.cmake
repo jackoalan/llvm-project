@@ -71,6 +71,14 @@ if (vulkan-spirv IN_LIST HSH_TARGETS)
 endif()
 
 #
+# Assemble includes and defines into interface library
+#
+
+add_library(hsh INTERFACE)
+target_include_directories(hsh INTERFACE "${HSH_INCLUDE_DIR}" ${HSH_EXTRA_INCLUDE_DIRS})
+target_compile_definitions(hsh INTERFACE ${HSH_EXTRA_COMPILE_DEFINES})
+
+#
 # gather_include_directories recursively builds a list of include directories
 # across all dependencies.
 #
@@ -112,38 +120,33 @@ function(_hsh_gather_compile_definitions_impl target_name)
   get_target_property(target_dependencies ${target_name} INTERFACE_LINK_LIBRARIES)
   foreach(dep ${target_dependencies})
     if(TARGET ${dep})
-      get_target_property(dep_includes ${dep} INTERFACE_COMPILE_DEFINITIONS)
-      if(dep_includes)
-        list(APPEND target_includes ${dep_includes})
+      get_target_property(dep_defines ${dep} INTERFACE_COMPILE_DEFINITIONS)
+      if(dep_defines)
+        list(APPEND target_defines ${dep_defines})
       endif()
-      _hsh_gather_include_directories_impl(${dep})
+      _hsh_gather_compile_definitions_impl(${dep})
     endif()
   endforeach()
-  set(target_includes ${target_includes} PARENT_SCOPE)
+  set(target_defines ${target_defines} PARENT_SCOPE)
 endfunction()
 
 function(hsh_gather_compile_definitions var target_name)
-  unset(target_includes)
-  get_directory_property(dir_includes COMPILE_DEFINITIONS)
-  if(dir_includes)
-    list(APPEND target_includes ${dir_includes})
+  unset(target_defines)
+  get_directory_property(dir_defines COMPILE_DEFINITIONS)
+  if(dir_defines)
+    list(APPEND target_defines ${dir_defines})
   endif()
-  get_target_property(target_includes1 ${target_name} COMPILE_DEFINITIONS)
-  if(target_includes1)
-    list(APPEND target_includes ${target_includes1})
+  get_target_property(target_defines1 ${target_name} COMPILE_DEFINITIONS)
+  if(target_defines1)
+    list(APPEND target_defines ${target_defines1})
   endif()
-  get_target_property(target_includes2 ${target_name} INTERFACE_COMPILE_DEFINITIONS)
-  if(target_includes2)
-    list(APPEND target_includes ${target_includes2})
+  get_target_property(target_defines2 ${target_name} INTERFACE_COMPILE_DEFINITIONS)
+  if(target_defines2)
+    list(APPEND target_defines ${target_defines2})
   endif()
-  _hsh_gather_include_directories_impl(${target_name})
-  list(REMOVE_DUPLICATES target_includes)
-  set(${var} ${target_includes} PARENT_SCOPE)
-endfunction()
-
-function(target_hsh_includes_defines target)
-  target_include_directories(${target} PUBLIC "${HSH_INCLUDE_DIR}" ${HSH_EXTRA_INCLUDE_DIRS})
-  target_compile_definitions(${target} PUBLIC ${HSH_EXTRA_COMPILE_DEFINES})
+  _hsh_gather_compile_definitions_impl(${target_name})
+  list(REMOVE_DUPLICATES target_defines)
+  set(${var} ${target_defines} PARENT_SCOPE)
 endfunction()
 
 #
@@ -171,7 +174,7 @@ function(target_hsh target)
   list(REMOVE_DUPLICATES _hsh_targets)
 
   # Set includes and defines for CMake target tree
-  target_hsh_includes_defines(${target})
+  target_link_libraries(${target} PUBLIC hsh)
   hsh_gather_include_directories(include_list ${target})
   foreach(include ${include_list})
     list(APPEND _hsh_args "-I${include}")
