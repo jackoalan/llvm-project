@@ -1243,8 +1243,12 @@ class vulkan_device_owner {
 
     ~Data() noexcept {
       Device->waitIdle();
-      if (BuiltPipelines)
-        hsh::detail::GlobalListNode::DestroyAll(ActiveTarget::VULKAN_SPIRV);
+      if (BuiltPipelines) {
+        hsh::detail::GlobalListNode<false>::DestroyAll(
+            ActiveTarget::VULKAN_SPIRV);
+        hsh::detail::GlobalListNode<true>::DestroyAll(
+            ActiveTarget::VULKAN_SPIRV);
+      }
     }
   };
   std::unique_ptr<Data> Data;
@@ -1260,7 +1264,8 @@ public:
   void build_pipelines() noexcept {
     if (Data->BuiltPipelines)
       return;
-    hsh::detail::GlobalListNode::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    hsh::detail::GlobalListNode<true>::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    hsh::detail::GlobalListNode<false>::CreateAll(ActiveTarget::VULKAN_SPIRV);
     Data->BuiltPipelines = true;
   }
 
@@ -1270,20 +1275,25 @@ public:
       return;
     Data->PipelineCache = hsh::detail::vulkan::CreatePipelineCache(CFM);
     detail::vulkan::Globals.PipelineCache = Data->PipelineCache.get();
-    hsh::detail::GlobalListNode::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    hsh::detail::GlobalListNode<true>::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    hsh::detail::GlobalListNode<false>::CreateAll(ActiveTarget::VULKAN_SPIRV);
     hsh::detail::vulkan::WritePipelineCache(CFM);
     Data->BuiltPipelines = true;
   }
 
+  using HighCompleteFunc = std::function<void()>;
   using ProgFunc = std::function<void(std::size_t, std::size_t)>;
 
-  void build_pipelines(const ProgFunc &PF) noexcept {
+  void build_pipelines(const HighCompleteFunc &HCF,
+                       const ProgFunc &PF) noexcept {
     if (Data->BuiltPipelines)
       return;
-    std::size_t Count = hsh::detail::GlobalListNode::CountAll();
+    hsh::detail::GlobalListNode<true>::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    HCF();
+    std::size_t Count = hsh::detail::GlobalListNode<false>::CountAll();
     std::size_t I = 0;
     PF(I, Count);
-    for (auto *Node = hsh::detail::GlobalListNode::GetHead(); Node;
+    for (auto *Node = hsh::detail::GlobalListNode<false>::GetHead(); Node;
          Node = Node->GetNext()) {
       Node->Create(ActiveTarget::VULKAN_SPIRV);
       PF(++I, Count);
@@ -1292,21 +1302,75 @@ public:
   }
 
   template <typename CacheFileMgr>
-  void build_pipelines(CacheFileMgr &CFM, const ProgFunc &PF) noexcept {
+  void build_pipelines(CacheFileMgr &CFM, const HighCompleteFunc &HCF,
+                       const ProgFunc &PF) noexcept {
     if (Data->BuiltPipelines)
       return;
     Data->PipelineCache = hsh::detail::vulkan::CreatePipelineCache(CFM);
     detail::vulkan::Globals.PipelineCache = Data->PipelineCache.get();
-    std::size_t Count = hsh::detail::GlobalListNode::CountAll();
+    hsh::detail::GlobalListNode<true>::CreateAll(ActiveTarget::VULKAN_SPIRV);
+    HCF();
+    std::size_t Count = hsh::detail::GlobalListNode<false>::CountAll();
     std::size_t I = 0;
     PF(I, Count);
-    for (auto *Node = hsh::detail::GlobalListNode::GetHead(); Node;
+    for (auto *Node = hsh::detail::GlobalListNode<false>::GetHead(); Node;
          Node = Node->GetNext()) {
       Node->Create(ActiveTarget::VULKAN_SPIRV);
       PF(++I, Count);
     }
     hsh::detail::vulkan::WritePipelineCache(CFM);
     Data->BuiltPipelines = true;
+  }
+
+  template <typename CacheFileMgr> class pipeline_build_pump {
+    CacheFileMgr *CFM = nullptr;
+    std::size_t Count = 0;
+    std::size_t I = 0;
+    hsh::detail::GlobalListNode<false> *Node = nullptr;
+
+  public:
+    pipeline_build_pump() noexcept = default;
+
+    explicit pipeline_build_pump(CacheFileMgr &CFM) noexcept
+        : CFM(&CFM), Count(hsh::detail::GlobalListNode<false>::CountAll()),
+          Node(hsh::detail::GlobalListNode<false>::GetHead()) {
+      if (Node == nullptr)
+        hsh::detail::vulkan::WritePipelineCache(CFM);
+    }
+
+    std::pair<std::size_t, std::size_t> get_progress() const noexcept {
+      return {I, Count};
+    }
+
+    bool pump() noexcept {
+      if (Node) {
+        Node->Create(ActiveTarget::VULKAN_SPIRV);
+        Node = Node->GetNext();
+        ++I;
+        if (Node == nullptr) {
+          hsh::detail::vulkan::WritePipelineCache(*CFM);
+          return false;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    operator bool() const noexcept { return CFM; }
+  };
+
+  template <typename CacheFileMgr>
+  pipeline_build_pump<CacheFileMgr>
+  start_build_pipelines(CacheFileMgr &CFM) noexcept {
+    if (Data->BuiltPipelines)
+      return {};
+    Data->BuiltPipelines = true;
+
+    Data->PipelineCache = hsh::detail::vulkan::CreatePipelineCache(CFM);
+    detail::vulkan::Globals.PipelineCache = Data->PipelineCache.get();
+    hsh::detail::GlobalListNode<true>::CreateAll(ActiveTarget::VULKAN_SPIRV);
+
+    return pipeline_build_pump(CFM);
   }
 
   template <typename Func> void enter_draw_context(Func F) const noexcept {

@@ -2,20 +2,7 @@
 #  define PIPELINE_FIELD(Name, Stage)
 #endif
 
-#ifndef PIPELINE_TEMPLATE_PARAM
-#  define PIPELINE_TEMPLATE_PARAM(Name)
-#endif
-
 PIPELINE_FIELD(position, HshVertexStage)
 PIPELINE_FIELD(color_out, HshFragmentStage)
 
-PIPELINE_TEMPLATE_PARAM(color_attachment)
-PIPELINE_TEMPLATE_PARAM(topology)
-PIPELINE_TEMPLATE_PARAM(patch_control_points)
-PIPELINE_TEMPLATE_PARAM(cull_mode)
-PIPELINE_TEMPLATE_PARAM(depth_compare)
-PIPELINE_TEMPLATE_PARAM(depth_write)
-PIPELINE_TEMPLATE_PARAM(early_depth_stencil)
-
 #undef PIPELINE_FIELD
-#undef PIPELINE_TEMPLATE_PARAM

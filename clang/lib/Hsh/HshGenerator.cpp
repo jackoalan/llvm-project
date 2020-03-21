@@ -743,6 +743,7 @@ public:
     using base = DeclVisitor<PipelineAttributes, bool>;
     ClassTemplateDecl *BaseAttributeDecl = nullptr;
     ClassTemplateDecl *ColorAttachmentDecl = nullptr;
+    ClassTemplateDecl *HighPriorityDecl = nullptr;
     SmallVector<ClassTemplateDecl *, 8> Attributes; // Non-color-attachments
     SmallVector<ClassTemplateDecl *, 1>
         InShaderAttributes; // Just for early depth stencil
@@ -802,6 +803,9 @@ public:
                   .get<ClassTemplateDecl *>() == BaseAttributeDecl) {
             if (BaseSpec->getTemplateArgs()[0].getAsIntegral().getZExtValue()) {
               ColorAttachmentDecl = CTD;
+              return true;
+            } else if (CTD->getName() == "high_priority") {
+              HighPriorityDecl = CTD;
               return true;
             } else if (BaseSpec->getTemplateArgs()[1]
                            .getAsIntegral()
@@ -974,6 +978,23 @@ public:
         }
       }
       return Ret;
+    }
+
+    bool
+    isHighPriority(const ClassTemplateSpecializationDecl *PipelineSpec) const {
+      for (const auto &Arg :
+           PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
+        if (Arg.getKind() == TemplateArgument::Type) {
+          if (auto *CTD = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
+                  Arg.getAsType()->getAsCXXRecordDecl())) {
+            if (CTD->getSpecializedTemplateOrPartial()
+                    .get<ClassTemplateDecl *>() == HighPriorityDecl)
+              if (CTD->getTemplateArgs().size())
+                return !!CTD->getTemplateArgs()[0].getAsIntegral();
+          }
+        }
+      }
+      return false;
     }
   };
 
@@ -5353,6 +5374,8 @@ class GenerateConsumer : public ASTConsumer {
   raw_string_ostream AnonOS{AnonNSString};
   std::string CoordinatorSpecString;
   raw_string_ostream CoordinatorSpecOS{CoordinatorSpecString};
+  std::string HighCoordinatorSpecString;
+  raw_string_ostream HighCoordinatorSpecOS{HighCoordinatorSpecString};
   Optional<std::pair<SourceLocation, std::string>> HeadInclude;
   struct HshExpansion {
     SourceRange Range;
@@ -5378,6 +5401,15 @@ class GenerateConsumer : public ASTConsumer {
     else
       NeedsCoordinatorComma = true;
     T.print(CoordinatorSpecOS, HostPolicy);
+  }
+
+  bool NeedsHighCoordinatorComma = false;
+  void addHighCoordinatorType(QualType T) {
+    if (NeedsHighCoordinatorComma)
+      HighCoordinatorSpecOS << ",\n";
+    else
+      NeedsHighCoordinatorComma = true;
+    T.print(HighCoordinatorSpecOS, HostPolicy);
   }
 
   class LocationNamespaceSearch
@@ -5512,7 +5544,6 @@ public:
 
     auto ProcessSpecialization = [&](CXXRecordDecl *Specialization) {
       QualType T{Specialization->getTypeForDecl(), 0};
-      addCoordinatorType(T);
 
       // HshBuiltins::makeBindingDerivative sets this
       CXXRecordDecl *PipelineSource = Specialization->HshSourceRecord;
@@ -5561,6 +5592,11 @@ public:
           PipelineAttributes.getPipelineArgs(Context, PipelineSpec);
       auto InShaderPipelineArgs =
           PipelineAttributes.getInShaderPipelineArgs(Context, PipelineSpec);
+
+      if (PipelineAttributes.isHighPriority(PipelineSpec))
+        addHighCoordinatorType(T);
+      else
+        addCoordinatorType(T);
 
       StagesBuilder Builder(Context, Builtins, Specialization,
                             ColorAttachmentArgs.size());
@@ -6121,7 +6157,8 @@ public:
              "#include <hsh/hsh.h>\n\n";
 
       AnonOS << "namespace {\n\n";
-      CoordinatorSpecOS << "hsh::detail::PipelineCoordinator<\n";
+      CoordinatorSpecOS << "hsh::detail::PipelineCoordinator<false,\n";
+      HighCoordinatorSpecOS << "hsh::detail::PipelineCoordinator<true,\n";
     }
 
     /*
@@ -6151,9 +6188,15 @@ public:
       *OS << AnonOS.str();
 
       if (NeedsCoordinatorComma) {
-        *OS << "template <> hsh::detail::PipelineCoordinatorNode<\n"
+        *OS << "template <> hsh::detail::PipelineCoordinatorNode<false,\n"
             << CoordinatorSpecOS.str() << ">::Impl>\n"
             << CoordinatorSpecOS.str() << ">::global{};\n\n";
+      }
+
+      if (NeedsHighCoordinatorComma) {
+        *OS << "template <> hsh::detail::PipelineCoordinatorNode<true,\n"
+            << HighCoordinatorSpecOS.str() << ">::Impl>\n"
+            << HighCoordinatorSpecOS.str() << ">::global{};\n\n";
       }
 
       /*
@@ -6165,7 +6208,7 @@ public:
       *OS << "}\n";
     }
 
-    //DxcLibrary::SharedInstance.reset();
+    // DxcLibrary::SharedInstance.reset();
   }
 
   void registerHshHeadInclude(SourceLocation HashLoc,

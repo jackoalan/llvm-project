@@ -360,6 +360,7 @@ template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
 template <CullMode CM = CullNone> struct cull_mode : base_attribute<> {};
 template <Compare C = Always> struct depth_compare : base_attribute<> {};
 template <bool W = true> struct depth_write : base_attribute<> {};
+template <bool HP = true> struct high_priority : base_attribute<> {};
 template <bool E = false>
 struct early_depth_stencil : base_attribute<false, true> {};
 template <typename... Attrs> struct pipeline {
@@ -611,21 +612,19 @@ constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
 }
 } // namespace buffer_math
 
-class GlobalListNode {
+typedef void (*BuildFunc)() noexcept;
+struct FuncPair {
+  BuildFunc Create, Destroy;
+};
+
+template <bool HighPrio> class GlobalListNode {
   static GlobalListNode *Head;
-
-public:
-  static GlobalListNode *GetHead() noexcept { return Head; }
-  typedef void (*BuildFunc)() noexcept;
-  struct FuncPair {
-    BuildFunc Create, Destroy;
-  };
-
-private:
   std::array<FuncPair, std::size_t(ActiveTarget::MaxActiveTarget)> Funcs;
   GlobalListNode *Next;
 
 public:
+  static GlobalListNode *GetHead() noexcept { return Head; }
+
   template <typename... Args>
   explicit GlobalListNode(Args... Funcs) noexcept
       : Funcs{Funcs...}, Next(Head) {
@@ -653,21 +652,23 @@ public:
     return Ret;
   }
 };
-inline GlobalListNode *GlobalListNode::Head = nullptr;
+template <> inline GlobalListNode<true> *GlobalListNode<true>::Head = nullptr;
+template <> inline GlobalListNode<false> *GlobalListNode<false>::Head = nullptr;
 
-template <template <hsh::Target> typename Impl>
-struct PipelineCoordinatorNode : GlobalListNode {
+template <bool HighPrio, template <hsh::Target> typename Impl>
+struct PipelineCoordinatorNode : GlobalListNode<HighPrio> {
+  using base = GlobalListNode<HighPrio>;
   PipelineCoordinatorNode()
-      : GlobalListNode{
+      : GlobalListNode<HighPrio>{
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  GlobalListNode::FuncPair{Impl<Target::Enumeration>::Create,                  \
-                           Impl<Target::Enumeration>::Destroy},
+  FuncPair{Impl<Target::Enumeration>::Create,                                  \
+           Impl<Target::Enumeration>::Destroy},
 #include "targets.def"
         } {
   }
 };
 
-template <typename... B> struct PipelineCoordinator {
+template <bool HighPrio, typename... B> struct PipelineCoordinator {
   template <hsh::Target T> struct Impl {
     static void Create() noexcept {
       PipelineBuilder<T>::template CreatePipelines<B...>();
@@ -676,7 +677,7 @@ template <typename... B> struct PipelineCoordinator {
       PipelineBuilder<T>::template DestroyPipelines<B...>();
     }
   };
-  static PipelineCoordinatorNode<Impl> global;
+  static PipelineCoordinatorNode<HighPrio, Impl> global;
 };
 
 /*

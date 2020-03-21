@@ -260,6 +260,10 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
   bool acquire_next_image() noexcept {
     return resource_owner_base<surface>::Owner.AcquireNextImage();
   }
+  void attach_deleter_lambda(std::function<void()> &&Del) noexcept {
+    return resource_owner_base<surface>::Owner.AttachDeleterLambda(
+        std::move(Del));
+  }
 };
 
 #if HSH_ENABLE_VULKAN

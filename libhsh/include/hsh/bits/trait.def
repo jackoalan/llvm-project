@@ -186,6 +186,14 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       return false;
     }
   }
+  void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.AttachDeleterLambda(std::move(Del)); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
 #endif
 #ifdef HSH_PIPELINE_BINDING
   void Draw(uint32_t start, uint32_t count) noexcept {
@@ -245,7 +253,8 @@ void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept { 
 #endif
 #ifdef HSH_SURFACE_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
-bool AcquireNextImage() noexcept { return _##Enumeration.AcquireNextImage(); }
+bool AcquireNextImage() noexcept { return _##Enumeration.AcquireNextImage(); } \
+void AttachDeleterLambda(std::function<void()> &&Del) noexcept { _##Enumeration.AttachDeleterLambda(std::move(Del)); }
 #include "targets.def"
 #endif
 #ifdef HSH_PIPELINE_BINDING
@@ -287,6 +296,7 @@ void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
 #endif
 #ifdef HSH_SURFACE_OWNER
 bool AcquireNextImage() noexcept { return false; }
+void AttachDeleterLambda(std::function<void()> &&Del) noexcept {}
 #endif
 #ifdef HSH_PIPELINE_BINDING
 void Draw(uint32_t start, uint32_t count) noexcept {}

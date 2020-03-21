@@ -172,6 +172,7 @@ class SurfaceAllocation {
   vk::Extent2D Extent;
   vk::Format ColorFormat = vk::Format::eUndefined;
   uint32_t NextImage = UINT32_MAX;
+  std::function<void()> DeleterLambda;
 
 public:
   inline ~SurfaceAllocation() noexcept;
@@ -183,6 +184,7 @@ public:
   SurfaceAllocation &operator=(SurfaceAllocation &&other) noexcept = delete;
   inline bool PreRender() noexcept;
   inline bool AcquireNextImage() noexcept;
+  inline void AttachDeleterLambda(std::function<void()> &&Del) noexcept;
   inline void PostRender() noexcept;
   const vk::Extent2D &GetExtent() const noexcept { return Extent; }
   vk::Format GetColorFormat() const noexcept { return ColorFormat; }
@@ -337,11 +339,21 @@ class DeletedSurfaceAllocation {
   vk::UniqueSurfaceKHR Surface;
   vk::UniqueSwapchainKHR Swapchain;
   vk::UniqueRenderPass OwnedRenderPass;
+  std::function<void()> DeleterLambda;
 
 public:
   explicit DeletedSurfaceAllocation(SurfaceAllocation &&Obj) noexcept
       : Surface(std::move(Obj.Surface)), Swapchain(std::move(Obj.Swapchain)),
-        OwnedRenderPass(std::move(Obj.OwnedRenderPass)) {}
+        OwnedRenderPass(std::move(Obj.OwnedRenderPass)),
+        DeleterLambda(std::move(Obj.DeleterLambda)) {}
+
+  ~DeletedSurfaceAllocation() noexcept {
+    OwnedRenderPass.reset();
+    Swapchain.reset();
+    Surface.reset();
+    if (DeleterLambda)
+      DeleterLambda();
+  }
 
   DeletedSurfaceAllocation(const DeletedSurfaceAllocation &other) = delete;
   DeletedSurfaceAllocation &
@@ -455,6 +467,7 @@ struct VulkanGlobals {
   vk::DescriptorSet BoundDescriptorSet;
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
   uint64_t Frame = 0;
+  bool AcquiredImage = false;
 
   std::array<DeletedResources, 2> *DeletedResourcesArr;
   DeletedResources *DeletedResources = nullptr;
@@ -492,9 +505,11 @@ struct VulkanGlobals {
     vk::PipelineStageFlags pipeStageFlags =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
     Device.resetFences(CmdFence);
-    Queue.submit(vk::SubmitInfo(1, &ImageAcquireSem, &pipeStageFlags, 1, &Cmd,
-                                1, &RenderCompleteSem),
+    Queue.submit(vk::SubmitInfo(AcquiredImage ? 1 : 0, &ImageAcquireSem,
+                                &pipeStageFlags, 1, &Cmd, AcquiredImage ? 1 : 0,
+                                &RenderCompleteSem),
                  CmdFence);
+    AcquiredImage = false;
     for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
     ++Frame;
@@ -614,7 +629,16 @@ bool SurfaceAllocation::PreRender() noexcept {
 bool SurfaceAllocation::AcquireNextImage() noexcept {
   auto ret = Globals.Device.acquireNextImageKHR(
       Swapchain.get(), UINT64_MAX, Globals.ImageAcquireSem, {}, &NextImage);
+  if (ret == vk::Result::eSuccess) {
+    Globals.AcquiredImage = true;
+    return true;
+  }
   return ret == vk::Result::eSuccess;
+}
+
+void SurfaceAllocation::AttachDeleterLambda(
+    std::function<void()> &&Del) noexcept {
+  DeleterLambda = std::move(Del);
 }
 
 void SurfaceAllocation::PostRender() noexcept {
@@ -1496,6 +1520,9 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     }
     operator SurfaceBinding() const noexcept { return GetBinding(); }
     bool AcquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
+    void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
+      Allocation->AttachDeleterLambda(std::move(Del));
+    }
   };
   struct PipelineBinding {
     vk::Pipeline Pipeline;
