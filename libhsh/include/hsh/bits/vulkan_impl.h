@@ -172,18 +172,23 @@ class SurfaceAllocation {
   vk::Extent2D Extent;
   vk::Format ColorFormat = vk::Format::eUndefined;
   uint32_t NextImage = UINT32_MAX;
+  std::function<void(const hsh::extent2d &)> ResizeLambda;
   std::function<void()> DeleterLambda;
 
 public:
   inline ~SurfaceAllocation() noexcept;
-  inline explicit SurfaceAllocation(const SourceLocation &location,
-                                    vk::UniqueSurfaceKHR &&Surface) noexcept;
+  inline explicit SurfaceAllocation(
+      const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
+      std::function<void(const hsh::extent2d &)> &&ResizeLambda,
+      std::function<void()> &&DeleterLambda) noexcept;
   SurfaceAllocation(const SurfaceAllocation &other) = delete;
   SurfaceAllocation &operator=(const SurfaceAllocation &other) = delete;
   SurfaceAllocation(SurfaceAllocation &&other) noexcept = delete;
   SurfaceAllocation &operator=(SurfaceAllocation &&other) noexcept = delete;
   inline bool PreRender() noexcept;
   inline bool AcquireNextImage() noexcept;
+  inline void AttachResizeLambda(
+      std::function<void(const hsh::extent2d &)> &&Resize) noexcept;
   inline void AttachDeleterLambda(std::function<void()> &&Del) noexcept;
   inline void PostRender() noexcept;
   const vk::Extent2D &GetExtent() const noexcept { return Extent; }
@@ -509,9 +514,9 @@ struct VulkanGlobals {
                                 &pipeStageFlags, 1, &Cmd, AcquiredImage ? 1 : 0,
                                 &RenderCompleteSem),
                  CmdFence);
-    AcquiredImage = false;
     for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
+    AcquiredImage = false;
     ++Frame;
   }
 
@@ -621,6 +626,8 @@ bool SurfaceAllocation::PreRender() noexcept {
     Extent = Capabilities.currentExtent;
     assert((!Next || ColorFormat == Next->ColorFormat) &&
            "Subsequent surfaces must have the same color format");
+    if (ResizeLambda)
+      ResizeLambda(Extent);
     return true;
   }
   return false;
@@ -629,11 +636,16 @@ bool SurfaceAllocation::PreRender() noexcept {
 bool SurfaceAllocation::AcquireNextImage() noexcept {
   auto ret = Globals.Device.acquireNextImageKHR(
       Swapchain.get(), UINT64_MAX, Globals.ImageAcquireSem, {}, &NextImage);
-  if (ret == vk::Result::eSuccess) {
+  if (ret == vk::Result::eSuccess || ret == vk::Result::eSuboptimalKHR) {
     Globals.AcquiredImage = true;
     return true;
   }
-  return ret == vk::Result::eSuccess;
+  return false;
+}
+
+void SurfaceAllocation::AttachResizeLambda(
+    std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+  ResizeLambda = std::move(Resize);
 }
 
 void SurfaceAllocation::AttachDeleterLambda(
@@ -643,8 +655,9 @@ void SurfaceAllocation::AttachDeleterLambda(
 
 void SurfaceAllocation::PostRender() noexcept {
   if (NextImage != UINT32_MAX) {
-    Globals.Queue.presentKHR(vk::PresentInfoKHR(
-        1, &Globals.RenderCompleteSem, 1, &Swapchain.get(), &NextImage));
+    if (Globals.AcquiredImage)
+      Globals.Queue.presentKHR(vk::PresentInfoKHR(
+          1, &Globals.RenderCompleteSem, 1, &Swapchain.get(), &NextImage));
     NextImage = UINT32_MAX;
   }
 }
@@ -686,10 +699,13 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
   Globals.DeletedResources->DeleteLater(std::move(*this));
 }
 
-SurfaceAllocation::SurfaceAllocation(const SourceLocation &location,
-                                     vk::UniqueSurfaceKHR &&Surface) noexcept
+SurfaceAllocation::SurfaceAllocation(
+    const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
+    std::function<void(const hsh::extent2d &)> &&ResizeLambda,
+    std::function<void()> &&DeleterLambda) noexcept
     : Next(Globals.SurfaceHead), Location(location),
-      Surface(std::move(Surface)) {
+      Surface(std::move(Surface)), ResizeLambda(std::move(ResizeLambda)),
+      DeleterLambda(std::move(DeleterLambda)){
   Globals.SurfaceHead = this;
   if (Next)
     Next->Prev = this;
@@ -1520,6 +1536,10 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     }
     operator SurfaceBinding() const noexcept { return GetBinding(); }
     bool AcquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
+    void AttachResizeLambda(
+        std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+      Allocation->AttachResizeLambda(std::move(Resize));
+    }
     void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
       Allocation->AttachDeleterLambda(std::move(Del));
     }

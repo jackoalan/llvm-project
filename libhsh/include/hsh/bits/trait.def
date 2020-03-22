@@ -186,6 +186,14 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       return false;
     }
   }
+  void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.AttachResizeLambda(std::move(Resize)); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
   void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.AttachDeleterLambda(std::move(Del)); break;
@@ -254,6 +262,7 @@ void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept { 
 #ifdef HSH_SURFACE_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
 bool AcquireNextImage() noexcept { return _##Enumeration.AcquireNextImage(); } \
+void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept { _##Enumeration.AttachResizeLambda(std::move(Resize)); } \
 void AttachDeleterLambda(std::function<void()> &&Del) noexcept { _##Enumeration.AttachDeleterLambda(std::move(Del)); }
 #include "targets.def"
 #endif
@@ -279,23 +288,24 @@ struct HSH_NULL_TRAIT {
     return {};
   }
 #endif
-template <typename... Parms> \
-HSH_NULL_TRAIT(Parms&&... p) noexcept {} \
+template <typename... Parms>
+HSH_NULL_TRAIT(Parms&&... p) noexcept {}
 bool IsValid() const noexcept { return false; }
 #ifdef HSH_DYNAMIC_OWNER
-void *Map() noexcept { return nullptr; } \
+void *Map() noexcept { return nullptr; }
 void Unmap() noexcept {}
 #endif
 #ifdef HSH_RENDER_TEXTURE_OWNER
-RenderTextureBinding GetColor(uint32_t idx) const noexcept { return {}; } \
-RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return {}; } \
+RenderTextureBinding GetColor(uint32_t idx) const noexcept { return {}; }
+RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return {}; }
 void Attach() noexcept {} \
-void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept {} \
-void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept {} \
+void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept {}
+void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
 void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
 #endif
 #ifdef HSH_SURFACE_OWNER
 bool AcquireNextImage() noexcept { return false; }
+void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept {}
 void AttachDeleterLambda(std::function<void()> &&Del) noexcept {}
 #endif
 #ifdef HSH_PIPELINE_BINDING

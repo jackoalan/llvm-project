@@ -260,6 +260,11 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
   bool acquire_next_image() noexcept {
     return resource_owner_base<surface>::Owner.AcquireNextImage();
   }
+  void attach_resize_lambda(
+      std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+    return resource_owner_base<surface>::Owner.AttachResizeLambda(
+        std::move(Resize));
+  }
   void attach_deleter_lambda(std::function<void()> &&Del) noexcept {
     return resource_owner_base<surface>::Owner.AttachDeleterLambda(
         std::move(Del));
@@ -269,8 +274,12 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
 #if HSH_ENABLE_VULKAN
 inline resource_owner<surface> create_surface(
     vk::UniqueSurfaceKHR &&Surface,
+    std::function<void(const hsh::extent2d &)> &&ResizeLambda = {},
+    std::function<void()> &&DeleterLambda = {},
     const SourceLocation &location = SourceLocation::current()) noexcept {
-  return create_resource<surface>(location, std::move(Surface));
+  return create_resource<surface>(location, std::move(Surface),
+                                  std::move(ResizeLambda),
+                                  std::move(DeleterLambda));
 }
 #endif
 

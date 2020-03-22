@@ -884,14 +884,17 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
 template <>
 struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
   static auto Create(const SourceLocation &location,
-                     vk::UniqueSurfaceKHR &&Surface) noexcept {
+                     vk::UniqueSurfaceKHR &&Surface,
+                     std::function<void(const hsh::extent2d &)> &&ResizeLambda,
+                     std::function<void()> &&DeleterLambda) noexcept {
     vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
                                        Surface.get());
     if (!vulkan::Globals.CheckSurfaceSupported(Surface.get()))
       return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{};
     return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{
-        std::make_unique<vulkan::SurfaceAllocation>(location,
-                                                    std::move(Surface))};
+        std::make_unique<vulkan::SurfaceAllocation>(
+            location, std::move(Surface), std::move(ResizeLambda),
+            std::move(DeleterLambda))};
   }
 };
 
