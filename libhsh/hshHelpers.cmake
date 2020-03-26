@@ -181,7 +181,7 @@ function(target_hsh target)
   endforeach()
   hsh_gather_compile_definitions(define_list ${target})
   foreach(define ${define_list})
-    list(APPEND _hsh_args "-D${define}")
+    list(APPEND _hsh_args "$<$<BOOL:${define}>:-D${define}>")
   endforeach()
 
   # Process each source of target
