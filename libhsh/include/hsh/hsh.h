@@ -21,7 +21,7 @@
 namespace hsh {
 struct offset2d {
   int32_t x, y;
-  constexpr offset2d(int32_t x, int32_t y) noexcept : x(x), y(y) {}
+  constexpr offset2d(int32_t x = {}, int32_t y = {}) noexcept : x(x), y(y) {}
 #if HSH_ENABLE_VULKAN
   constexpr offset2d(vk::Offset2D off) noexcept : x(off.x), y(off.y) {}
   operator vk::Offset2D() const noexcept { return vk::Offset2D(x, y); }
@@ -29,7 +29,7 @@ struct offset2d {
 };
 struct extent2d {
   uint32_t w, h;
-  constexpr extent2d(uint32_t w, uint32_t h) noexcept : w(w), h(h) {}
+  constexpr extent2d(uint32_t w = {}, uint32_t h = {}) noexcept : w(w), h(h) {}
 #if HSH_ENABLE_VULKAN
   constexpr extent2d(vk::Extent2D ext) noexcept : w(ext.width), h(ext.height) {}
   operator vk::Extent2D() const noexcept { return vk::Extent2D(w, h); }
@@ -38,7 +38,7 @@ struct extent2d {
 struct rect2d {
   offset2d offset;
   extent2d extent;
-  constexpr rect2d(offset2d offset, extent2d extent) noexcept
+  constexpr rect2d(offset2d offset = {}, extent2d extent = {}) noexcept
       : offset(offset), extent(extent) {}
 #if HSH_ENABLE_VULKAN
   constexpr rect2d(vk::Rect2D rect) noexcept
@@ -262,12 +262,13 @@ template <> struct resource_owner<surface> : resource_owner_base<surface> {
   }
   void attach_resize_lambda(
       std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
-    return resource_owner_base<surface>::Owner.AttachResizeLambda(
-        std::move(Resize));
+    resource_owner_base<surface>::Owner.AttachResizeLambda(std::move(Resize));
   }
   void attach_deleter_lambda(std::function<void()> &&Del) noexcept {
-    return resource_owner_base<surface>::Owner.AttachDeleterLambda(
-        std::move(Del));
+    resource_owner_base<surface>::Owner.AttachDeleterLambda(std::move(Del));
+  }
+  void set_request_extent(const hsh::extent2d &Ext) noexcept {
+    resource_owner_base<surface>::Owner.SetRequestExtent(Ext);
   }
 };
 
@@ -276,10 +277,12 @@ inline resource_owner<surface> create_surface(
     vk::UniqueSurfaceKHR &&Surface,
     std::function<void(const hsh::extent2d &)> &&ResizeLambda = {},
     std::function<void()> &&DeleterLambda = {},
+    const hsh::extent2d &RequestExtent = {},
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<surface>(location, std::move(Surface),
                                   std::move(ResizeLambda),
-                                  std::move(DeleterLambda));
+                                  std::move(DeleterLambda),
+                                  RequestExtent);
 }
 #endif
 

@@ -174,13 +174,16 @@ class SurfaceAllocation {
   uint32_t NextImage = UINT32_MAX;
   std::function<void(const hsh::extent2d &)> ResizeLambda;
   std::function<void()> DeleterLambda;
+  vk::Extent2D RequestExtent;
+  bool RequestExtentPending = true;
 
 public:
   inline ~SurfaceAllocation() noexcept;
   inline explicit SurfaceAllocation(
       const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
       std::function<void(const hsh::extent2d &)> &&ResizeLambda,
-      std::function<void()> &&DeleterLambda) noexcept;
+      std::function<void()> &&DeleterLambda,
+      const hsh::extent2d &RequestExtent) noexcept;
   SurfaceAllocation(const SurfaceAllocation &other) = delete;
   SurfaceAllocation &operator=(const SurfaceAllocation &other) = delete;
   SurfaceAllocation(SurfaceAllocation &&other) noexcept = delete;
@@ -190,6 +193,7 @@ public:
   inline void AttachResizeLambda(
       std::function<void(const hsh::extent2d &)> &&Resize) noexcept;
   inline void AttachDeleterLambda(std::function<void()> &&Del) noexcept;
+  inline void SetRequestExtent(const hsh::extent2d &Ext) noexcept;
   inline void PostRender() noexcept;
   const vk::Extent2D &GetExtent() const noexcept { return Extent; }
   vk::Format GetColorFormat() const noexcept { return ColorFormat; }
@@ -583,7 +587,13 @@ template <typename Mgr> inline void WritePipelineCache(Mgr &M) noexcept {
 bool SurfaceAllocation::PreRender() noexcept {
   auto Capabilities =
       Globals.PhysDevice.getSurfaceCapabilitiesKHR(Surface.get()).value;
-  if (!Swapchain || Capabilities.currentExtent != Extent) {
+  // On platforms like Wayland, the swapchain dimensions dictate the window
+  // surface dimensions.
+  if (Capabilities.currentExtent.width == UINT32_MAX)
+    Capabilities.currentExtent = RequestExtent;
+  if (!Swapchain ||
+      Capabilities.currentExtent != Extent || RequestExtentPending) {
+    RequestExtentPending = false;
     struct SwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
       explicit SwapchainCreateInfo(vk::PhysicalDevice PD,
                                    const vk::SurfaceCapabilitiesKHR &SC,
@@ -653,6 +663,11 @@ void SurfaceAllocation::AttachDeleterLambda(
   DeleterLambda = std::move(Del);
 }
 
+void SurfaceAllocation::SetRequestExtent(const hsh::extent2d &Ext) noexcept {
+  RequestExtent = Ext;
+  RequestExtentPending = true;
+}
+
 void SurfaceAllocation::PostRender() noexcept {
   if (NextImage != UINT32_MAX) {
     if (Globals.AcquiredImage)
@@ -702,10 +717,12 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
 SurfaceAllocation::SurfaceAllocation(
     const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
     std::function<void(const hsh::extent2d &)> &&ResizeLambda,
-    std::function<void()> &&DeleterLambda) noexcept
+    std::function<void()> &&DeleterLambda,
+    const hsh::extent2d &RequestExtent) noexcept
     : Next(Globals.SurfaceHead), Location(location),
-      Surface(std::move(Surface)), ResizeLambda(std::move(ResizeLambda)),
-      DeleterLambda(std::move(DeleterLambda)){
+      Surface(std::move(Surface)), RequestExtent(RequestExtent),
+      ResizeLambda(std::move(ResizeLambda)),
+      DeleterLambda(std::move(DeleterLambda)) {
   Globals.SurfaceHead = this;
   if (Next)
     Next->Prev = this;
@@ -1542,6 +1559,9 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     }
     void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
       Allocation->AttachDeleterLambda(std::move(Del));
+    }
+    void SetRequestExtent(const hsh::extent2d &Ext) noexcept {
+      Allocation->SetRequestExtent(Ext);
     }
   };
   struct PipelineBinding {

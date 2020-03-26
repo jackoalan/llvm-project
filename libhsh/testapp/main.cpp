@@ -1,4 +1,5 @@
 #define HSH_IMPLEMENTATION
+#define VK_USE_PLATFORM_XCB_KHR
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

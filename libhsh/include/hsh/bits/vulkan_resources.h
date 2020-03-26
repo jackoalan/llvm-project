@@ -886,7 +886,8 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
   static auto Create(const SourceLocation &location,
                      vk::UniqueSurfaceKHR &&Surface,
                      std::function<void(const hsh::extent2d &)> &&ResizeLambda,
-                     std::function<void()> &&DeleterLambda) noexcept {
+                     std::function<void()> &&DeleterLambda,
+                     const hsh::extent2d &RequestExtent) noexcept {
     vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
                                        Surface.get());
     if (!vulkan::Globals.CheckSurfaceSupported(Surface.get()))
@@ -894,7 +895,7 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
     return TargetTraits<Target::VULKAN_SPIRV>::SurfaceOwner{
         std::make_unique<vulkan::SurfaceAllocation>(
             location, std::move(Surface), std::move(ResizeLambda),
-            std::move(DeleterLambda))};
+            std::move(DeleterLambda), RequestExtent)};
   }
 };
 
@@ -944,7 +945,12 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
   static constexpr std::string_view WantedExtensions[] = {
     "VK_KHR_surface"sv,
+#ifdef VK_USE_PLATFORM_XCB_KHR
     "VK_KHR_xcb_surface"sv,
+#endif
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+    "VK_KHR_wayland_surface"sv,
+#endif
 #if !defined(NDEBUG)
     "VK_EXT_debug_utils"sv,
 #endif
@@ -1538,10 +1544,20 @@ public:
 
 #ifdef VK_USE_PLATFORM_XCB_KHR
   vk::UniqueSurfaceKHR create_phys_surface(xcb_connection_t *Connection,
-                                           xcb_window_t Window) {
+                                           xcb_window_t Window) noexcept {
     return Data->Instance
         ->createXcbSurfaceKHRUnique(
             vk::XcbSurfaceCreateInfoKHR({}, Connection, Window))
+        .value;
+  }
+#endif
+
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+  vk::UniqueSurfaceKHR create_phys_surface(wl_display *Display,
+                                           wl_surface *Surface) noexcept {
+    return Data->Instance
+        ->createWaylandSurfaceKHRUnique(
+            vk::WaylandSurfaceCreateInfoKHR({}, Display, Surface))
         .value;
   }
 #endif
