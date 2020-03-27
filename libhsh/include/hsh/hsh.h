@@ -27,6 +27,12 @@ struct offset2d {
   operator vk::Offset2D() const noexcept { return vk::Offset2D(x, y); }
 #endif
 };
+struct offset2dF {
+  double x, y;
+  constexpr offset2dF(double x = {}, double y = {}) noexcept : x(x), y(y) {}
+  constexpr offset2dF(offset2d off) noexcept
+      : x(double(off.x)), y(double(off.y)) {}
+};
 struct extent2d {
   uint32_t w, h;
   constexpr extent2d(uint32_t w = {}, uint32_t h = {}) noexcept : w(w), h(h) {}
@@ -281,8 +287,7 @@ inline resource_owner<surface> create_surface(
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<surface>(location, std::move(Surface),
                                   std::move(ResizeLambda),
-                                  std::move(DeleterLambda),
-                                  RequestExtent);
+                                  std::move(DeleterLambda), RequestExtent);
 }
 #endif
 
