@@ -161,7 +161,8 @@ int main(int argc, char **argv) {
     return 1;
 
   Instance.enumerate_vulkan_devices(
-      [](const vk::PhysicalDeviceProperties &Props) {
+      [](const vk::PhysicalDeviceProperties &Props,
+         const vk::PhysicalDeviceDriverProperties &DriverProps) {
         std::cerr << "name: " << Props.deviceName
                   << " type: " << vk::to_string(Props.deviceType) << "\n";
         return false;
@@ -174,9 +175,11 @@ int main(int argc, char **argv) {
   }
 
   auto Device = Instance.enumerate_vulkan_devices(
-      [&](const vk::PhysicalDeviceProperties &Props) {
+      [&](const vk::PhysicalDeviceProperties &Props,
+          const vk::PhysicalDeviceDriverProperties &DriverProps) {
         return true;
-      }, *PhysSurface);
+      },
+      *PhysSurface);
   if (!Device) {
     std::cerr << "No vulkan devices found\n";
     return 1;
@@ -207,13 +210,16 @@ int main(int argc, char **argv) {
     Device.enter_draw_context([&]() {
       if (!PipelineBind.Binding) {
         PipelineBind = MyNS::BuildPipeline();
-        PipelineTemplate1Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
-        PipelineTemplate2Bind = MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
-        PipelineTemplate3Bind = MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
+        PipelineTemplate1Bind =
+            MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
+        PipelineTemplate2Bind =
+            MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
+        PipelineTemplate3Bind =
+            MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
         ModInfo = CreateModelInfo();
         MatInfo = CreateMaterialInfo();
         ModRes = CreateModelResources();
-        //ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+        // ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
       }
 
       MyNS::UniformData UniData{};
@@ -251,5 +257,3 @@ int main(int argc, char **argv) {
 }
 
 #endif
-
-

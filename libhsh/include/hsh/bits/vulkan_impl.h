@@ -170,7 +170,7 @@ class SurfaceAllocation {
   vk::UniqueRenderPass OwnedRenderPass;
   std::vector<vk::Image> SwapchainImages;
   vk::Extent2D Extent;
-  vk::Format ColorFormat = vk::Format::eUndefined;
+  vk::SurfaceFormatKHR SurfaceFormat;
   uint32_t NextImage = UINT32_MAX;
   std::function<void(const hsh::extent2d &)> ResizeLambda;
   std::function<void()> DeleterLambda;
@@ -196,7 +196,7 @@ public:
   inline void SetRequestExtent(const hsh::extent2d &Ext) noexcept;
   inline void PostRender() noexcept;
   const vk::Extent2D &GetExtent() const noexcept { return Extent; }
-  vk::Format GetColorFormat() const noexcept { return ColorFormat; }
+  vk::Format GetColorFormat() const noexcept { return SurfaceFormat.format; }
   SurfaceAllocation *GetNext() const noexcept { return Next; }
 };
 
@@ -591,28 +591,18 @@ bool SurfaceAllocation::PreRender() noexcept {
   // surface dimensions.
   if (Capabilities.currentExtent.width == UINT32_MAX)
     Capabilities.currentExtent = RequestExtent;
-  if (!Swapchain ||
-      Capabilities.currentExtent != Extent || RequestExtentPending) {
+  if (!Swapchain || Capabilities.currentExtent != Extent ||
+      RequestExtentPending) {
     RequestExtentPending = false;
     struct SwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
-      explicit SwapchainCreateInfo(vk::PhysicalDevice PD,
-                                   const vk::SurfaceCapabilitiesKHR &SC,
-                                   vk::SurfaceKHR Surface, vk::Format &FmtOut,
+      explicit SwapchainCreateInfo(const vk::SurfaceCapabilitiesKHR &SC,
+                                   vk::SurfaceKHR Surface,
+                                   const vk::SurfaceFormatKHR &SurfaceFormat,
                                    vk::SwapchainKHR OldSwapchain) noexcept
           : vk::SwapchainCreateInfoKHR({}, Surface) {
         setMinImageCount(std::max(2u, SC.minImageCount));
-        vk::SurfaceFormatKHR UseFormat;
-        if (FmtOut == vk::Format::eUndefined)
-          FmtOut = vk::Format::eB8G8R8A8Unorm;
-        for (auto &Format : PD.getSurfaceFormatsKHR(Surface).value) {
-          if (Format.format == FmtOut) {
-            UseFormat = Format;
-            break;
-          }
-        }
-        assert(UseFormat.format != vk::Format::eUndefined);
-        setImageFormat(UseFormat.format)
-            .setImageColorSpace(UseFormat.colorSpace);
+        setImageFormat(SurfaceFormat.format);
+        setImageColorSpace(SurfaceFormat.colorSpace);
         setImageExtent(SC.currentExtent);
         setImageArrayLayers(1);
         constexpr auto WantedUsage = vk::ImageUsageFlagBits::eTransferDst |
@@ -625,16 +615,16 @@ bool SurfaceAllocation::PreRender() noexcept {
         setOldSwapchain(OldSwapchain);
       }
     };
-    Swapchain = Globals.Device
-                    .createSwapchainKHRUnique(SwapchainCreateInfo(
-                        Globals.PhysDevice, Capabilities, Surface.get(),
-                        ColorFormat, Swapchain.get()))
-                    .value;
+    Swapchain =
+        Globals.Device
+            .createSwapchainKHRUnique(SwapchainCreateInfo(
+                Capabilities, Surface.get(), SurfaceFormat, Swapchain.get()))
+            .value;
     Globals.SetDebugObjectName(Location.with_field("Swapchain"),
                                Swapchain.get());
     SwapchainImages = Globals.Device.getSwapchainImagesKHR(*Swapchain).value;
     Extent = Capabilities.currentExtent;
-    assert((!Next || ColorFormat == Next->ColorFormat) &&
+    assert((!Next || SurfaceFormat.format == Next->SurfaceFormat.format) &&
            "Subsequent surfaces must have the same color format");
     if (ResizeLambda)
       ResizeLambda(Extent);
@@ -670,9 +660,13 @@ void SurfaceAllocation::SetRequestExtent(const hsh::extent2d &Ext) noexcept {
 
 void SurfaceAllocation::PostRender() noexcept {
   if (NextImage != UINT32_MAX) {
-    if (Globals.AcquiredImage)
-      Globals.Queue.presentKHR(vk::PresentInfoKHR(
-          1, &Globals.RenderCompleteSem, 1, &Swapchain.get(), &NextImage));
+    if (Globals.AcquiredImage) {
+      // Present called using non-enhanced API to avoid error asserts that are
+      // recoverable
+      vk::PresentInfoKHR Info(1, &Globals.RenderCompleteSem, 1,
+                              &Swapchain.get(), &NextImage);
+      Globals.Queue.presentKHR(&Info);
+    }
     NextImage = UINT32_MAX;
   }
 }
@@ -720,12 +714,21 @@ SurfaceAllocation::SurfaceAllocation(
     std::function<void()> &&DeleterLambda,
     const hsh::extent2d &RequestExtent) noexcept
     : Next(Globals.SurfaceHead), Location(location),
-      Surface(std::move(Surface)), RequestExtent(RequestExtent),
-      ResizeLambda(std::move(ResizeLambda)),
-      DeleterLambda(std::move(DeleterLambda)) {
+      Surface(std::move(Surface)), ResizeLambda(std::move(ResizeLambda)),
+      DeleterLambda(std::move(DeleterLambda)), RequestExtent(RequestExtent) {
   Globals.SurfaceHead = this;
   if (Next)
     Next->Prev = this;
+
+  vk::Format UseFormat = vk::Format::eB8G8R8A8Unorm;
+  for (auto &Format :
+       Globals.PhysDevice.getSurfaceFormatsKHR(*this->Surface).value) {
+    if (Format.format == UseFormat) {
+      SurfaceFormat = Format;
+      break;
+    }
+  }
+  assert(SurfaceFormat.format != vk::Format::eUndefined);
 
   PreRender();
 

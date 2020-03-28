@@ -958,7 +958,7 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
   MyInstanceCreateInfo(
       const char *AppName, uint32_t AppVersion, const char *EngineName,
-      uint32_t EngineVersion,
+      uint32_t EngineVersion, bool &HasGetPhysicalProps2,
       const std::function<void(std::string_view)> &MissingLayer,
       const std::function<void(std::string_view)> &MissingExtension) noexcept
       : vk::InstanceCreateInfo({}, &AppInfo),
@@ -981,6 +981,9 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
         Success = false;
       }
     }
+
+    HasGetPhysicalProps2 =
+        enableExtension("VK_KHR_get_physical_device_properties2"sv);
 
     setEnabledLayerCount(EnabledLayers.size());
     setPpEnabledLayerNames(EnabledLayers.data());
@@ -1471,7 +1474,14 @@ public:
         continue;
       }
 
-      if (!Acceptor(Properties))
+      vk::StructureChain<vk::PhysicalDeviceProperties2,
+                         vk::PhysicalDeviceDriverProperties>
+          Properties2;
+      if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2)
+        Properties2 = PD.getProperties2<vk::PhysicalDeviceProperties2,
+                                        vk::PhysicalDeviceDriverProperties>();
+      if (!Acceptor(Properties,
+                    Properties2.get<vk::PhysicalDeviceDriverProperties>()))
         continue;
 
       Ret.Data = std::make_unique<struct vulkan_device_owner::Data>();
@@ -1600,8 +1610,9 @@ inline vulkan_instance_owner create_vulkan_instance(
   }
   VULKAN_HPP_DEFAULT_DISPATCHER.init(GetInstanceProcAddr);
 
+  bool HasGetPhysicalProps2 = false;
   detail::vulkan::MyInstanceCreateInfo InstanceCreateInfo(
-      AppName, AppVersion, EngineName, EngineVersion,
+      AppName, AppVersion, EngineName, EngineVersion, HasGetPhysicalProps2,
       [&](std::string_view MissingLayer) {
         std::ostringstream ss;
         ss << "Required instance layer '" << MissingLayer << "' not available.";
