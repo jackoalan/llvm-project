@@ -1558,13 +1558,14 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   };
   struct DynamicTextureOwner : TextureOwner {
     vulkan::DoubleUploadBufferAllocation UploadAllocation;
-    std::array<vk::BufferImageCopy, MaxMipCount> Copies;
+    std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies;
 
-    DynamicTextureOwner(vulkan::TextureAllocation Allocation,
-                        vulkan::DoubleUploadBufferAllocation UploadAllocation,
-                        std::array<vk::BufferImageCopy, MaxMipCount> Copies,
-                        vk::UniqueImageView ImageView, std::uint8_t NumMips,
-                        std::uint8_t Integer) noexcept
+    DynamicTextureOwner(
+        vulkan::TextureAllocation Allocation,
+        vulkan::DoubleUploadBufferAllocation UploadAllocation,
+        std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies,
+        vk::UniqueImageView ImageView, std::uint8_t NumMips,
+        std::uint8_t Integer) noexcept
         : TextureOwner(std::move(Allocation), std::move(ImageView), NumMips,
                        Integer),
           UploadAllocation(std::move(UploadAllocation)),
@@ -1585,7 +1586,8 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
                                         VK_REMAINING_ARRAY_LAYERS)));
       vulkan::Globals.Cmd.copyBufferToImage(
           UploadAllocation.GetBuffer(), Allocation.GetImage(),
-          vk::ImageLayout::eTransferDstOptimal, NumMips, Copies.data());
+          vk::ImageLayout::eTransferDstOptimal, NumMips,
+          Copies[vulkan::Globals.DynamicBufferIndex].data());
       vulkan::Globals.Cmd.pipelineBarrier(
           vk::PipelineStageFlagBits::eTransfer,
           vk::PipelineStageFlagBits::eVertexShader |
