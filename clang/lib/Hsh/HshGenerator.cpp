@@ -509,7 +509,7 @@ enum HshBuiltinType {
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned) HBT_##Name,
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  HBT_##Name##_float, HBT_##Name##_int, HBT_##Name##_uint,
+  HBT_##Name,
 #define BUILTIN_ENUM_TYPE(Name) HBT_##Name,
 #include "BuiltinTypes.def"
   HBT_Max
@@ -1002,9 +1002,7 @@ private:
   PipelineAttributes PipelineAttributes;
   ClassTemplateDecl *BindingRecordType = nullptr;
   ClassTemplateDecl *UniformBufferType = nullptr;
-  ClassTemplateDecl *DynamicUniformBufferType = nullptr;
   ClassTemplateDecl *VertexBufferType = nullptr;
-  ClassTemplateDecl *DynamicVertexBufferType = nullptr;
   EnumDecl *EnumTarget = nullptr;
   EnumDecl *EnumStage = nullptr;
   EnumDecl *EnumInputRate = nullptr;
@@ -1031,9 +1029,7 @@ private:
   {#GLSL##_ll, #HLSL##_ll, #Metal##_ll},
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  {#GLSLf##_ll, #HLSLf##_ll, #Metalf##_ll},                                    \
-      {#GLSLi##_ll, #HLSLi##_ll, #Metali##_ll},                                \
-      {#GLSLu##_ll, #HLSLu##_ll, #Metalu##_ll},
+  {#GLSLf##_ll, #HLSLf##_ll, #Metalf##_ll},
 #define BUILTIN_ENUM_TYPE(Name) {{}, {}, {}},
 #include "BuiltinTypes.def"
   };
@@ -1044,7 +1040,7 @@ private:
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned) false,
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  false, false, false,
+  false,
 #define BUILTIN_ENUM_TYPE(Name) false,
 #include "BuiltinTypes.def"
   };
@@ -1055,7 +1051,7 @@ private:
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned) true,
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  false, false, false,
+  false,
 #define BUILTIN_ENUM_TYPE(Name) false,
 #include "BuiltinTypes.def"
   };
@@ -1066,7 +1062,7 @@ private:
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned) false,
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  true, true, true,
+  true,
 #define BUILTIN_ENUM_TYPE(Name) false,
 #include "BuiltinTypes.def"
   };
@@ -1077,7 +1073,7 @@ private:
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned) false,
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  false, false, false,
+  false,
 #define BUILTIN_ENUM_TYPE(Name) true,
 #include "BuiltinTypes.def"
   };
@@ -1216,17 +1212,34 @@ private:
 
   class MethodFinder : public DeclFinder<MethodFinder> {
     StringRef Record;
+    bool InRecord = false;
     SmallVector<StringRef, 8> Params;
 
   public:
     bool VisitClassTemplateDecl(ClassTemplateDecl *ClassTemplate) {
-      return VisitDecl(ClassTemplate->getTemplatedDecl());
+      return VisitCXXRecordDecl(ClassTemplate->getTemplatedDecl());
+    }
+
+    bool VisitFunctionTemplateDecl(FunctionTemplateDecl *FunctionTemplate) {
+      if (InRecord) {
+        if (auto *Method =
+                dyn_cast<CXXMethodDecl>(FunctionTemplate->getTemplatedDecl()))
+          return VisitCXXMethodDecl(Method);
+      }
+      return true;
+    }
+
+    bool VisitCXXRecordDecl(CXXRecordDecl *CXXRecord) {
+      if (inCorrectNS() && CXXRecord->getName() == Record) {
+        SaveAndRestore<bool> SavedInRecord(InRecord, true);
+        return VisitDecl(CXXRecord);
+      }
+      return true;
     }
 
     bool VisitCXXMethodDecl(CXXMethodDecl *Method) {
-      if (inCorrectNS() && Method->getDeclName().isIdentifier() &&
+      if (InRecord && Method->getDeclName().isIdentifier() &&
           Method->getName() == Name &&
-          Method->getParent()->getName() == Record &&
           Method->getNumParams() == Params.size()) {
         auto It = Params.begin();
         for (ParmVarDecl *P : Method->parameters()) {
@@ -1290,34 +1303,6 @@ private:
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
                                     "aligned type %0; is hsh.h included?"))
-          << Name;
-    }
-  }
-
-  void addTextureType(ASTContext &Context, HshBuiltinType FirstEnum,
-                      StringRef Name, Decl *D) {
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    if (auto *T = dyn_cast_or_null<ClassTemplateDecl>(D)) {
-      for (const auto *Spec : T->specializations()) {
-        QualType Tp = Spec->getTemplateArgs()[0].getAsType();
-        if (Tp->isSpecificBuiltinType(BuiltinType::Float)) {
-          Types[FirstEnum + 0] = Spec;
-        } else if (Tp->isSpecificBuiltinType(BuiltinType::Int)) {
-          Types[FirstEnum + 1] = Spec;
-        } else if (Tp->isSpecificBuiltinType(BuiltinType::UInt)) {
-          Types[FirstEnum + 2] = Spec;
-        } else {
-          Diags.Report(
-              Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                    "unknown texture specialization type "
-                                    "%0; must use float, int, unsigned int"))
-              << Tp.getAsString();
-        }
-      }
-    } else {
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "class template %0; is hsh.h included?"))
           << Name;
     }
   }
@@ -1487,16 +1472,13 @@ public:
     ReportMissingPipelineField(#Name##_ll);
 #include "ShaderInterface.def"
     }
-    BindingRecordType = findClassTemplate("binding"_ll, "hsh"_ll, {}, Context);
+    BindingRecordType =
+        findClassTemplate("binding_impl"_ll, "hsh"_ll, {}, Context);
 
     UniformBufferType =
         findClassTemplate("uniform_buffer"_ll, "hsh"_ll, {}, Context);
-    DynamicUniformBufferType =
-        findClassTemplate("dynamic_uniform_buffer"_ll, "hsh"_ll, {}, Context);
     VertexBufferType =
         findClassTemplate("vertex_buffer"_ll, "hsh"_ll, {}, Context);
-    DynamicVertexBufferType =
-        findClassTemplate("dynamic_vertex_buffer"_ll, "hsh"_ll, {}, Context);
 
     EnumTarget = findEnum("Target"_ll, {}, Context);
     EnumStage = findEnum("Stage"_ll, {}, Context);
@@ -1526,9 +1508,8 @@ public:
                    TypeFinder("hsh"_ll, {}).Find("aligned_" #Name##_ll, TU));
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  addTextureType(                                                              \
-      Context, HBT_##Name##_float, #Name##_ll,                                 \
-      ClassTemplateFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
+  addType(Context, HBT_##Name, #Name##_ll,                                     \
+          TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
 #define BUILTIN_ENUM_TYPE(Name)                                                \
   addEnumType(Context, HBT_##Name, #Name##_ll,                                 \
               TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
@@ -1606,6 +1587,9 @@ public:
       return HBM_None;
     if (FunctionDecl *FD = M->getInstantiatedFromMemberFunction())
       M = dyn_cast<CXXMethodDecl>(FD->getFirstDecl());
+    if (auto *TD = M->getPrimaryTemplate())
+      if (auto TDM = dyn_cast<CXXMethodDecl>(TD->getTemplatedDecl()))
+        M = TDM;
     HshBuiltinCXXMethod Ret = HBM_None;
     for (const auto *Method : Methods) {
       if (M == Method)
@@ -1660,8 +1644,6 @@ public:
       return nullptr;
     if (auto *Ret = FirstTemplateParamType(Derived, UniformBufferType))
       return Ret;
-    if (auto *Ret = FirstTemplateParamType(Derived, DynamicUniformBufferType))
-      return Ret;
     return nullptr;
   }
 
@@ -1671,8 +1653,6 @@ public:
     if (!Derived)
       return nullptr;
     if (auto *Ret = FirstTemplateParamType(Derived, VertexBufferType))
-      return Ret;
-    if (auto *Ret = FirstTemplateParamType(Derived, DynamicVertexBufferType))
       return Ret;
     return nullptr;
   }
@@ -1914,19 +1894,6 @@ public:
     Record->HshSourceRecord = Source;
     Record->startDefinition();
 
-    {
-      TemplateArgumentListInfo TemplateArgs;
-      TemplateArgs.addArgument(
-          TemplateArgumentLoc(QualType{Record->getTypeForDecl(), 0},
-                              Context.getTrivialTypeSourceInfo(
-                                  QualType{Record->getTypeForDecl(), 0}, {})));
-      TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
-          Context, BindingRecordType, TemplateArgs);
-      CXXBaseSpecifier BaseSpec({}, false, true, AS_public, TSI, {});
-      CXXBaseSpecifier *Bases = &BaseSpec;
-      Record->setBases(&Bases, 1);
-    }
-
     return Record;
   }
 
@@ -1987,18 +1954,6 @@ public:
           Args, nullptr);
       Spec->HshSourceRecord = Specialization;
       Spec->startDefinition();
-      {
-        TemplateArgumentListInfo TemplateArgs;
-        TemplateArgs.addArgument(
-            TemplateArgumentLoc(QualType{Spec->getTypeForDecl(), 0},
-                                Context.getTrivialTypeSourceInfo(
-                                    QualType{Spec->getTypeForDecl(), 0}, {})));
-        TypeSourceInfo *TSI = getFullyQualifiedTemplateSpecializationTypeInfo(
-            Context, BindingRecordType, TemplateArgs);
-        CXXBaseSpecifier BaseSpec({}, false, true, AS_public, TSI, {});
-        CXXBaseSpecifier *Bases = &BaseSpec;
-        Spec->setBases(&Bases, 1);
-      }
       CTD->AddSpecialization(Spec, InsertPos);
     }
 
@@ -2247,7 +2202,7 @@ struct FunctionRecord {
 enum HshTextureKind {
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  HTK_##Name##_float, HTK_##Name##_int, HTK_##Name##_uint,
+  HTK_##Name,
 #include "BuiltinTypes.def"
 };
 
@@ -2255,12 +2210,8 @@ constexpr HshTextureKind KindOfTextureType(HshBuiltinType Type) {
   switch (Type) {
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  case HBT_##Name##_float:                                                     \
-    return HTK_##Name##_float;                                                 \
-  case HBT_##Name##_int:                                                       \
-    return HTK_##Name##_int;                                                   \
-  case HBT_##Name##_uint:                                                      \
-    return HTK_##Name##_uint;
+  case HBT_##Name:                                                             \
+    return HTK_##Name;
 #include "BuiltinTypes.def"
   default:
     llvm_unreachable("invalid texture kind");
@@ -2271,12 +2222,8 @@ constexpr HshBuiltinType BuiltinTypeOfTexture(HshTextureKind Kind) {
   switch (Kind) {
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  case HTK_##Name##_float:                                                     \
-    return HBT_##Name##_float;                                                 \
-  case HTK_##Name##_int:                                                       \
-    return HBT_##Name##_int;                                                   \
-  case HTK_##Name##_uint:                                                      \
-    return HBT_##Name##_uint;
+  case HTK_##Name:                                                             \
+    return HBT_##Name;
 #include "BuiltinTypes.def"
   }
 }
@@ -5601,7 +5548,14 @@ public:
       StagesBuilder Builder(Context, Builtins, Specialization,
                             ColorAttachmentArgs.size());
 
-      auto *Constructor = *PipelineSource->ctor_begin();
+      CXXConstructorDecl *Constructor = nullptr;
+      for (auto *Ctor : PipelineSource->ctors()) {
+        if (Ctor->hasBody()) {
+          Constructor = Ctor;
+          break;
+        }
+      }
+      assert(Constructor);
 
 #if ENABLE_DUMP
       ASTDumper Dumper(llvm::errs(), nullptr, &Context.getSourceManager());
@@ -5642,25 +5596,16 @@ public:
       {
         SmallVector<QualType, 16> ConstructorArgs;
         SmallVector<ParmVarDecl *, 16> ConstructorParms;
-        SmallVector<Expr *, 32> InitArgs;
         ConstructorArgs.reserve(Constructor->getNumParams());
         ConstructorParms.reserve(Constructor->getNumParams());
-        InitArgs.reserve(Constructor->getNumParams() +
-                         Builder.getNumSamplerBindings());
         for (const auto *Param : Constructor->parameters()) {
           ConstructorArgs.push_back(
               TypeName::getFullyQualifiedType(Param->getType(), Context));
           ConstructorParms.push_back(ParmVarDecl::Create(
               Context, Specialization, {}, {}, Param->getIdentifier(),
               ConstructorArgs.back(), {}, SC_None, nullptr));
-          InitArgs.push_back(DeclRefExpr::Create(
-              Context, {}, {}, ConstructorParms.back(), false, SourceLocation{},
-              ConstructorParms.back()->getType(), VK_XValue));
         }
-        for (const auto &SamplerBinding : Builder.getSamplerBindings()) {
-          InitArgs.push_back(Builtins.makeSamplerBinding(
-              Context, SamplerBinding.TextureDecl, SamplerBinding.RecordIdx));
-        }
+
         CanQualType CDType =
             Specialization->getTypeForDecl()->getCanonicalTypeUnqualified();
         CXXConstructorDecl *BindingCtor = CXXConstructorDecl::Create(
@@ -5674,12 +5619,6 @@ public:
             CSK_unspecified);
         BindingCtor->setParams(ConstructorParms);
         BindingCtor->setAccess(AS_public);
-        BindingCtor->setNumCtorInitializers(1);
-        auto **Init = new (Context) CXXCtorInitializer *[1];
-        Init[0] = new (Context) CXXCtorInitializer(
-            Context, Specialization->bases_begin()->getTypeSourceInfo(), false,
-            {}, ParenListExpr::Create(Context, {}, InitArgs, {}), {}, {});
-        BindingCtor->setCtorInitializers(Init);
         BindingCtor->setBody(CompoundStmt::Create(Context, {}, {}, {}));
         Specialization->addDecl(BindingCtor);
       }
@@ -5922,21 +5861,22 @@ public:
 
     /* Determine if construction expression has all constant template parms */
     bool NeedsMacroComma = false;
-    *OS << "template <typename... Res>\n"
-           "hsh::binding_typeless "
-        << Expansion.Name;
+    *OS << "struct " << Expansion.Name
+        << " {\n"
+           "template <typename... Res>\n"
+           "static void Bind";
     SmallVector<NonConstExpr, 8> NonConstExprs;
     if (CheckConstexprTemplateSpecialization(
             Context, Expansion.Construct->getType(), &NonConstExprs)) {
-      *OS << "(Res... Resources) noexcept {\n"
-             "  return ::"
+      *OS << "(hsh::binding &__binding, Res... Resources) noexcept {\n"
+             "  __binding._rebind<::"
           << BindingName
-          << "(Resources...);\n"
-             "}\n"
+          << ">(Resources...);\n"
+             "}\n};\n"
              "#define "
-          << Expansion.Name << "(...) ::" << Expansion.Name << '(';
+          << Expansion.Name << "(...) _bind<::" << Expansion.Name << ">(";
     } else {
-      *OS << '(';
+      *OS << "(hsh::binding &__binding, ";
       TraverseNonConstExprs(NonConstExprs, [&](NonTypeTemplateParmDecl *NTTP) {
         NTTP->getType().print(*OS, HostPolicy, NTTP->getName());
         *OS << ", ";
@@ -6030,7 +5970,8 @@ public:
           void print(raw_ostream &OS, const PrintingPolicy &Policy,
                      StringRef BindingName, unsigned Indentation = 0) const {
             if (Leaf) {
-              indent(OS, Indentation) << "return ::" << BindingName << '<';
+              indent(OS, Indentation)
+                  << "__binding._rebind<::" << BindingName << '<';
               bool NeedsArgComma = false;
               for (auto &Arg : Leaf->getTemplateArgs().asArray()) {
                 if (NeedsArgComma)
@@ -6039,7 +5980,7 @@ public:
                   NeedsArgComma = true;
                 Arg.print(Policy, OS);
               }
-              OS << ">(Resources...);\n";
+              OS << ">>(Resources...); return;\n";
             } else if (!Name.empty()) {
               if (IntCast)
                 indent(OS, Indentation) << "switch (int(" << Name << ")) {\n";
@@ -6052,7 +5993,7 @@ public:
               indent(OS, Indentation) << "default:\n";
               indent(OS, Indentation + 1)
                   << "assert(false && \"Unimplemented shader "
-                     "specialization\"); return {};\n";
+                     "specialization\"); return;\n";
               indent(OS, Indentation) << "}\n";
             } else {
               indent(OS, Indentation) << "assert(false && \"Unimplemented "
@@ -6090,10 +6031,9 @@ public:
 
       *OS << "#pragma GCC diagnostic pop\n"
              "#endif\n"
-             "  return {};\n"
-             "}\n"
+             "}\n};\n"
              "#define "
-          << Expansion.Name << "(...) ::" << Expansion.Name << '(';
+          << Expansion.Name << "(...) _bind<::" << Expansion.Name << ">(";
       for (auto &NCE : NonConstExprs) {
         if (NCE.getKind() != NonConstExpr::NonTypeParm)
           continue;
@@ -6395,7 +6335,7 @@ public:
         if (auto FE = FM.getFile(Consumer.ProfilePath)) {
           auto FID = SM.createFileID(*FE, {}, SrcMgr::C_User);
           PP.EnterSourceFile(FID, nullptr, {});
-          PP.getDiagnostics().setSuppressAllDiagnostics(true);
+          PP.getDiagnostics().setSuppressFID(FID);
           DidPostdefines = true;
           return true;
         }

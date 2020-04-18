@@ -129,22 +129,22 @@ struct MaterialInfo {
 };
 
 struct ModelResources {
-  hsh::resource_owner<hsh::dynamic_uniform_buffer<VertUniform<4>>> vu;
-  hsh::resource_owner<hsh::dynamic_uniform_buffer<FragmentUniform<PT_Normal>>> fragu;
-  hsh::resource_owner<hsh::dynamic_uniform_buffer<std::array<TCGMatrix, 8>>> tcgu;
-  hsh::resource_owner<hsh::dynamic_uniform_buffer<ReflectMtx>> refu;
-  hsh::resource_owner<hsh::texture2d<float>> Lightmap;
-  hsh::resource_owner<hsh::texture2d<float>> Diffuse;
-  hsh::resource_owner<hsh::texture2d<float>> Emissive;
-  hsh::resource_owner<hsh::texture2d<float>> Specular;
-  hsh::resource_owner<hsh::texture2d<float>> ExtendedSpecular;
-  hsh::resource_owner<hsh::texture2d<float>> Reflection;
-  hsh::resource_owner<hsh::texture2d<float>> Alpha;
-  hsh::resource_owner<hsh::texture2d<float>> ReflectionIndTex;
-  hsh::resource_owner<hsh::texture2d<float>> ExtTex0;
-  hsh::resource_owner<hsh::texture2d<float>> ExtTex1;
-  hsh::resource_owner<hsh::texture2d<float>> ExtTex2;
-  hsh::resource_owner<hsh::texture2d<float>> dynReflection;
+  hsh::dynamic_resource_owner<hsh::uniform_buffer<VertUniform<4>>> vu;
+  hsh::dynamic_resource_owner<hsh::uniform_buffer<FragmentUniform<PT_Normal>>> fragu;
+  hsh::dynamic_resource_owner<hsh::uniform_buffer<std::array<TCGMatrix, 8>>> tcgu;
+  hsh::dynamic_resource_owner<hsh::uniform_buffer<ReflectMtx>> refu;
+  hsh::resource_owner<hsh::texture2d> Lightmap;
+  hsh::resource_owner<hsh::texture2d> Diffuse;
+  hsh::resource_owner<hsh::texture2d> Emissive;
+  hsh::resource_owner<hsh::texture2d> Specular;
+  hsh::resource_owner<hsh::texture2d> ExtendedSpecular;
+  hsh::resource_owner<hsh::texture2d> Reflection;
+  hsh::resource_owner<hsh::texture2d> Alpha;
+  hsh::resource_owner<hsh::texture2d> ReflectionIndTex;
+  hsh::resource_owner<hsh::texture2d> ExtTex0;
+  hsh::resource_owner<hsh::texture2d> ExtTex1;
+  hsh::resource_owner<hsh::texture2d> ExtTex2;
+  hsh::resource_owner<hsh::texture2d> dynReflection;
   hsh::resource_owner<hsh::vertex_buffer<VertData<0, 4, 1>>> vd;
 };
 
@@ -152,7 +152,7 @@ ModelInfo CreateModelInfo();
 MaterialInfo CreateMaterialInfo();
 ModelResources CreateModelResources();
 
-hsh::binding_typeless BindDrawModel(const ModelInfo &model,
+hsh::binding BindDrawModel(const ModelInfo &model,
                                     const MaterialInfo &mat,
                                     EPostType post,
                                     const ModelResources &res);

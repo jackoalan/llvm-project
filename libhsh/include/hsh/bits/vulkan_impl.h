@@ -75,59 +75,56 @@ public:
   bool IsValid() const noexcept { return Buffer.operator bool(); }
 };
 
-class DynamicBufferBinding {
-  friend class DynamicBufferAllocation;
-  vk::Buffer Buffer;
-  vk::DeviceSize SecondOffset;
-  DynamicBufferBinding(vk::Buffer Buffer, vk::DeviceSize SecondOffset) noexcept
-      : Buffer(Buffer), SecondOffset(SecondOffset) {}
-
-public:
-  DynamicBufferBinding() noexcept = default;
-  vk::Buffer GetBuffer() const noexcept { return Buffer; }
-  vk::DeviceSize GetSecondOffset() const noexcept { return SecondOffset; }
-  bool IsValid() const noexcept { return Buffer.operator bool(); }
-};
-
-class DynamicBufferAllocation : public BufferAllocation {
-  friend DynamicBufferAllocation
-  AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
-                        vk::BufferUsageFlags usage) noexcept;
-  void *MappedData = nullptr;
-  vk::DeviceSize SecondOffset = 0;
-  DynamicBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation,
-                          void *MappedData,
-                          vk::DeviceSize SecondOffset) noexcept
-      : BufferAllocation(Buffer, Allocation), MappedData(MappedData),
-        SecondOffset(SecondOffset) {}
-
-public:
-  DynamicBufferAllocation() noexcept = default;
-  DynamicBufferBinding GetBinding() const noexcept {
-    return DynamicBufferBinding(Buffer, SecondOffset);
-  }
-  operator DynamicBufferBinding() const noexcept { return GetBinding(); }
-  inline vk::DeviceSize GetOffset() const noexcept;
-  vk::DescriptorBufferInfo GetDescriptorBufferInfo() const noexcept {
-    return {Buffer, 0, SecondOffset};
-  }
-  void *Map() noexcept {
-    return reinterpret_cast<uint8_t *>(MappedData) + GetOffset();
-  }
-  inline void Unmap() noexcept;
-};
-
 class UploadBufferAllocation : public BufferAllocation {
   friend UploadBufferAllocation
   AllocateUploadBuffer(const SourceLocation &location,
                        vk::DeviceSize size) noexcept;
   void *MappedData;
-  UploadBufferAllocation(vk::Buffer Buffer, VmaAllocation Allocation,
+  UploadBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
                          void *MappedData) noexcept
-      : BufferAllocation(Buffer, Allocation), MappedData(MappedData) {}
+      : BufferAllocation(BufferIn, AllocationIn), MappedData(MappedData) {}
 
 public:
   void *GetMappedData() const noexcept { return MappedData; }
+};
+
+class DoubleUploadBufferAllocation : public BufferAllocation {
+  friend class DynamicBufferAllocation;
+  friend DoubleUploadBufferAllocation
+  AllocateDoubleUploadBuffer(const SourceLocation &location,
+                             vk::DeviceSize size) noexcept;
+  void *MappedData = nullptr;
+  vk::DeviceSize SecondOffset = 0;
+  DoubleUploadBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
+                               void *MappedData,
+                               vk::DeviceSize SecondOffset) noexcept
+      : BufferAllocation(BufferIn, AllocationIn), MappedData(MappedData),
+        SecondOffset(SecondOffset) {}
+
+public:
+  DoubleUploadBufferAllocation() noexcept = default;
+  void *GetMappedData() const noexcept { return MappedData; }
+  inline vk::DeviceSize GetOffset() const noexcept;
+  void *Map() noexcept {
+    return reinterpret_cast<uint8_t *>(MappedData) + GetOffset();
+  }
+};
+
+class DynamicBufferAllocation : public BufferAllocation {
+  DoubleUploadBufferAllocation UploadBuffer;
+  friend DynamicBufferAllocation
+  AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
+                        vk::BufferUsageFlags usage) noexcept;
+  DynamicBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
+                          DoubleUploadBufferAllocation UploadBuffer) noexcept
+      : BufferAllocation(BufferIn, AllocationIn),
+        UploadBuffer(std::move(UploadBuffer)) {}
+
+public:
+  DynamicBufferAllocation() noexcept = default;
+  vk::DeviceSize GetOffset() const noexcept { return UploadBuffer.GetOffset(); }
+  void *Map() noexcept { return UploadBuffer.Map(); }
+  inline void Unmap() noexcept;
 };
 
 struct TextureAllocation {
@@ -285,7 +282,11 @@ public:
     assert(Idx < NumDepthBindings);
     return DepthBindings[Idx].ImageView.get();
   }
-  inline void Attach() noexcept;
+  template <typename... Args> inline void Attach(const Args &... args) noexcept;
+  inline void ProcessAttachArgs() noexcept;
+  inline void ProcessAttachArgs(const viewport &vp) noexcept;
+  inline void ProcessAttachArgs(const scissor &s) noexcept;
+  inline void ProcessAttachArgs(const viewport &vp, const scissor &s) noexcept;
   RenderTextureAllocation *GetNext() const noexcept { return Next; }
   extent2d GetExtent() const noexcept { return Extent; }
 };
@@ -815,12 +816,14 @@ RenderTextureAllocation::RenderTextureAllocation(
   Prepare();
 }
 
-vk::DeviceSize DynamicBufferAllocation::GetOffset() const noexcept {
+vk::DeviceSize DoubleUploadBufferAllocation::GetOffset() const noexcept {
   return SecondOffset & Globals.DynamicBufferMask;
 }
 
 void DynamicBufferAllocation::Unmap() noexcept {
-  vmaFlushAllocation(Globals.Allocator, Allocation, GetOffset(), SecondOffset);
+  const auto Offset = GetOffset();
+  Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
+                         vk::BufferCopy{Offset, 0, UploadBuffer.SecondOffset});
 }
 } // namespace hsh::detail::vulkan
 
@@ -901,6 +904,7 @@ struct UniqueDescriptorSet {
     return *this;
   }
   operator vk::DescriptorSet() const noexcept { return Set; }
+  operator bool() const noexcept { return Set.operator bool(); }
   inline ~UniqueDescriptorSet() noexcept;
 };
 
@@ -1035,13 +1039,21 @@ inline VkResult vmaFindMemoryTypeIndexForBufferInfo(
 class VmaLocationStrSetter {
   std::string LocationStr;
 
-public:
   VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
-                       const SourceLocation &Location) noexcept
-      : LocationStr(Location.to_string()) {
+                       std::string str) noexcept
+      : LocationStr(std::move(str)) {
     CreateInfo.flags |= VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     CreateInfo.pUserData = (void *)LocationStr.c_str();
   }
+
+public:
+  VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
+                       const SourceLocation &Location) noexcept
+      : VmaLocationStrSetter(CreateInfo, Location.to_string()) {}
+  VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
+                       const SourceLocation &Location,
+                       const char *Suffix) noexcept
+      : VmaLocationStrSetter(CreateInfo, Location.to_string() + Suffix) {}
   operator const char *() const noexcept { return LocationStr.c_str(); }
   VmaLocationStrSetter(const VmaLocationStrSetter &) = delete;
   VmaLocationStrSetter &operator=(const VmaLocationStrSetter &) = delete;
@@ -1053,6 +1065,9 @@ class VmaLocationStrSetter {
 public:
   VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
                        const SourceLocation &Location) noexcept {}
+  VmaLocationStrSetter(VmaAllocationCreateInfo &CreateInfo,
+                       const SourceLocation &Location,
+                       const char *Suffix) noexcept {}
   operator const char *() const noexcept { return nullptr; }
   VmaLocationStrSetter(const VmaLocationStrSetter &) = delete;
   VmaLocationStrSetter &operator=(const VmaLocationStrSetter &) = delete;
@@ -1060,6 +1075,65 @@ public:
   VmaLocationStrSetter &operator=(VmaLocationStrSetter &&) = delete;
 };
 #endif
+
+struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+  constexpr UploadBufferAllocationCreateInfo(VmaPool PoolIn = {}) noexcept
+      : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                VMA_MEMORY_USAGE_CPU_ONLY,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                0,
+                                0,
+                                PoolIn,
+                                nullptr} {}
+};
+
+inline vk::UniqueVmaPool CreateUploadPool() noexcept {
+  struct UploadPoolCreateInfo : VmaPoolCreateInfo {
+    constexpr UploadPoolCreateInfo() noexcept
+        : VmaPoolCreateInfo{0, 0, 64ull * 1024 * 1024, 0, 0, 0} {}
+  };
+  UploadPoolCreateInfo CreateInfo;
+  auto Result = vmaFindMemoryTypeIndexForBufferInfo(
+      vk::BufferCreateInfo({}, 32ull * 1024 * 1024,
+                           vk::BufferUsageFlagBits::eTransferSrc),
+      UploadBufferAllocationCreateInfo(), &CreateInfo.memoryTypeIndex);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
+  return Globals.Allocator.createVmaPoolUnique(CreateInfo).value;
+}
+
+inline UploadBufferAllocation
+AllocateUploadBuffer(const SourceLocation &location,
+                     vk::DeviceSize size) noexcept {
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VmaAllocationInfo AllocInfo;
+  UploadBufferAllocationCreateInfo CreateInfo(Globals.UploadPool);
+  VmaLocationStrSetter LocationStr(CreateInfo, location, "Upload");
+  auto Result = vmaCreateBuffer(
+      vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
+      CreateInfo, &Buffer, &Allocation, &AllocInfo);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
+  return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
+}
+
+inline DoubleUploadBufferAllocation
+AllocateDoubleUploadBuffer(const SourceLocation &location,
+                           vk::DeviceSize size) noexcept {
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VmaAllocationInfo AllocInfo;
+  VkDeviceSize SecondOffset;
+  UploadBufferAllocationCreateInfo CreateInfo(Globals.UploadPool);
+  VmaLocationStrSetter LocationStr(CreateInfo, location, "DoubleUpload");
+  auto Result = vmaCreateDoubleBuffer(
+      vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
+      CreateInfo, &Buffer, &Allocation, &AllocInfo, &SecondOffset);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
+  return DoubleUploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
+                                      SecondOffset);
+}
 
 inline BufferAllocation
 AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
@@ -1090,68 +1164,27 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                       vk::BufferUsageFlags usage) noexcept {
   struct DynamicUniformBufferAllocationCreateInfo : VmaAllocationCreateInfo {
     constexpr DynamicUniformBufferAllocationCreateInfo() noexcept
-        : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                                  VMA_MEMORY_USAGE_CPU_TO_GPU,
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        : VmaAllocationCreateInfo{0,
+                                  VMA_MEMORY_USAGE_GPU_ONLY,
                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                  0,
                                   0,
                                   VK_NULL_HANDLE,
                                   nullptr} {}
   };
+
   VkBuffer Buffer;
   VmaAllocation Allocation;
   VmaAllocationInfo AllocInfo;
-  VkDeviceSize SecondOffset;
   DynamicUniformBufferAllocationCreateInfo CreateInfo;
   VmaLocationStrSetter LocationStr(CreateInfo, location);
-  auto Result =
-      vmaCreateDoubleBuffer(vk::BufferCreateInfo({}, size, usage), CreateInfo,
-                            &Buffer, &Allocation, &AllocInfo, &SecondOffset);
+  auto Result = vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
+                                CreateInfo, &Buffer, &Allocation, &AllocInfo);
   HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
-  return DynamicBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
-                                 SecondOffset);
-}
 
-struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
-  constexpr UploadBufferAllocationCreateInfo(VmaPool pool = {}) noexcept
-      : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                                VMA_MEMORY_USAGE_CPU_ONLY,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                0,
-                                0,
-                                pool,
-                                nullptr} {}
-};
-
-inline vk::UniqueVmaPool CreateUploadPool() noexcept {
-  struct UploadPoolCreateInfo : VmaPoolCreateInfo {
-    constexpr UploadPoolCreateInfo() noexcept
-        : VmaPoolCreateInfo{0, 0, 64ull * 1024 * 1024, 0, 0, 0} {}
-  };
-  UploadPoolCreateInfo CreateInfo;
-  auto Result = vmaFindMemoryTypeIndexForBufferInfo(
-      vk::BufferCreateInfo({}, 32ull * 1024 * 1024,
-                           vk::BufferUsageFlagBits::eTransferSrc),
-      UploadBufferAllocationCreateInfo(), &CreateInfo.memoryTypeIndex);
-  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
-  return Globals.Allocator.createVmaPoolUnique(CreateInfo).value;
-}
-
-inline UploadBufferAllocation
-AllocateUploadBuffer(const SourceLocation &location,
-                     vk::DeviceSize size) noexcept {
-  VkBuffer Buffer;
-  VmaAllocation Allocation;
-  VmaAllocationInfo AllocInfo;
-  UploadBufferAllocationCreateInfo CreateInfo(Globals.UploadPool);
-  VmaLocationStrSetter LocationStr(CreateInfo, location);
-  auto Result = vmaCreateBuffer(
-      vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
-      CreateInfo, &Buffer, &Allocation, &AllocInfo);
-  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
-  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
-  return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
+  return DynamicBufferAllocation(Buffer, Allocation,
+                                 AllocateDoubleUploadBuffer(location, size));
 }
 
 inline TextureAllocation AllocateTexture(const SourceLocation &location,
@@ -1328,13 +1361,14 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
 
 void RenderTextureAllocation::Resolve(vk::Image SrcImage, vk::Image DstImage,
                                       vk::ImageAspectFlagBits Aspect,
-                                      vk::Offset3D Offset, vk::Extent3D Extent,
+                                      vk::Offset3D Offset,
+                                      vk::Extent3D ExtentIn,
                                       bool Reattach) noexcept {
   bool DelimitRenderPass = this == Globals.AttachedRenderTexture;
   if (DelimitRenderPass)
     Globals.Cmd.endRenderPass();
 
-  _Resolve(SrcImage, DstImage, Aspect, Offset, Extent);
+  _Resolve(SrcImage, DstImage, Aspect, Offset, ExtentIn);
 
   if (DelimitRenderPass) {
     if (Reattach)
@@ -1402,7 +1436,8 @@ void RenderTextureAllocation::ResolveDepthBinding(uint32_t Idx, rect2d region,
           vk::Extent3D(region.extent, 1), Reattach);
 }
 
-void RenderTextureAllocation::Attach() noexcept {
+template <typename... Args>
+void RenderTextureAllocation::Attach(const Args &... args) noexcept {
   if (Globals.AttachedRenderTexture == this)
     return;
   if (Globals.AttachedRenderTexture)
@@ -1441,9 +1476,34 @@ void RenderTextureAllocation::Attach() noexcept {
   }
 
   BeginRenderPass();
+  ProcessAttachArgs(args...);
+}
+
+void RenderTextureAllocation::ProcessAttachArgs() noexcept {
   Globals.Cmd.setViewport(
       0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
   Globals.Cmd.setScissor(0, vk::Rect2D({}, {Extent.width, Extent.height}));
+}
+
+void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp) noexcept {
+  Globals.Cmd.setViewport(0, vk::Viewport(vp.x, vp.y, vp.width, vp.height,
+                                          vp.minDepth, vp.maxDepth));
+  Globals.Cmd.setScissor(0,
+                         vk::Rect2D({int32_t(vp.x), int32_t(vp.y)},
+                                    {uint32_t(vp.width), uint32_t(vp.height)}));
+}
+
+void RenderTextureAllocation::ProcessAttachArgs(const scissor &s) noexcept {
+  Globals.Cmd.setViewport(
+      0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
+  Globals.Cmd.setScissor(0, vk::Rect2D(s));
+}
+
+void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp,
+                                                const scissor &s) noexcept {
+  Globals.Cmd.setViewport(0, vk::Viewport(vp.x, vp.y, vp.width, vp.height,
+                                          vp.minDepth, vp.maxDepth));
+  Globals.Cmd.setScissor(0, vk::Rect2D(s));
 }
 } // namespace hsh::detail::vulkan
 
@@ -1460,11 +1520,12 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   using UniformBufferOwner = vulkan::BufferAllocation;
   using UniformBufferBinding = BufferWrapper;
   using DynamicUniformBufferOwner = vulkan::DynamicBufferAllocation;
-  using DynamicUniformBufferBinding = vulkan::DynamicBufferBinding;
   using VertexBufferOwner = vulkan::BufferAllocation;
   using VertexBufferBinding = BufferWrapper;
   using DynamicVertexBufferOwner = vulkan::DynamicBufferAllocation;
-  using DynamicVertexBufferBinding = vulkan::DynamicBufferBinding;
+  using IndexBufferOwner = vulkan::BufferAllocation;
+  using IndexBufferBinding = BufferWrapper;
+  using DynamicIndexBufferOwner = vulkan::DynamicBufferAllocation;
   struct TextureBinding {
     vk::ImageView ImageView;
     std::uint8_t NumMips : 7;
@@ -1482,12 +1543,70 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     TextureOwner(TextureOwner &&other) noexcept = default;
     TextureOwner &operator=(TextureOwner &&other) noexcept = default;
 
+    TextureOwner(vulkan::TextureAllocation Allocation,
+                 vk::UniqueImageView ImageView, std::uint8_t NumMips,
+                 std::uint8_t Integer) noexcept
+        : Allocation(std::move(Allocation)), ImageView(std::move(ImageView)),
+          NumMips(NumMips), Integer(Integer) {}
+
     bool IsValid() const noexcept { return ImageView.operator bool(); }
 
     TextureBinding GetBinding() const noexcept {
       return TextureBinding{ImageView.get(), NumMips, Integer};
     }
     operator TextureBinding() const noexcept { return GetBinding(); }
+  };
+  struct DynamicTextureOwner : TextureOwner {
+    vulkan::DoubleUploadBufferAllocation UploadAllocation;
+    std::array<vk::BufferImageCopy, MaxMipCount> Copies;
+
+    DynamicTextureOwner(vulkan::TextureAllocation Allocation,
+                        vulkan::DoubleUploadBufferAllocation UploadAllocation,
+                        std::array<vk::BufferImageCopy, MaxMipCount> Copies,
+                        vk::UniqueImageView ImageView, std::uint8_t NumMips,
+                        std::uint8_t Integer) noexcept
+        : TextureOwner(std::move(Allocation), std::move(ImageView), NumMips,
+                       Integer),
+          UploadAllocation(std::move(UploadAllocation)),
+          Copies(std::move(Copies)) {}
+
+    void MakeCopies() noexcept {
+      vulkan::Globals.Cmd.pipelineBarrier(
+          vk::PipelineStageFlagBits::eTopOfPipe,
+          vk::PipelineStageFlagBits::eTransfer,
+          vk::DependencyFlagBits::eByRegion, {}, {},
+          vk::ImageMemoryBarrier(
+              vk::AccessFlagBits(0), vk::AccessFlagBits::eTransferWrite,
+              vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+              VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+              Allocation.GetImage(),
+              vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                        VK_REMAINING_MIP_LEVELS, 0,
+                                        VK_REMAINING_ARRAY_LAYERS)));
+      vulkan::Globals.Cmd.copyBufferToImage(
+          UploadAllocation.GetBuffer(), Allocation.GetImage(),
+          vk::ImageLayout::eTransferDstOptimal, NumMips, Copies.data());
+      vulkan::Globals.Cmd.pipelineBarrier(
+          vk::PipelineStageFlagBits::eTransfer,
+          vk::PipelineStageFlagBits::eVertexShader |
+              vk::PipelineStageFlagBits::eTessellationControlShader |
+              vk::PipelineStageFlagBits::eTessellationEvaluationShader |
+              vk::PipelineStageFlagBits::eGeometryShader |
+              vk::PipelineStageFlagBits::eFragmentShader,
+          vk::DependencyFlagBits::eByRegion, {}, {},
+          vk::ImageMemoryBarrier(
+              vk::AccessFlagBits::eTransferWrite,
+              vk::AccessFlagBits::eShaderRead,
+              vk::ImageLayout::eTransferDstOptimal,
+              vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED,
+              VK_QUEUE_FAMILY_IGNORED, Allocation.GetImage(),
+              vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                        VK_REMAINING_MIP_LEVELS, 0,
+                                        VK_REMAINING_ARRAY_LAYERS)));
+    }
+
+    void *Map() noexcept { return UploadAllocation.Map(); }
+    void Unmap() noexcept { MakeCopies(); }
   };
   struct RenderTextureBinding {
     vulkan::RenderTextureAllocation *Allocation = nullptr;
@@ -1520,6 +1639,10 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     RenderTextureOwner &
     operator=(RenderTextureOwner &&other) noexcept = default;
 
+    explicit RenderTextureOwner(
+        std::unique_ptr<vulkan::RenderTextureAllocation> Allocation) noexcept
+        : Allocation(std::move(Allocation)) {}
+
     bool IsValid() const noexcept { return Allocation.operator bool(); }
 
     RenderTextureBinding GetColor(uint32_t idx) const noexcept {
@@ -1528,7 +1651,9 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     RenderTextureBinding GetDepth(uint32_t idx) const noexcept {
       return {Allocation.get(), idx, true};
     }
-    void Attach() noexcept { return Allocation->Attach(); }
+    template <typename... Args> void Attach(const Args &... args) noexcept {
+      return Allocation->Attach(args...);
+    }
     void ResolveSurface(SurfaceBinding surface, bool reattach) noexcept {
       Allocation->ResolveSurface(surface.Allocation, reattach);
     }
@@ -1548,6 +1673,10 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     SurfaceOwner &operator=(const SurfaceOwner &other) = delete;
     SurfaceOwner(SurfaceOwner &&other) noexcept = default;
     SurfaceOwner &operator=(SurfaceOwner &&other) noexcept = default;
+
+    explicit SurfaceOwner(
+        std::unique_ptr<vulkan::SurfaceAllocation> Allocation) noexcept
+        : Allocation(std::move(Allocation)) {}
 
     bool IsValid() const noexcept { return Allocation.operator bool(); }
 
@@ -1570,13 +1699,12 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   struct PipelineBinding {
     vk::Pipeline Pipeline;
     vulkan::UniqueDescriptorSet DescriptorSet;
-    std::array<uint32_t, MaxUniforms> UniformOffsets{};
-    static constexpr std::array<uint32_t, MaxUniforms> ZeroUniformOffsets{};
     uint32_t NumVertexBuffers = 0;
     std::array<vk::Buffer, MaxVertexBuffers> VertexBuffers{};
-    std::array<vk::DeviceSize, MaxVertexBuffers> VertexOffsets{};
-    static constexpr std::array<vk::DeviceSize, MaxVertexBuffers>
-        ZeroVertexOffsets{};
+    struct BoundIndex {
+      vk::Buffer Buffer{};
+      vk::IndexType Type{};
+    } Index;
     struct BoundRenderTexture {
       RenderTextureBinding RenderTextureBinding;
       vk::ImageView KnownImageView;
@@ -1584,23 +1712,19 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     };
     std::array<BoundRenderTexture, MaxImages> RenderTextures{};
     struct Iterators {
-      decltype(UniformOffsets)::iterator UniformOffsetIt;
       decltype(VertexBuffers)::iterator VertexBufferBegin;
       decltype(VertexBuffers)::iterator VertexBufferIt;
-      decltype(VertexOffsets)::iterator VertexOffsetIt;
+      BoundIndex &Index;
       decltype(RenderTextures)::iterator RenderTextureIt;
       uint32_t TextureIdx = 0;
       constexpr explicit Iterators(PipelineBinding &Binding) noexcept
-          : UniformOffsetIt(Binding.UniformOffsets.begin()),
-            VertexBufferBegin(Binding.VertexBuffers.begin()),
-            VertexBufferIt(Binding.VertexBuffers.begin()),
-            VertexOffsetIt(Binding.VertexOffsets.begin()),
+          : VertexBufferBegin(Binding.VertexBuffers.begin()),
+            VertexBufferIt(Binding.VertexBuffers.begin()), Index(Binding.Index),
             RenderTextureIt(Binding.RenderTextures.begin()) {}
 
       inline void Add(uniform_buffer_typeless uniform) noexcept;
-      inline void Add(dynamic_uniform_buffer_typeless uniform) noexcept;
       inline void Add(vertex_buffer_typeless uniform) noexcept;
-      inline void Add(dynamic_vertex_buffer_typeless uniform) noexcept;
+      template <typename T> inline void Add(index_buffer<T> uniform) noexcept;
       inline void Add(texture_typeless texture) noexcept;
       inline void Add(render_texture2d texture) noexcept;
       static inline void Add(SamplerBinding sampler) noexcept;
@@ -1611,7 +1735,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     PipelineBinding() noexcept = default;
 
     template <typename Impl, typename... Args>
-    explicit PipelineBinding(ClassWrapper<Impl>, Args... args) noexcept;
+    void Rebind(bool UpdateDescriptors, Args... args) noexcept;
 
     void UpdateRenderTextures() noexcept {
       std::array<vk::DescriptorImageInfo, MaxImages> ImageInfos;
@@ -1650,21 +1774,23 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
       }
       if (vulkan::Globals.BoundDescriptorSet != DescriptorSet.Set) {
         vulkan::Globals.BoundDescriptorSet = DescriptorSet.Set;
-        vulkan::Globals.Cmd.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics, vulkan::Globals.PipelineLayout, 0,
-            DescriptorSet.Set,
-            vulkan::Globals.DynamicBufferIndex ? UniformOffsets
-                                               : ZeroUniformOffsets);
-        vulkan::Globals.Cmd.bindVertexBuffers(
-            0, NumVertexBuffers, VertexBuffers.data(),
-            vulkan::Globals.DynamicBufferIndex ? VertexOffsets.data()
-                                               : ZeroVertexOffsets.data());
+        vulkan::Globals.Cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                               vulkan::Globals.PipelineLayout,
+                                               0, DescriptorSet.Set, {});
+        vulkan::Globals.Cmd.bindVertexBuffers(0, NumVertexBuffers,
+                                              VertexBuffers.data(), {});
+        vulkan::Globals.Cmd.bindIndexBuffer(Index.Buffer, 0, Index.Type);
       }
     }
 
     void Draw(uint32_t start, uint32_t count) noexcept {
       Bind();
       vulkan::Globals.Cmd.draw(count, 1, start, 0);
+    }
+
+    void DrawIndexed(uint32_t start, uint32_t count) noexcept {
+      Bind();
+      vulkan::Globals.Cmd.drawIndexed(count, 1, start, 0, 0);
     }
   };
 

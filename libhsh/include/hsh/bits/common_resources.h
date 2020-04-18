@@ -2,14 +2,16 @@
 
 namespace hsh {
 
+class binding;
+
 struct base_buffer {};
 
 template <typename T> struct uniform_buffer;
-template <typename T> struct dynamic_uniform_buffer;
 template <typename T> struct vertex_buffer;
-template <typename T> struct dynamic_vertex_buffer;
+template <typename T> struct index_buffer;
 
 struct uniform_buffer_typeless : base_buffer {
+  using MappedType = void;
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
@@ -32,33 +34,10 @@ struct uniform_buffer_typeless : base_buffer {
   template <typename T> operator uniform_buffer<T>() const noexcept {
     return cast<T>();
   }
-};
-struct dynamic_uniform_buffer_typeless : base_buffer {
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t UniqueId;
-  template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(std::size_t UniqueId,
-                                           Args &&... args) noexcept
-      : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
-  explicit dynamic_uniform_buffer_typeless(
-      std::size_t UniqueId, dynamic_uniform_buffer_typeless other) noexcept
-      : UniqueId(UniqueId), Binding(other.Binding) {}
-#else
-  template <typename... Args>
-  explicit dynamic_uniform_buffer_typeless(Args &&... args) noexcept
-      : Binding(std::forward<Args>(args)...) {}
-  template <typename T>
-  explicit dynamic_uniform_buffer_typeless(
-      dynamic_uniform_buffer<T> other) noexcept
-      : Binding(other.Binding) {}
-#endif
-  detail::ActiveTargetTraits::DynamicUniformBufferBinding Binding;
-  template <typename T> dynamic_uniform_buffer<T> cast() const noexcept;
-  template <typename T> operator dynamic_uniform_buffer<T>() const noexcept {
-    return cast<T>();
-  }
+  void reset() noexcept { Binding = decltype(Binding){}; }
 };
 struct vertex_buffer_typeless : base_buffer {
+  using MappedType = void;
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
@@ -81,31 +60,32 @@ struct vertex_buffer_typeless : base_buffer {
   template <typename T> operator vertex_buffer<T>() const noexcept {
     return cast<T>();
   }
+  void reset() noexcept { Binding = decltype(Binding){}; }
 };
-struct dynamic_vertex_buffer_typeless : base_buffer {
+struct index_buffer_typeless : base_buffer {
+  using MappedType = void;
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t UniqueId;
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(std::size_t UniqueId,
-                                          Args &&... args) noexcept
+  explicit index_buffer_typeless(std::size_t UniqueId, Args &&... args) noexcept
       : UniqueId(UniqueId), Binding(std::forward<Args>(args)...) {}
-  explicit dynamic_vertex_buffer_typeless(
-      std::size_t UniqueId, dynamic_vertex_buffer_typeless other) noexcept
+  explicit index_buffer_typeless(std::size_t UniqueId,
+                                 index_buffer_typeless other) noexcept
       : UniqueId(UniqueId), Binding(other.Binding) {}
 #else
   template <typename... Args>
-  explicit dynamic_vertex_buffer_typeless(Args &&... args) noexcept
+  explicit index_buffer_typeless(Args &&... args) noexcept
       : Binding(std::forward<Args>(args)...) {}
   template <typename T>
-  explicit dynamic_vertex_buffer_typeless(
-      dynamic_vertex_buffer<T> other) noexcept
+  explicit index_buffer_typeless(index_buffer<T> other) noexcept
       : Binding(other.Binding) {}
 #endif
-  detail::ActiveTargetTraits::DynamicVertexBufferBinding Binding;
-  template <typename T> dynamic_vertex_buffer<T> cast() const noexcept;
-  template <typename T> operator dynamic_vertex_buffer<T>() const noexcept {
+  detail::ActiveTargetTraits::IndexBufferBinding Binding;
+  template <typename T> index_buffer<T> cast() const noexcept;
+  template <typename T> operator index_buffer<T>() const noexcept {
     return cast<T>();
   }
+  void reset() noexcept { Binding = decltype(Binding){}; }
 };
 
 #if HSH_ASSERT_CAST_ENABLED
@@ -143,9 +123,8 @@ struct dynamic_vertex_buffer_typeless : base_buffer {
   };
 #endif
 HSH_CASTABLE_BUFFER(uniform_buffer)
-HSH_CASTABLE_BUFFER(dynamic_uniform_buffer)
 HSH_CASTABLE_BUFFER(vertex_buffer)
-HSH_CASTABLE_BUFFER(dynamic_vertex_buffer)
+HSH_CASTABLE_BUFFER(index_buffer)
 #undef HSH_CASTABLE_BUFFER
 
 #define HSH_DEFINE_BUFFER_CAST(derived)                                        \
@@ -154,20 +133,19 @@ HSH_CASTABLE_BUFFER(dynamic_vertex_buffer)
     return static_cast<derived<T>>(*this);                                     \
   }
 HSH_DEFINE_BUFFER_CAST(uniform_buffer)
-HSH_DEFINE_BUFFER_CAST(dynamic_uniform_buffer)
 HSH_DEFINE_BUFFER_CAST(vertex_buffer)
-HSH_DEFINE_BUFFER_CAST(dynamic_vertex_buffer)
+HSH_DEFINE_BUFFER_CAST(index_buffer)
 #undef HSH_DEFINE_BUFFER_CAST
 
 struct base_texture {};
 
-template <typename T> struct texture1d;
-template <typename T> struct texture1d_array;
-template <typename T> struct texture2d;
-template <typename T> struct texture2d_array;
-template <typename T> struct texture3d;
-template <typename T> struct texturecube;
-template <typename T> struct texturecube_array;
+struct texture1d;
+struct texture1d_array;
+struct texture2d;
+struct texture2d_array;
+struct texture3d;
+struct texturecube;
+struct texturecube_array;
 
 struct texture_typeless : base_texture {
 #if HSH_ASSERT_CAST_ENABLED
@@ -207,16 +185,18 @@ struct texture_typeless : base_texture {
     return static_cast<T>(*this);
   }
   template <typename T> operator T() const noexcept { return cast<T>(); }
+  void reset() noexcept { Binding = decltype(Binding){}; }
 };
 
 #if HSH_ASSERT_CAST_ENABLED
 #define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
-  template <typename T> struct derived : texture_typeless {                    \
+  struct derived : texture_typeless {                                          \
     using MappedType = void;                                                   \
     template <typename... Args>                                                \
     explicit derived(Args &&... args) noexcept                                 \
         : texture_typeless(typeid(*this).hash_code(),                          \
                            std::forward<Args>(args)...) {}                     \
+    template <typename T>                                                      \
     scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
       return {};                                                               \
     }                                                                          \
@@ -244,6 +224,8 @@ HSH_CASTABLE_TEXTURE(texturecube_array, float4)
 
 struct render_texture2d {
   detail::ActiveTargetTraits::RenderTextureBinding Binding;
+
+  hsh::float4 sample(hsh::float2, sampler = {}) const noexcept { return {}; }
 };
 
 struct surface {
@@ -396,9 +378,6 @@ template <hsh::Target T> struct ShaderCode {
 
 /* Holds shader stage object as loaded into graphics API */
 template <hsh::Target T> struct ShaderObject {};
-
-/* Max supported mip count (enough for 16K texture) */
-constexpr std::size_t MaxMipCount = 14;
 
 /* Holds sampler object as loaded into graphics API */
 template <hsh::Target T> struct SamplerObject {};
@@ -594,21 +573,56 @@ template <hsh::Target T> struct PipelineBuilder {
 };
 
 namespace buffer_math {
-constexpr std::size_t MipSize2D(std::size_t width, std::size_t height,
-                                std::size_t texelSize, bool NotZero) noexcept {
-  return NotZero ? (width * height * texelSize) : 0;
+constexpr uint32_t MipSize1D(uint32_t width, uint32_t layers,
+                             uint32_t texelSize, bool NotZero) noexcept {
+  return NotZero ? (width * layers * texelSize) : 0;
 }
-template <std::size_t... Idx>
-constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
-                                  std::size_t texelSize, std::size_t Mip,
-                                  std::index_sequence<Idx...>) noexcept {
-  return (MipSize2D(width >> Idx, height >> Idx, texelSize, Idx < Mip) + ...);
+template <uint32_t... Idx>
+constexpr uint32_t
+MipOffset1D(uint32_t width, uint32_t layers, uint32_t texelSize, uint32_t Mip,
+            std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return (MipSize1D(width >> Idx, layers, texelSize, Idx < Mip) + ...);
 }
-constexpr std::size_t MipOffset2D(std::size_t width, std::size_t height,
-                                  std::size_t texelSize,
-                                  std::size_t Mip) noexcept {
-  return MipOffset2D(width, height, texelSize, Mip,
-                     std::make_index_sequence<MaxMipCount>());
+constexpr uint32_t MipOffset1D(uint32_t width, uint32_t layers,
+                               uint32_t texelSize, uint32_t Mip) noexcept {
+  return MipOffset1D(width, layers, texelSize, Mip,
+                     std::make_integer_sequence<uint32_t, MaxMipCount>());
+}
+
+constexpr uint32_t MipSize2D(uint32_t width, uint32_t height, uint32_t layers,
+                             uint32_t texelSize, bool NotZero) noexcept {
+  return NotZero ? (width * height * layers * texelSize) : 0;
+}
+template <uint32_t... Idx>
+constexpr uint32_t
+MipOffset2D(uint32_t width, uint32_t height, uint32_t layers,
+            uint32_t texelSize, uint32_t Mip,
+            std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return (MipSize2D(width >> Idx, height >> Idx, layers, texelSize, Idx < Mip) +
+          ...);
+}
+constexpr uint32_t MipOffset2D(uint32_t width, uint32_t height, uint32_t layers,
+                               uint32_t texelSize, uint32_t Mip) noexcept {
+  return MipOffset2D(width, height, layers, texelSize, Mip,
+                     std::make_integer_sequence<uint32_t, MaxMipCount>());
+}
+
+constexpr uint32_t MipSize3D(uint32_t width, uint32_t height, uint32_t depth,
+                             uint32_t texelSize, bool NotZero) noexcept {
+  return NotZero ? (width * height * depth * texelSize) : 0;
+}
+template <uint32_t... Idx>
+constexpr uint32_t
+MipOffset3D(uint32_t width, uint32_t height, uint32_t depth, uint32_t texelSize,
+            uint32_t Mip, std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return (MipSize3D(width >> Idx, height >> Idx, depth >> Idx, texelSize,
+                    Idx < Mip) +
+          ...);
+}
+constexpr uint32_t MipOffset3D(uint32_t width, uint32_t height, uint32_t depth,
+                               uint32_t texelSize, uint32_t Mip) noexcept {
+  return MipOffset3D(width, height, depth, texelSize, Mip,
+                     std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 } // namespace buffer_math
 
@@ -684,7 +698,10 @@ template <bool HighPrio, typename... B> struct PipelineCoordinator {
  * This macro is internally expanded within the hsh generator
  * for any identifiers prefixed with hsh_ being assigned or returned.
  */
-#define _hsh_dummy(...) ::hsh::binding_typeless{};
+struct _DummyBinder {
+  static void Bind(hsh::binding &) noexcept {}
+};
+#define _hsh_dummy(...) _bind<hsh::detail::_DummyBinder>()
 
 } // namespace detail
 } // namespace hsh

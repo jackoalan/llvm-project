@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
   ModelInfo ModInfo{};
   MaterialInfo MatInfo{};
   ModelResources ModRes{};
-  hsh::binding_typeless ModelBinding;
+  hsh::binding ModelBinding;
 
   Connection.runloop([&]() {
     Device.enter_draw_context([&]() {

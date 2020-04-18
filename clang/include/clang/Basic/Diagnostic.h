@@ -220,6 +220,9 @@ private:
   // Suppress all diagnostics.
   bool SuppressAllDiagnostics = false;
 
+  // Suppress all diagnostics from specific FID.
+  FileID SuppressFID = {};
+
   // Elide common types of templates.
   bool ElideType = true;
 
@@ -641,6 +644,8 @@ public:
   /// client
   void setSuppressAllDiagnostics(bool Val) { SuppressAllDiagnostics = Val; }
   bool getSuppressAllDiagnostics() const { return SuppressAllDiagnostics; }
+
+  void setSuppressFID(FileID Val) { SuppressFID = Val; }
 
   /// Set type eliding, to skip outputting same types occurring in
   /// template types.

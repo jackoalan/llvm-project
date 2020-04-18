@@ -644,7 +644,8 @@ bool DiagnosticIDs::ProcessDiag(DiagnosticsEngine &Diag) const {
       ++Diag.TrapNumUnrecoverableErrorsOccurred;
   }
 
-  if (Diag.SuppressAllDiagnostics)
+  if (Diag.SuppressAllDiagnostics ||
+      Diag.getSourceManager().getFileID(Info.getLocation()) == Diag.SuppressFID)
     return false;
 
   if (DiagLevel != DiagnosticIDs::Note) {

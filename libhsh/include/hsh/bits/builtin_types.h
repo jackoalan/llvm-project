@@ -25,10 +25,13 @@ struct float4 {
     z *= other.z;
     w *= other.w;
   }
-  float4 operator*(float other) noexcept {
+  float4 operator*(float other) const noexcept {
     return float4{x * other, y * other, z * other, w * other};
   }
-  float4 operator/(float other) noexcept {
+  float4 operator*(const float4 &other) const noexcept {
+    return float4{x * other.x, y * other.y, z * other.z, w * other.w};
+  }
+  float4 operator/(float other) const noexcept {
     return float4{x / other, y / other, z / other, w / other};
   }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
@@ -179,8 +182,11 @@ constexpr uint4::uint4(const hsh::uint2 &other, std::uint32_t z,
                        std::uint32_t w) noexcept
     : x(other.x), y(other.y), z(z), w(w) {}
 struct float4x4 {
-  float4 cols[4];
+  std::array<float4, 4> cols;
   float4x4() noexcept = default;
+  float4x4(const float4 &c0, const float4 &c1, const float4 &c2,
+           const float4 &c3) noexcept
+      : cols{c0, c1, c2, c3} {}
   float4 &operator[](std::size_t col) noexcept { return cols[col]; }
   const float4 &operator[](std::size_t col) const noexcept { return cols[col]; }
   float4x4 operator*(const float4x4 &other) const noexcept {
@@ -189,8 +195,10 @@ struct float4x4 {
   float4 operator*(const float4 &other) const noexcept { return float4{}; };
 };
 struct float3x3 {
+  std::array<float3, 3> cols;
   float3x3() noexcept = default;
-  float3 cols[3];
+  float3x3(const float3 &c0, const float3 &c1, const float3 &c2) noexcept
+      : cols{c0, c1, c2} {}
   float3x3(const float4x4 &other) noexcept
       : cols{other.cols[0].xyz(), other.cols[1].xyz(), other.cols[2].xyz()} {}
   float3 &operator[](std::size_t col) noexcept { return cols[col]; }
@@ -207,7 +215,8 @@ struct aligned_float3x3 {
     col(const float3 &c) noexcept : c(c) {}
     float3 c;
     float p;
-  } cols[3];
+  };
+  std::array<col, 3> cols;
   aligned_float3x3(const float3x3 &other) noexcept
       : cols{other.cols[0], other.cols[1], other.cols[2]} {}
   aligned_float3x3(const float4x4 &other) noexcept
@@ -315,11 +324,14 @@ constexpr float dot(const float2 &a, const float2 &b) noexcept {
 constexpr float dot(const float3 &a, const float3 &b) noexcept {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
-constexpr float sqrt(float v) noexcept { return std::sqrt(v); }
-constexpr float length(const float2 &a) noexcept { return sqrt(dot(a, a)); }
-constexpr float length(const float3 &a) noexcept { return sqrt(dot(a, a)); }
-constexpr float2 normalize(const float2 &a) noexcept { return a / length(a); }
-constexpr float3 normalize(const float3 &a) noexcept { return a / length(a); }
+constexpr float dot(const float4 &a, const float4 &b) noexcept {
+  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+inline float sqrt(float v) noexcept { return std::sqrt(v); }
+inline float length(const float2 &a) noexcept { return sqrt(dot(a, a)); }
+inline float length(const float3 &a) noexcept { return sqrt(dot(a, a)); }
+inline float2 normalize(const float2 &a) noexcept { return a / length(a); }
+inline float3 normalize(const float3 &a) noexcept { return a / length(a); }
 constexpr float max(float a, float b) noexcept { return std::max(a, b); }
 constexpr float min(float a, float b) noexcept { return std::min(a, b); }
 constexpr float clamp(float v, float min, float max) noexcept {
@@ -339,7 +351,7 @@ constexpr float saturate(float v) noexcept { return clamp(v, 0.f, 1.f); }
 constexpr float3 saturate(const float3 &v) noexcept {
   return clamp(v, hsh::float3(0.f), hsh::float3(1.f));
 }
-constexpr float exp2(float v) noexcept { return std::exp2(v); }
+inline float exp2(float v) noexcept { return std::exp2(v); }
 constexpr float lerp(float a, float b, float t) noexcept {
   return b * t + a * (1.f - t);
 }
@@ -360,7 +372,7 @@ constexpr float4 lerp(const float4 &a, const float4 &b, float t) noexcept {
   return float4{b[0] * t + a[0] * (1.f - t), b[1] * t + a[1] * (1.f - t),
                 b[2] * t + a[2] * (1.f - t), b[3] * t + a[3] * (1.f - t)};
 }
-constexpr float abs(float v) noexcept { return std::abs(v); }
+inline float abs(float v) noexcept { return std::abs(v); }
 constexpr void discard() noexcept {}
 
 } // namespace hsh

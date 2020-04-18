@@ -6,14 +6,12 @@
 #endif
 #define HSH_XSTR(s) HSH_STR(s)
 #define HSH_STR(s) #s
-#ifdef HSH_TRAIT_BINDING
-struct HSH_TRAIT_BINDING;
-#endif
 #ifdef HSH_MULTI_TRAIT
 HSH_TRAIT_TEMPLATE_PARMS
 struct HSH_MULTI_TRAIT {
 #ifdef HSH_TRAIT_OWNER
   using Owner = HSH_TRAIT_OWNER;
+  using DynamicOwner = HSH_TRAIT_DYNAMIC_OWNER;
 #endif
 #ifdef HSH_TRAIT_BINDING
   using Binding = HSH_TRAIT_BINDING;
@@ -47,6 +45,7 @@ HSH_TRAIT_TEMPLATE_PARMS
 struct HSH_SINGLE_TRAIT {
 #ifdef HSH_TRAIT_OWNER
   using Owner = HSH_TRAIT_OWNER;
+  using DynamicOwner = HSH_TRAIT_DYNAMIC_OWNER;
 #endif
 #ifdef HSH_TRAIT_BINDING
   using Binding = HSH_TRAIT_BINDING;
@@ -79,6 +78,7 @@ HSH_TRAIT_TEMPLATE_PARMS
 struct HSH_NULL_TRAIT {
 #ifdef HSH_TRAIT_OWNER
   using Owner = HSH_TRAIT_OWNER;
+  using DynamicOwner = HSH_TRAIT_DYNAMIC_OWNER;
 #endif
 #ifdef HSH_TRAIT_BINDING
   using Binding = HSH_TRAIT_BINDING;
@@ -95,6 +95,7 @@ bool IsValid() const noexcept { return false; }
 #undef HSH_TRAIT_TEMPLATE_PARMS
 #undef HSH_TRAIT_TEMPLATE_REFS
 #undef HSH_TRAIT_OWNER
+#undef HSH_TRAIT_DYNAMIC_OWNER
 #undef HSH_TRAIT_BINDING
 #undef HSH_XSTR
 #undef HSH_STR

@@ -30,7 +30,8 @@ set(config_install_dir "lib/cmake/hsh")
 
 # Install the target config files
 install(EXPORT hshTargets DESTINATION ${config_install_dir}
-        COMPONENT libhsh-cmake-exports)
+        COMPONENT libhsh-cmake-exports
+        )
 
 # Generate version config file
 write_basic_package_version_file(

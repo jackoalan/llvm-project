@@ -2121,15 +2121,7 @@ StmtResult Parser::ParseReturnStatement() {
   assert((Tok.is(tok::kw_return) || Tok.is(tok::kw_co_return)) &&
          "Not a return stmt!");
   bool IsCoreturn = Tok.is(tok::kw_co_return);
-  SourceLocation ReturnLoc;
-  {
-    // An return involving an identifer prefixed with hsh_
-    // should trigger an expansion of a dummy hsh base:
-    // ::hsh::_HshDummy(); [[hsh::generator_lambda]]
-    SaveAndRestore SavedHshWatch(
-        PP.HshWatch, PP.getSourceManager().isInMainFile(Tok.getLocation()));
-    ReturnLoc = ConsumeToken(); // eat the 'return'.
-  }
+  SourceLocation ReturnLoc = ConsumeToken();
 
   ExprResult R;
   if (Tok.isNot(tok::semi)) {

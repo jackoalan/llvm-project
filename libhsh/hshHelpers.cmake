@@ -28,7 +28,6 @@ set(HSH_MAX_UNIFORMS 8 CACHE STRING "Maximum number of uniforms allowed across a
 set(HSH_MAX_IMAGES 8 CACHE STRING "Maximum number of images allowed across all hsh-enabled targets")
 set(HSH_MAX_SAMPLERS 8 CACHE STRING "Maximum number of samplers allowed across all hsh-enabled targets")
 set(HSH_MAX_VERTEX_BUFFERS 8 CACHE STRING "Maximum number of vertex buffers allowed across all hsh-enabled targets")
-set(HSH_MAX_INDEX_BUFFERS 8 CACHE STRING "Maximum number of index buffers allowed across all hsh-enabled targets")
 set(HSH_MAX_RENDER_TEXTURE_BINDINGS 4 CACHE STRING "Maximum number of render texture bindings allowed across all hsh-enabled targets")
 set(HSH_DESCRIPTOR_POOL_SIZE 8192 CACHE STRING "Maximum descriptor pool size across all hsh-enabled targets")
 
@@ -39,7 +38,6 @@ _hsh_register_macro_variables(
         HSH_MAX_IMAGES
         HSH_MAX_SAMPLERS
         HSH_MAX_VERTEX_BUFFERS
-        HSH_MAX_INDEX_BUFFERS
         HSH_MAX_RENDER_TEXTURE_BINDINGS
         HSH_DESCRIPTOR_POOL_SIZE)
 
@@ -242,9 +240,6 @@ function(target_hsh target)
     set_source_files_properties("${source}" PROPERTIES
             INCLUDE_DIRECTORIES "${bin_dir}/${out_dir}"
             OBJECT_DEPENDS "${out_path}.hshhead")
-
-    # Add hshhead to target
-    target_sources(${target} PUBLIC "${out_path}.hshhead")
   endforeach()
 endfunction()
 

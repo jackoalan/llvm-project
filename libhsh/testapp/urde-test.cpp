@@ -9,9 +9,9 @@ struct PassTraits {
 };
 
 template <bool CubeReflection>
-struct DynReflectionTex { using type = hsh::texture2d<float>; };
+struct DynReflectionTex { using type = hsh::texture2d; };
 template <>
-struct DynReflectionTex<true> { using type = hsh::texturecube<float>; };
+struct DynReflectionTex<true> { using type = hsh::texturecube; };
 template <bool CubeReflection>
 using DynReflectionTexType = typename DynReflectionTex<CubeReflection>::type;
 
@@ -49,21 +49,21 @@ struct DrawModel
                   (AlphaWrite ? hsh::CC_Alpha : 0))>,
           cull_mode<Cull>, depth_compare<DepthCompare>, depth_write<DepthWrite>,
           early_depth_stencil<!AlphaTest>> {
-  DrawModel(hsh::dynamic_uniform_buffer<VertUniform<NSkinSlots>> vu,
-            hsh::dynamic_uniform_buffer<FragmentUniform<Post>> fragu HSH_VAR_STAGE(fragment),
-            hsh::dynamic_uniform_buffer<std::array<TCGMatrix, 8>> tcgu,
-            hsh::dynamic_uniform_buffer<ReflectMtx> refu,
-            hsh::texture2d<float> Lightmap,
-            hsh::texture2d<float> Diffuse,
-            hsh::texture2d<float> Emissive,
-            hsh::texture2d<float> Specular,
-            hsh::texture2d<float> ExtendedSpecular,
-            hsh::texture2d<float> Reflection,
-            hsh::texture2d<float> Alpha,
-            hsh::texture2d<float> ReflectionIndTex,
-            hsh::texture2d<float> ExtTex0,
-            hsh::texture2d<float> ExtTex1,
-            hsh::texture2d<float> ExtTex2,
+  DrawModel(hsh::uniform_buffer<VertUniform<NSkinSlots>> vu,
+            hsh::uniform_buffer<FragmentUniform<Post>> fragu HSH_VAR_STAGE(fragment),
+            hsh::uniform_buffer<std::array<TCGMatrix, 8>> tcgu,
+            hsh::uniform_buffer<ReflectMtx> refu,
+            hsh::texture2d Lightmap,
+            hsh::texture2d Diffuse,
+            hsh::texture2d Emissive,
+            hsh::texture2d Specular,
+            hsh::texture2d ExtendedSpecular,
+            hsh::texture2d Reflection,
+            hsh::texture2d Alpha,
+            hsh::texture2d ReflectionIndTex,
+            hsh::texture2d ExtTex0,
+            hsh::texture2d ExtTex1,
+            hsh::texture2d ExtTex2,
             DynReflectionTexType<CubeReflection> dynReflection,
             hsh::vertex_buffer<VertData<NCol, NUv, NWeight>> vd) {
     hsh::float4 mvPos;
@@ -228,7 +228,7 @@ EMIT_TCG(Alpha)
             fragu->lights[i].angAtt[0];
         hsh::float3 thisColor = fragu->lights[i].color.xyz() * angAtt * att * hsh::max(hsh::dot(-deltaNorm, mvNorm.xyz()), 0.f);
         if (WorldShadow && i == 0)
-          thisColor *= ExtTex0.sample(ShadowUv, ClampSamp).x;
+          thisColor *= ExtTex0.sample<float>(ShadowUv, ClampSamp).x;
         lighting += thisColor;
       }
 
@@ -243,13 +243,13 @@ EMIT_TCG(Alpha)
       break;
     case RT_Simple:
       DynReflectionSample =
-          dynReflection.sample(DynReflectionUv, ReflectSamp).xyz() *
+          dynReflection.template sample<float>(DynReflectionUv, ReflectSamp).xyz() *
           refu->reflectAlpha;
       break;
     case RT_Indirect:
       DynReflectionSample =
           dynReflection
-              .sample((ReflectionIndTex.sample(DynReflectionIndUv, Samp).xw() -
+              .template sample<float>((ReflectionIndTex.sample<float>(DynReflectionIndUv, Samp).xw() -
                        hsh::float2(0.5f)) *
                               hsh::float2(0.5f) +
                           DynReflectionUv,
@@ -261,8 +261,8 @@ EMIT_TCG(Alpha)
 
     const hsh::float3 kRGBToYPrime = hsh::float3(0.257f, 0.504f, 0.098f);
 
-#define Sample(Pass) (Pass##Traits::SampleAlpha_ ? hsh::float3(Pass.sample(Pass##Uv, Samp).w) : Pass.sample(Pass##Uv, Samp).xyz())
-#define SampleAlpha(Pass) (Pass##Traits::SampleAlpha_ ? Pass.sample(Pass##Uv, Samp).w : hsh::dot(Pass.sample(Pass##Uv, Samp).xyz(), kRGBToYPrime))
+#define Sample(Pass) (Pass##Traits::SampleAlpha_ ? hsh::float3(Pass.sample<float>(Pass##Uv, Samp).w) : Pass.sample<float>(Pass##Uv, Samp).xyz())
+#define SampleAlpha(Pass) (Pass##Traits::SampleAlpha_ ? Pass.sample<float>(Pass##Uv, Samp).w : hsh::dot(Pass.sample<float>(Pass##Uv, Samp).xyz(), kRGBToYPrime))
 
     switch (Type) {
     case ST_DiffuseOnly:
@@ -344,23 +344,23 @@ EMIT_TCG(Alpha)
       this->color_out[0] *= fragu->mulColor;
       this->color_out[0] += fragu->addColor;
     } else if constexpr (Post == PT_ThermalHot) {
-      this->color_out[0] = hsh::float4(ExtTex0.sample(ExtUv0, Samp).x) * fragu->tmulColor + fragu->taddColor;
+      this->color_out[0] = hsh::float4(ExtTex0.sample<float>(ExtUv0, Samp).x) * fragu->tmulColor + fragu->taddColor;
     } else if constexpr (Post == PT_ThermalCold) {
       this->color_out[0] *= hsh::float4(0.75f);
     } else if constexpr (Post == PT_Solid) {
       this->color_out[0] = fragu->solidColor;
     } else if constexpr (Post == PT_MBShadow) {
-      float idTexel = ExtTex0.sample(ExtUv0, Samp).w;
-      float sphereTexel = ExtTex1.sample(ExtUv1, ClampEdgeSamp).x;
-      float fadeTexel = ExtTex2.sample(ExtUv2, ClampEdgeSamp).w;
+      float idTexel = ExtTex0.sample<float>(ExtUv0, Samp).w;
+      float sphereTexel = ExtTex1.sample<float>(ExtUv1, ClampEdgeSamp).x;
+      float fadeTexel = ExtTex2.sample<float>(ExtUv2, ClampEdgeSamp).w;
       float val = ((hsh::abs(idTexel - fragu->shadowId) < 0.001f)
                    ? (hsh::dot(mvNorm, fragu->shadowUp.xyz()) * fragu->shadowUp.w)
                    : 0.f) *
                   sphereTexel * fadeTexel;
       this->color_out[0] = hsh::float4(0.f, 0.f, 0.f, val);
     } else if constexpr (Post == PT_Disintegrate) {
-      hsh::float4 texel0 = ExtTex0.sample(ExtUv0, Samp);
-      hsh::float4 texel1 = ExtTex0.sample(ExtUv1, Samp);
+      hsh::float4 texel0 = ExtTex0.sample<float>(ExtUv0, Samp);
+      hsh::float4 texel1 = ExtTex0.sample<float>(ExtUv1, Samp);
       this->color_out[0] = hsh::lerp(hsh::float4(0.f), texel1, texel0);
       this->color_out[0] = hsh::float4(fragu->daddColor.xyz() + this->color_out[0].xyz(), this->color_out[0].w);
       if constexpr (DstFactor == hsh::One)
@@ -389,18 +389,18 @@ ModelResources CreateModelResources() {
     hsh::create_dynamic_uniform_buffer<FragmentUniform<PT_Normal>>(),
     hsh::create_dynamic_uniform_buffer<std::array<TCGMatrix, 8>>(),
     hsh::create_dynamic_uniform_buffer<ReflectMtx>(),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
-    hsh::create_texture2d<float>({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
+    hsh::create_texture2d({256, 256}, hsh::RGBA8_UNORM, 1, [](void *Data, std::size_t Size){memset(Data, 0, Size);}),
     hsh::create_vertex_buffer<VertData<0, 4, 1>>(VertData<0, 4, 1>())
   };
 }
@@ -418,7 +418,7 @@ template <uint32_t NSkinSlots, uint32_t NCol, uint32_t NUv,
 template <ETexCoordSource Source, bool Normalize, int MtxIdx, bool SampleAlpha>
 #endif
 
-hsh::binding_typeless BindDrawModel(const ModelInfo &model,
+hsh::binding BindDrawModel(const ModelInfo &model,
                    const MaterialInfo &mat,
                    EPostType post,
                    const ModelResources &res) {
@@ -429,7 +429,7 @@ hsh::binding_typeless BindDrawModel(const ModelInfo &model,
 
   using DefaultPass = PassTraits<TCS_None, true, 0, false>;
 
-  return hsh_DrawModel(::DrawModel<
+  return std::move(hsh::binding().hsh_DrawModel(::DrawModel<
       model.SkinSlots, model.Colors, model.UVs, model.Weights,
       mat.ShaderType, post, mat.ReflectionType, false, mat.AlphaTest, false,
       PassTraits<alphaSource, alphaNormalize, mtxIdx, sampleAlpha>,
@@ -438,5 +438,5 @@ hsh::binding_typeless BindDrawModel(const ModelInfo &model,
           res.vu.get(), res.fragu.get(), res.tcgu.get(), res.refu.get(), res.Lightmap.get(), res.Diffuse.get(),
           res.Emissive.get(), res.Specular.get(), res.ExtendedSpecular.get(), res.Reflection.get(),
           res.Alpha.get(), res.ReflectionIndTex.get(), res.ExtTex0.get(), res.ExtTex1.get(),
-          res.ExtTex2.get(), res.dynReflection.get(), res.vd.get()));
+          res.ExtTex2.get(), res.dynReflection.get(), res.vd.get())));
 }

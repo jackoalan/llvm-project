@@ -1956,7 +1956,15 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // postfix-expression: p-e '->' template[opt] id-expression
       // postfix-expression: p-e '.' template[opt] id-expression
       tok::TokenKind OpKind = Tok.getKind();
-      SourceLocation OpLoc = ConsumeToken();  // Eat the "." or "->" token.
+      SourceLocation OpLoc;
+      {
+        // A member access involving an identifer prefixed with hsh_
+        // should trigger an expansion of a dummy hsh bind call:
+        // _bind([](hsh::binding&){})
+        SaveAndRestore SavedHshWatch(
+            PP.HshWatch, PP.getSourceManager().isInMainFile(Tok.getLocation()));
+        OpLoc = ConsumeToken(); // Eat the "." or "->" token.
+      }
 
       CXXScopeSpec SS;
       ParsedType ObjectType;

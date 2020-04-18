@@ -4,12 +4,6 @@
 #ifndef HSH_TRAIT_TEMPLATE_REFS
 #define HSH_TRAIT_TEMPLATE_REFS
 #endif
-#ifdef HSH_TRAIT_BINDING
-struct HSH_TRAIT_BINDING;
-#endif
-#ifdef HSH_RENDER_TEXTURE_OWNER
-struct RenderTextureBinding;
-#endif
 #ifdef HSH_MULTI_TRAIT
 HSH_TRAIT_TEMPLATE_PARMS
 union HSH_MULTI_TRAIT {
@@ -143,9 +137,10 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       return {};
     }
   }
-  void Attach() noexcept {
+  template <typename... Args>
+  void Attach(const Args &... args) noexcept {
     switch (CurrentTarget) {
-#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Attach(); break;
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Attach(args...); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -212,9 +207,26 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
   }
 #endif
 #ifdef HSH_PIPELINE_BINDING
+  template <typename Impl, typename... Args>
+  void Rebind(bool UpdateDescriptors, Args... args) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Rebind<Impl, Args...>(UpdateDescriptors, args...); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
   void Draw(uint32_t start, uint32_t count) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.Draw(start, count); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  void DrawIndexed(uint32_t start, uint32_t count) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.DrawIndexed(start, count); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -261,7 +273,8 @@ void Unmap() noexcept { _##Enumeration.Unmap(); }
 #define HSH_ACTIVE_TARGET(Enumeration) \
 RenderTextureBinding GetColor(uint32_t idx) const noexcept { return _##Enumeration.GetColor(idx); } \
 RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return _##Enumeration.GetDepth(idx); } \
-void Attach() noexcept { _##Enumeration.Attach(); } \
+template <typename... Args> \
+void Attach(const Args &... args) noexcept { _##Enumeration.Attach(args...); } \
 void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept { _##Enumeration.ResolveSurface(surf, reattach); } \
 void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept { _##Enumeration.ResolveColorBinding(idx, region, reattach); } \
 void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept { _##Enumeration.ResolveDepthBinding(idx, region, reattach); }
@@ -277,7 +290,10 @@ void SetRequestExtent(const hsh::extent2d &Ext) noexcept { _##Enumeration.SetReq
 #endif
 #ifdef HSH_PIPELINE_BINDING
 #define HSH_ACTIVE_TARGET(Enumeration) \
-void Draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.Draw(start, count); }
+template <typename Impl, typename... Args> \
+void Rebind(bool UpdateDescriptors, Args... args) noexcept { _##Enumeration.Rebind<Impl, Args...>(UpdateDescriptors, args...); } \
+void Draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.Draw(start, count); } \
+void DrawIndexed(uint32_t start, uint32_t count) noexcept { _##Enumeration.DrawIndexed(start, count); }
 #include "targets.def"
 #endif
   };
@@ -307,7 +323,8 @@ void Unmap() noexcept {}
 #ifdef HSH_RENDER_TEXTURE_OWNER
 RenderTextureBinding GetColor(uint32_t idx) const noexcept { return {}; }
 RenderTextureBinding GetDepth(uint32_t idx) const noexcept { return {}; }
-void Attach() noexcept {} \
+template <typename... Args>
+void Attach(const Args &... args) noexcept {}
 void ResolveSurface(SurfaceBinding surf, bool reattach) noexcept {}
 void ResolveColorBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
 void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
@@ -319,7 +336,10 @@ void AttachDeleterLambda(std::function<void()> &&Del) noexcept {}
 void SetRequestExtent(const hsh::extent2d &Ext) noexcept {}
 #endif
 #ifdef HSH_PIPELINE_BINDING
+template <typename Impl, typename... Args>
+void Rebind(bool UpdateDescriptors, Args... args) noexcept {}
 void Draw(uint32_t start, uint32_t count) noexcept {}
+void DrawIndexed(uint32_t start, uint32_t count) noexcept {}
 #endif
   };
 #undef HSH_NULL_TRAIT

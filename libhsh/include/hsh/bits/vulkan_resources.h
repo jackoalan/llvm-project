@@ -380,18 +380,7 @@ template <typename Impl> struct DescriptorPoolWrites {
           DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
           {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
-    void Add(dynamic_uniform_buffer_typeless uniform) noexcept {
-      auto UniformIdx = UniformIt - UniformBegin;
-      auto &Uniform = *UniformIt++;
-      Uniform = vk::DescriptorBufferInfo(
-          uniform.Binding.get_VULKAN_SPIRV().GetBuffer(), 0, VK_WHOLE_SIZE);
-      auto &Write = *WriteIt++;
-      Write = vk::WriteDescriptorSet(
-          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
-          {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
-    }
     static void Add(vertex_buffer_typeless) noexcept {}
-    static void Add(dynamic_vertex_buffer_typeless) noexcept {}
     void Add(texture_typeless texture) noexcept {
       auto ImageIdx = ImageIt - ImageBegin;
       auto &Image = *ImageIt++;
@@ -435,37 +424,34 @@ template <typename Impl> struct DescriptorPoolWrites {
 } // namespace vulkan
 
 template <typename Impl, typename... Args>
-TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::PipelineBinding(
-    ClassWrapper<Impl>, Args... args) noexcept
-    : Pipeline(Impl::data_VULKAN_SPIRV.Pipeline.get()),
-      DescriptorSet(vulkan::Globals.DescriptorPoolChain->Allocate()) {
-  vulkan::DescriptorPoolWrites<Impl> Writes(DescriptorSet, args...);
-  vulkan::Globals.Device.updateDescriptorSets(
-      Writes.NumWrites,
-      reinterpret_cast<vk::WriteDescriptorSet *>(Writes.Writes.data()), 0,
-      nullptr);
-  Iterators Its(*this);
-  (Its.Add(args), ...);
-  NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Rebind(
+    bool UpdateDescriptors, Args... args) noexcept {
+  Pipeline = Impl::data_VULKAN_SPIRV.Pipeline.get();
+  if (UpdateDescriptors) {
+    if (!DescriptorSet)
+      DescriptorSet = vulkan::Globals.DescriptorPoolChain->Allocate();
+    vulkan::DescriptorPoolWrites<Impl> Writes(DescriptorSet, args...);
+    vulkan::Globals.Device.updateDescriptorSets(
+        Writes.NumWrites,
+        reinterpret_cast<vk::WriteDescriptorSet *>(Writes.Writes.data()), 0,
+        nullptr);
+    Iterators Its(*this);
+    (Its.Add(args), ...);
+    NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
+  }
 }
 
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
-    uniform_buffer_typeless) noexcept {
-  UniformOffsetIt++;
-}
+    uniform_buffer_typeless) noexcept {}
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
-    dynamic_uniform_buffer_typeless uniform) noexcept {
-  *UniformOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().GetSecondOffset();
+    vertex_buffer_typeless vbo) noexcept {
+  *VertexBufferIt++ = vbo.Binding.get_VULKAN_SPIRV();
 }
+template <typename T>
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
-    vertex_buffer_typeless uniform) noexcept {
-  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV();
-  VertexOffsetIt++;
-}
-void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
-    dynamic_vertex_buffer_typeless uniform) noexcept {
-  *VertexBufferIt++ = uniform.Binding.get_VULKAN_SPIRV().GetBuffer();
-  *VertexOffsetIt++ = uniform.Binding.get_VULKAN_SPIRV().GetSecondOffset();
+    index_buffer<T> ibo) noexcept {
+  Index.Buffer = ibo.Binding.get_VULKAN_SPIRV();
+  Index.Type = vk::index_type<T>::indexType;
 }
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     texture_typeless) noexcept {
@@ -701,52 +687,92 @@ template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
 };
 
 namespace buffer_math::vulkan {
-template <std::size_t... Idx>
+template <uint32_t... Idx>
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
-MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
+MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
              vk::ImageAspectFlagBits aspect,
-             std::index_sequence<Idx...>) noexcept {
-  return {vk::BufferImageCopy(
-      MipOffset2D(width, height, texelSize, Idx), width >> Idx, height >> Idx,
-      {aspect, Idx, 0, 1}, {},
-      {uint32_t(width >> Idx), uint32_t(height >> Idx), 1})...};
+             std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return {vk::BufferImageCopy(MipOffset1D(width, layers, texelSize, Idx),
+                              width >> Idx, 1, {aspect, Idx, 0, layers}, {},
+                              {width >> Idx, 1, 1})...};
 }
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
-MakeCopies2D(std::size_t width, std::size_t height, std::size_t texelSize,
+MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
              vk::ImageAspectFlagBits aspect) noexcept {
-  return MakeCopies2D(width, height, texelSize, aspect,
-                      std::make_index_sequence<MaxMipCount>());
+  return MakeCopies1D(width, layers, texelSize, aspect,
+                      std::make_integer_sequence<uint32_t, MaxMipCount>());
+}
+
+template <uint32_t... Idx>
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
+             uint32_t texelSize, vk::ImageAspectFlagBits aspect,
+             std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return {
+      vk::BufferImageCopy(MipOffset2D(width, height, layers, texelSize, Idx),
+                          width >> Idx, height >> Idx, {aspect, Idx, 0, layers},
+                          {}, {width >> Idx, height >> Idx, 1})...};
+}
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
+             uint32_t texelSize, vk::ImageAspectFlagBits aspect) noexcept {
+  return MakeCopies2D(width, height, layers, texelSize, aspect,
+                      std::make_integer_sequence<uint32_t, MaxMipCount>());
+}
+
+template <uint32_t... Idx>
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
+             uint32_t texelSize, vk::ImageAspectFlagBits aspect,
+             std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return {vk::BufferImageCopy(MipOffset3D(width, height, depth, texelSize, Idx),
+                              width >> Idx, height >> Idx, {aspect, Idx, 0, 1},
+                              {},
+                              {width >> Idx, height >> Idx, depth >> Idx})...};
+}
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
+             uint32_t texelSize, vk::ImageAspectFlagBits aspect) noexcept {
+  return MakeCopies3D(width, height, depth, texelSize, aspect,
+                      std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 } // namespace buffer_math::vulkan
+
+template <typename CopyFunc>
+inline auto CreateBufferOwner(const SourceLocation &location,
+                              vk::BufferUsageFlagBits bufferType,
+                              std::size_t size, CopyFunc copyFunc) noexcept {
+  auto UploadBuffer = vulkan::AllocateUploadBuffer(location, size);
+  copyFunc(UploadBuffer.GetMappedData(), size);
+
+  auto Ret = vulkan::AllocateStaticBuffer(
+      location, size, bufferType | vk::BufferUsageFlagBits::eTransferDst);
+
+  vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
+                                 vk::BufferCopy(0, 0, size));
+
+  return Ret;
+}
+
+inline auto CreateDynamicBufferOwner(const SourceLocation &location,
+                                     vk::BufferUsageFlagBits bufferType,
+                                     std::size_t size) noexcept {
+  return vulkan::AllocateDynamicBuffer(
+      location, size, bufferType | vk::BufferUsageFlagBits::eTransferDst);
+}
 
 template <typename T>
 struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location,
                      CopyFunc copyFunc) noexcept {
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(
-        location.with_field("UniformBufferUpload"), sizeof(T));
-    copyFunc(UploadBuffer.GetMappedData(), sizeof(T));
-
-    TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
-        vulkan::AllocateStaticBuffer(location.with_field("UniformBuffer"),
-                                     sizeof(T),
-                                     vk::BufferUsageFlagBits::eUniformBuffer);
-
-    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
-                                   vk::BufferCopy(0, 0, sizeof(T)));
-
-    return Ret;
+    return CreateBufferOwner(location, vk::BufferUsageFlagBits::eUniformBuffer,
+                             sizeof(T), copyFunc);
   }
-};
 
-template <typename T>
-struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
-    dynamic_uniform_buffer<T>> {
-  static auto Create(const SourceLocation &location) noexcept {
-    return vulkan::AllocateDynamicBuffer(
-        location.with_field("DynamicUniformBuffer"), sizeof(T),
-        vk::BufferUsageFlagBits::eUniformBuffer);
+  static auto CreateDynamic(const SourceLocation &location) noexcept {
+    return CreateDynamicBufferOwner(
+        location, vk::BufferUsageFlagBits::eUniformBuffer, sizeof(T));
   }
 };
 
@@ -755,37 +781,250 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<vertex_buffer<T>> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location, std::size_t Count,
                      CopyFunc copyFunc) noexcept {
-    std::size_t Size = sizeof(T) * Count;
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(
-        location.with_field("VertexBufferUpload"), Size);
-    copyFunc(UploadBuffer.GetMappedData(), Size);
+    return CreateBufferOwner(location, vk::BufferUsageFlagBits::eVertexBuffer,
+                             sizeof(T) * Count, copyFunc);
+  }
 
-    TargetTraits<Target::VULKAN_SPIRV>::UniformBufferOwner Ret =
-        vulkan::AllocateStaticBuffer(location.with_field("VertexBuffer"), Size,
-                                     vk::BufferUsageFlagBits::eVertexBuffer |
-                                         vk::BufferUsageFlagBits::eTransferDst);
-
-    vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
-                                   vk::BufferCopy(0, 0, Size));
-
-    return Ret;
+  static auto CreateDynamic(const SourceLocation &location,
+                            std::size_t Count) noexcept {
+    return CreateDynamicBufferOwner(
+        location, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(T) * Count);
   }
 };
 
 template <typename T>
-struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
-    dynamic_vertex_buffer<T>> {
-  static auto Create(const SourceLocation &location,
-                     std::size_t Count) noexcept {
-    return vulkan::AllocateDynamicBuffer(
-        location.with_field("DynamicVertexBuffer"), sizeof(T) * Count,
-        vk::BufferUsageFlagBits::eVertexBuffer);
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<index_buffer<T>> {
+  template <typename CopyFunc>
+  static auto Create(const SourceLocation &location, std::size_t Count,
+                     CopyFunc copyFunc) noexcept {
+    return CreateBufferOwner(location, vk::BufferUsageFlagBits::eIndexBuffer,
+                             sizeof(T) * Count, copyFunc);
+  }
+
+  static auto CreateDynamic(const SourceLocation &location,
+                            std::size_t Count) noexcept {
+    return CreateDynamicBufferOwner(
+        location, vk::BufferUsageFlagBits::eIndexBuffer, sizeof(T) * Count);
   }
 };
 
-template <typename TexelType>
-struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
-    texture2d<TexelType>> {
+template <vk::ImageType Type> struct TextureTypeTraits {};
+
+template <> struct TextureTypeTraits<vk::ImageType::e1D> {
+  static constexpr char Name[] = "Texture1D";
+  using ExtentType = uint32_t;
+  static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
+                                   uint32_t texelSize) {
+    return buffer_math::vulkan::MakeCopies1D(extent, layers, texelSize,
+                                             vk::ImageAspectFlagBits::eColor);
+  }
+  static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
+                                  uint32_t texelSize, uint32_t mips) {
+    return buffer_math::MipOffset1D(extent, layers, texelSize, mips);
+  }
+};
+
+template <> struct TextureTypeTraits<vk::ImageType::e2D> {
+  static constexpr char Name[] = "Texture2D";
+  using ExtentType = extent2d;
+  static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
+                                   uint32_t texelSize) {
+    return buffer_math::vulkan::MakeCopies2D(
+        extent.w, extent.h, layers, texelSize, vk::ImageAspectFlagBits::eColor);
+  }
+  static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
+                                  uint32_t texelSize, uint32_t mips) {
+    return buffer_math::MipOffset2D(extent.w, extent.h, layers, texelSize,
+                                    mips);
+  }
+};
+
+template <> struct TextureTypeTraits<vk::ImageType::e3D> {
+  static constexpr char Name[] = "Texture3D";
+  using ExtentType = extent3d;
+  static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
+                                   uint32_t texelSize) {
+    return buffer_math::vulkan::MakeCopies3D(extent.w, extent.h, extent.d,
+                                             texelSize,
+                                             vk::ImageAspectFlagBits::eColor);
+  }
+  static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
+                                  uint32_t texelSize, uint32_t mips) {
+    return buffer_math::MipOffset3D(extent.w, extent.h, extent.d, texelSize,
+                                    mips);
+  }
+};
+
+template <vk::ImageType Type, typename Traits = TextureTypeTraits<Type>,
+          typename CopyFunc>
+inline auto CreateTextureOwner(
+    const SourceLocation &location, vk::ImageViewType imageViewType,
+    typename Traits::ExtentType extent, uint32_t numLayers, Format format,
+    uint32_t numMips, CopyFunc copyFunc, ColorSwizzle redSwizzle,
+    ColorSwizzle greenSwizzle, ColorSwizzle blueSwizzle,
+    ColorSwizzle alphaSwizzle) noexcept {
+  auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelFormat = HshToVkFormat(format);
+  std::array<vk::BufferImageCopy, MaxMipCount> Copies =
+      Traits::MakeCopies(extent, numLayers, TexelSize);
+  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+  auto UploadBuffer = vulkan::AllocateUploadBuffer(location, BufferSize);
+  copyFunc(UploadBuffer.GetMappedData(), BufferSize);
+
+  TargetTraits<Target::VULKAN_SPIRV>::TextureOwner Ret{
+      vulkan::AllocateTexture(
+          location.with_field(Traits::Name),
+          vk::ImageCreateInfo({}, Type, TexelFormat, extent3d(extent), numMips,
+                              numLayers, vk::SampleCountFlagBits::e1,
+                              vk::ImageTiling::eOptimal,
+                              vk::ImageUsageFlagBits::eSampled |
+                                  vk::ImageUsageFlagBits::eTransferDst,
+                              {}, {}, {}, vk::ImageLayout::eUndefined)),
+      {},
+      std::uint8_t(numMips),
+      HshFormatIsInteger(format)};
+  Ret.ImageView =
+      vulkan::Globals.Device
+          .createImageViewUnique(vk::ImageViewCreateInfo(
+              {}, Ret.Allocation.GetImage(), imageViewType, TexelFormat,
+              vk::ComponentMapping(HshToVkComponentSwizzle(redSwizzle),
+                                   HshToVkComponentSwizzle(greenSwizzle),
+                                   HshToVkComponentSwizzle(blueSwizzle),
+                                   HshToVkComponentSwizzle(alphaSwizzle)),
+              vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                        numMips, 0, numLayers)))
+          .value;
+  vulkan::Globals.SetDebugObjectName(location, Ret.ImageView.get());
+
+  vulkan::Globals.Cmd.pipelineBarrier(
+      vk::PipelineStageFlagBits::eTopOfPipe,
+      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+      {}, {},
+      vk::ImageMemoryBarrier(
+          vk::AccessFlagBits(0), vk::AccessFlagBits::eTransferWrite,
+          vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+          Ret.Allocation.GetImage(),
+          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                    VK_REMAINING_MIP_LEVELS, 0,
+                                    VK_REMAINING_ARRAY_LAYERS)));
+  vulkan::Globals.Cmd.copyBufferToImage(
+      UploadBuffer.GetBuffer(), Ret.Allocation.GetImage(),
+      vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
+  vulkan::Globals.Cmd.pipelineBarrier(
+      vk::PipelineStageFlagBits::eTransfer,
+      vk::PipelineStageFlagBits::eVertexShader |
+          vk::PipelineStageFlagBits::eTessellationControlShader |
+          vk::PipelineStageFlagBits::eTessellationEvaluationShader |
+          vk::PipelineStageFlagBits::eGeometryShader |
+          vk::PipelineStageFlagBits::eFragmentShader,
+      vk::DependencyFlagBits::eByRegion, {}, {},
+      vk::ImageMemoryBarrier(
+          vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+          vk::ImageLayout::eTransferDstOptimal,
+          vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED,
+          VK_QUEUE_FAMILY_IGNORED, Ret.Allocation.GetImage(),
+          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                    VK_REMAINING_MIP_LEVELS, 0,
+                                    VK_REMAINING_ARRAY_LAYERS)));
+
+  return Ret;
+}
+
+template <vk::ImageType Type, typename Traits = TextureTypeTraits<Type>>
+inline auto CreateDynamicTextureOwner(
+    const SourceLocation &location, vk::ImageViewType imageViewType,
+    typename Traits::ExtentType extent, uint32_t numLayers, Format format,
+    uint32_t numMips, ColorSwizzle redSwizzle, ColorSwizzle greenSwizzle,
+    ColorSwizzle blueSwizzle, ColorSwizzle alphaSwizzle) noexcept {
+  auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelFormat = HshToVkFormat(format);
+  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+
+  TargetTraits<Target::VULKAN_SPIRV>::DynamicTextureOwner Ret{
+      vulkan::AllocateTexture(
+          location.with_field(Traits::Name),
+          vk::ImageCreateInfo({}, Type, TexelFormat, extent3d(extent), numMips,
+                              numLayers, vk::SampleCountFlagBits::e1,
+                              vk::ImageTiling::eOptimal,
+                              vk::ImageUsageFlagBits::eSampled |
+                                  vk::ImageUsageFlagBits::eTransferDst,
+                              {}, {}, {}, vk::ImageLayout::eUndefined)),
+      vulkan::AllocateDoubleUploadBuffer(location, BufferSize),
+      Traits::MakeCopies(extent, numLayers, TexelSize),
+      {},
+      std::uint8_t(numMips),
+      HshFormatIsInteger(format)};
+  Ret.ImageView =
+      vulkan::Globals.Device
+          .createImageViewUnique(vk::ImageViewCreateInfo(
+              {}, Ret.Allocation.GetImage(), imageViewType, TexelFormat,
+              vk::ComponentMapping(HshToVkComponentSwizzle(redSwizzle),
+                                   HshToVkComponentSwizzle(greenSwizzle),
+                                   HshToVkComponentSwizzle(blueSwizzle),
+                                   HshToVkComponentSwizzle(alphaSwizzle)),
+              vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                        numMips, 0, numLayers)))
+          .value;
+  vulkan::Globals.SetDebugObjectName(location, Ret.ImageView.get());
+
+  return Ret;
+}
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<texture1d> {
+  template <typename CopyFunc>
+  static auto Create(const SourceLocation &location, uint32_t extent,
+                     Format format, uint32_t numMips, CopyFunc copyFunc,
+                     ColorSwizzle redSwizzle = CS_Identity,
+                     ColorSwizzle greenSwizzle = CS_Identity,
+                     ColorSwizzle blueSwizzle = CS_Identity,
+                     ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateTextureOwner<vk::ImageType::e1D>(
+        location, vk::ImageViewType::e1D, extent, 1, format, numMips, copyFunc,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+
+  static auto CreateDynamic(const SourceLocation &location, uint32_t extent,
+                            Format format, uint32_t numMips,
+                            ColorSwizzle redSwizzle = CS_Identity,
+                            ColorSwizzle greenSwizzle = CS_Identity,
+                            ColorSwizzle blueSwizzle = CS_Identity,
+                            ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateDynamicTextureOwner<vk::ImageType::e1D>(
+        location, vk::ImageViewType::e1D, extent, 1, format, numMips,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<texture1d_array> {
+  template <typename CopyFunc>
+  static auto Create(const SourceLocation &location, uint32_t extent,
+                     uint32_t numLayers, Format format, uint32_t numMips,
+                     CopyFunc copyFunc, ColorSwizzle redSwizzle = CS_Identity,
+                     ColorSwizzle greenSwizzle = CS_Identity,
+                     ColorSwizzle blueSwizzle = CS_Identity,
+                     ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateTextureOwner<vk::ImageType::e1D>(
+        location, vk::ImageViewType::e1DArray, extent, numLayers, format,
+        numMips, copyFunc, redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+
+  static auto CreateDynamic(const SourceLocation &location, uint32_t extent,
+                            uint32_t numLayers, Format format, uint32_t numMips,
+                            ColorSwizzle redSwizzle = CS_Identity,
+                            ColorSwizzle greenSwizzle = CS_Identity,
+                            ColorSwizzle blueSwizzle = CS_Identity,
+                            ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateDynamicTextureOwner<vk::ImageType::e1D>(
+        location, vk::ImageViewType::e1DArray, extent, numLayers, format,
+        numMips, redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<texture2d> {
   template <typename CopyFunc>
   static auto Create(const SourceLocation &location, extent2d extent,
                      Format format, uint32_t numMips, CopyFunc copyFunc,
@@ -793,78 +1032,72 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<
                      ColorSwizzle greenSwizzle = CS_Identity,
                      ColorSwizzle blueSwizzle = CS_Identity,
                      ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
-    auto TexelSize = HshFormatToTexelSize(format);
-    auto TexelFormat = HshToVkFormat(format);
-    std::array<vk::BufferImageCopy, MaxMipCount> Copies =
-        buffer_math::vulkan::MakeCopies2D(extent.w, extent.h, TexelSize,
-                                          vk::ImageAspectFlagBits::eColor);
-    auto BufferSize =
-        buffer_math::MipOffset2D(extent.w, extent.h, TexelSize, numMips);
-    auto UploadBuffer = vulkan::AllocateUploadBuffer(
-        location.with_field("TextureUpload"), BufferSize);
-    copyFunc(UploadBuffer.GetMappedData(), BufferSize);
+    return CreateTextureOwner<vk::ImageType::e2D>(
+        location, vk::ImageViewType::e2D, extent, 1, format, numMips, copyFunc,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
 
-    TargetTraits<Target::VULKAN_SPIRV>::TextureOwner Ret{
-        vulkan::AllocateTexture(
-            location.with_field("Texture2D"),
-            vk::ImageCreateInfo({}, vk::ImageType::e2D, TexelFormat,
-                                {extent.w, extent.h, 1}, numMips, 1,
-                                vk::SampleCountFlagBits::e1,
-                                vk::ImageTiling::eOptimal,
-                                vk::ImageUsageFlagBits::eSampled |
-                                    vk::ImageUsageFlagBits::eTransferDst,
-                                {}, {}, {}, vk::ImageLayout::eUndefined)),
-        {},
-        std::uint8_t(numMips),
-        HshFormatIsInteger(format)};
-    Ret.ImageView =
-        vulkan::Globals.Device
-            .createImageViewUnique(vk::ImageViewCreateInfo(
-                {}, Ret.Allocation.GetImage(), vk::ImageViewType::e2D,
-                TexelFormat,
-                vk::ComponentMapping(HshToVkComponentSwizzle(redSwizzle),
-                                     HshToVkComponentSwizzle(greenSwizzle),
-                                     HshToVkComponentSwizzle(blueSwizzle),
-                                     HshToVkComponentSwizzle(alphaSwizzle)),
-                vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                          numMips, 0, 1)))
-            .value;
-    vulkan::Globals.SetDebugObjectName(location.with_field("ImageView"),
-                                       Ret.ImageView.get());
+  static auto CreateDynamic(const SourceLocation &location, extent2d extent,
+                            Format format, uint32_t numMips,
+                            ColorSwizzle redSwizzle = CS_Identity,
+                            ColorSwizzle greenSwizzle = CS_Identity,
+                            ColorSwizzle blueSwizzle = CS_Identity,
+                            ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateDynamicTextureOwner<vk::ImageType::e2D>(
+        location, vk::ImageViewType::e2D, extent, 1, format, numMips,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+};
 
-    vulkan::Globals.Cmd.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
-        {}, {},
-        vk::ImageMemoryBarrier(
-            vk::AccessFlagBits(0), vk::AccessFlagBits::eTransferWrite,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-            Ret.Allocation.GetImage(),
-            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                      VK_REMAINING_MIP_LEVELS, 0,
-                                      VK_REMAINING_ARRAY_LAYERS)));
-    vulkan::Globals.Cmd.copyBufferToImage(
-        UploadBuffer.GetBuffer(), Ret.Allocation.GetImage(),
-        vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
-    vulkan::Globals.Cmd.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eVertexShader |
-            vk::PipelineStageFlagBits::eTessellationControlShader |
-            vk::PipelineStageFlagBits::eTessellationEvaluationShader |
-            vk::PipelineStageFlagBits::eGeometryShader |
-            vk::PipelineStageFlagBits::eFragmentShader,
-        vk::DependencyFlagBits::eByRegion, {}, {},
-        vk::ImageMemoryBarrier(
-            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-            vk::ImageLayout::eTransferDstOptimal,
-            vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED,
-            VK_QUEUE_FAMILY_IGNORED, Ret.Allocation.GetImage(),
-            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                      VK_REMAINING_MIP_LEVELS, 0,
-                                      VK_REMAINING_ARRAY_LAYERS)));
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<texture2d_array> {
+  template <typename CopyFunc>
+  static auto Create(const SourceLocation &location, extent2d extent,
+                     uint32_t numLayers, Format format, uint32_t numMips,
+                     CopyFunc copyFunc, ColorSwizzle redSwizzle = CS_Identity,
+                     ColorSwizzle greenSwizzle = CS_Identity,
+                     ColorSwizzle blueSwizzle = CS_Identity,
+                     ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateTextureOwner<vk::ImageType::e2D>(
+        location, vk::ImageViewType::e2DArray, extent, numLayers, format,
+        numMips, copyFunc, redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
 
-    return Ret;
+  static auto CreateDynamic(const SourceLocation &location, extent2d extent,
+                            uint32_t numLayers, Format format, uint32_t numMips,
+                            ColorSwizzle redSwizzle = CS_Identity,
+                            ColorSwizzle greenSwizzle = CS_Identity,
+                            ColorSwizzle blueSwizzle = CS_Identity,
+                            ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateDynamicTextureOwner<vk::ImageType::e2D>(
+        location, vk::ImageViewType::e2DArray, extent, numLayers, format,
+        numMips, redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<texture3d> {
+  template <typename CopyFunc>
+  static auto Create(const SourceLocation &location, extent3d extent,
+                     Format format, uint32_t numMips, CopyFunc copyFunc,
+                     ColorSwizzle redSwizzle = CS_Identity,
+                     ColorSwizzle greenSwizzle = CS_Identity,
+                     ColorSwizzle blueSwizzle = CS_Identity,
+                     ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateTextureOwner<vk::ImageType::e3D>(
+        location, vk::ImageViewType::e3D, extent, 1, format, numMips, copyFunc,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
+  }
+
+  static auto CreateDynamic(const SourceLocation &location, extent3d extent,
+                            Format format, uint32_t numMips,
+                            ColorSwizzle redSwizzle = CS_Identity,
+                            ColorSwizzle greenSwizzle = CS_Identity,
+                            ColorSwizzle blueSwizzle = CS_Identity,
+                            ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
+    return CreateDynamicTextureOwner<vk::ImageType::e3D>(
+        location, vk::ImageViewType::e3D, extent, 1, format, numMips,
+        redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
   }
 };
 
@@ -1101,12 +1334,12 @@ using ErrorHandler = std::function<void(
 
 struct MyDebugUtilsMessengerCreateInfo : vk::DebugUtilsMessengerCreateInfoEXT {
   static VkBool32
-  Callback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-           vk::DebugUtilsMessageTypeFlagBitsEXT messageTypes,
-           const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
-           ErrorHandler *pUserData) noexcept {
-    (*pUserData)(messageSeverity, messageTypes, *pCallbackData);
-    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+  Callback(vk::DebugUtilsMessageSeverityFlagBitsEXT MessageSeverity,
+           vk::DebugUtilsMessageTypeFlagBitsEXT MessageTypes,
+           const vk::DebugUtilsMessengerCallbackDataEXT *CallbackData,
+           ErrorHandler *UserData) noexcept {
+    (*UserData)(MessageSeverity, MessageTypes, *CallbackData);
+    if (MessageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
       std::abort();
     return VK_FALSE;
   }

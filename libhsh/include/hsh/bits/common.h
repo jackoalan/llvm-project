@@ -13,9 +13,9 @@ enum class ActiveTarget : std::uint8_t {
   MaxActiveTarget
 };
 struct uniform_buffer_typeless;
-struct dynamic_uniform_buffer_typeless;
 struct vertex_buffer_typeless;
-struct dynamic_vertex_buffer_typeless;
+template <typename T>
+struct index_buffer;
 struct texture_typeless;
 struct render_texture2d;
 
@@ -61,9 +61,6 @@ namespace hsh::detail {
 #ifndef HSH_MAX_VERTEX_BUFFERS
 #error HSH_MAX_VERTEX_BUFFERS definition is mandatory!
 #endif
-#ifndef HSH_MAX_INDEX_BUFFERS
-#error HSH_MAX_INDEX_BUFFERS definition is mandatory!
-#endif
 #ifndef HSH_MAX_RENDER_TEXTURE_BINDINGS
 #error HSH_MAX_RENDER_TEXTURE_BINDINGS definition is mandatory!
 #endif
@@ -74,9 +71,11 @@ constexpr uint32_t MaxUniforms = HSH_MAX_UNIFORMS;
 constexpr uint32_t MaxImages = HSH_MAX_IMAGES;
 constexpr uint32_t MaxSamplers = HSH_MAX_SAMPLERS;
 constexpr uint32_t MaxVertexBuffers = HSH_MAX_VERTEX_BUFFERS;
-constexpr uint32_t MaxIndexBuffers = HSH_MAX_INDEX_BUFFERS;
 constexpr uint32_t MaxRenderTextureBindings = HSH_MAX_RENDER_TEXTURE_BINDINGS;
 constexpr uint32_t MaxDescriptorPoolSets = HSH_DESCRIPTOR_POOL_SIZE;
+
+/* Max supported mip count (enough for 16K texture) */
+constexpr uint32_t MaxMipCount = 14;
 
 template <typename T> class ArrayProxy {
 public:
@@ -134,13 +133,15 @@ template <Target T> struct TargetTraits {
   struct UniformBufferOwner {};
   struct UniformBufferBinding {};
   struct DynamicUniformBufferOwner {};
-  struct DynamicUniformBufferBinding {};
   struct VertexBufferOwner {};
   struct VertexBufferBinding {};
   struct DynamicVertexBufferOwner {};
-  struct DynamicVertexBufferBinding {};
+  struct IndexBufferOwner {};
+  struct IndexBufferBinding {};
+  struct DynamicIndexBufferOwner {};
   struct TextureOwner {};
   struct TextureBinding {};
+  struct DynamicTextureOwner {};
   struct RenderTextureOwner {};
   struct RenderTextureBinding {};
   struct SurfaceOwner {};
