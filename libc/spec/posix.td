@@ -4,8 +4,15 @@ def ConstSigSetPtrType : ConstType<SigSetPtrType>;
 def RestrictSigSetType : RestrictedPtrType<SigSetType>;
 def ConstRestrictSigSetType : ConstType<RestrictSigSetType>;
 
+def StructSigaction : NamedType<"struct sigaction">;
+def StructSigactionPtr : PtrType<StructSigaction>;
+def ConstStructSigactionPtr : ConstType<StructSigactionPtr>;
+def RestrictStructSigactionPtr : RestrictedPtrType<StructSigaction>;
+def ConstRestrictStructSigactionPtr : ConstType<RestrictStructSigactionPtr>;
+
 def POSIX : StandardSpec<"POSIX"> {
   NamedType OffTType = NamedType<"off_t">;
+  NamedType SSizeTType = NamedType<"ssize_t">;
 
   HeaderSpec Errno = HeaderSpec<
       "errno.h",
@@ -137,9 +144,19 @@ def POSIX : StandardSpec<"POSIX"> {
   HeaderSpec Signal = HeaderSpec<
       "signal.h",
       [], // Macros
-      [], // Types
+      [
+        SigSetType,
+        StructSigaction,
+      ],
       [], // Enumerations
       [
+        FunctionSpec<
+          "sigaction",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>,
+           ArgSpec<ConstRestrictStructSigactionPtr>,
+           ArgSpec<RestrictStructSigactionPtr>]
+        >,
         FunctionSpec<
           "sigprocmask",
           RetValSpec<IntType>,
@@ -158,9 +175,27 @@ def POSIX : StandardSpec<"POSIX"> {
       ]
   >;
 
+  HeaderSpec UniStd = HeaderSpec<
+    "unistd.h",
+    [], // Macros
+    [
+      SSizeTType,
+      SizeTType,
+    ],
+    [], // Enumerations
+    [
+        FunctionSpec<
+          "write",
+          RetValSpec<SSizeTType>,
+          [ArgSpec<IntType>, ArgSpec<ConstVoidPtr>, ArgSpec<SizeTType>]
+        >,
+    ]
+  >;
+
   let Headers = [
     Errno,
     SysMMan,
     Signal,
+    UniStd,
   ];
 }

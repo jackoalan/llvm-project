@@ -16,7 +16,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
-#include "clang/AST/DependencyFlags.h"
+#include "clang/AST/DependenceFlags.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
@@ -314,6 +314,14 @@ void NestedNameSpecifier::print(raw_ostream &OS, const PrintingPolicy &Policy,
 
       // Print the template argument list.
       printTemplateArgumentList(OS, SpecType->template_arguments(),
+                                InnerPolicy);
+    } else if (const auto *DepSpecType =
+                   dyn_cast<DependentTemplateSpecializationType>(T)) {
+      // Print the template name without its corresponding
+      // nested-name-specifier.
+      OS << DepSpecType->getIdentifier()->getName();
+      // Print the template argument list.
+      printTemplateArgumentList(OS, DepSpecType->template_arguments(),
                                 InnerPolicy);
     } else {
       // Print the type normally

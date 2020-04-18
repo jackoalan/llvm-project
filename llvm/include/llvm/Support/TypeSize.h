@@ -37,6 +37,7 @@ public:
     return { Min * RHS, Scalable };
   }
   ElementCount operator/(unsigned RHS) {
+    assert(Min % RHS == 0 && "Min is not a multiple of RHS.");
     return { Min / RHS, Scalable };
   }
 
@@ -146,6 +147,12 @@ public:
     return (MinSize & 7) == 0;
   }
 
+  // Returns true if the type size is non-zero.
+  bool isNonZero() const { return MinSize != 0; }
+
+  // Returns true if the type size is zero.
+  bool isZero() const { return MinSize == 0; }
+
   // Casts to a uint64_t if this is a fixed-width size.
   //
   // This interface is deprecated and will be removed in a future version
@@ -165,7 +172,7 @@ public:
   //       bail out early for scalable vectors and use getFixedSize()
   //   }
   operator uint64_t() const {
-#ifdef STRICT_IMPLICIT_CONVERSION_TYPESIZE
+#ifdef STRICT_FIXED_SIZE_VECTORS
     return getFixedSize();
 #else
     if (isScalable())

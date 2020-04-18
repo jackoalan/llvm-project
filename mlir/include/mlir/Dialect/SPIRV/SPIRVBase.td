@@ -47,17 +47,11 @@ def SPIRV_Dialect : Dialect {
 
   let cppNamespace = "spirv";
   let hasConstantMaterializer = 1;
+  let hasOperationAttrVerify = 1;
+  let hasRegionArgAttrVerify = 1;
+  let hasRegionResultAttrVerify = 1;
+
   let extraClassDeclaration = [{
-    //===------------------------------------------------------------------===//
-    // Type
-    //===------------------------------------------------------------------===//
-
-    /// Checks if the given `type` is valid in SPIR-V dialect.
-    static bool isValidType(Type type);
-
-    /// Checks if the given `scalar type` is valid in SPIR-V dialect.
-    static bool isValidScalarType(Type type);
-
     //===------------------------------------------------------------------===//
     // Attribute
     //===------------------------------------------------------------------===//
@@ -65,23 +59,6 @@ def SPIRV_Dialect : Dialect {
     /// Returns the attribute name to use when specifying decorations on results
     /// of operations.
     static std::string getAttributeName(Decoration decoration);
-
-    /// Provides a hook for verifying SPIR-V dialect attributes attached to the
-    /// given op.
-    LogicalResult verifyOperationAttribute(Operation *op,
-                                           NamedAttribute attribute) override;
-
-    /// Provides a hook for verifying SPIR-V dialect attributes attached to the
-    /// given op's region argument.
-    LogicalResult verifyRegionArgAttribute(Operation *op, unsigned regionIndex,
-                                           unsigned argIndex,
-                                           NamedAttribute attribute) override;
-
-    /// Provides a hook for verifying SPIR-V dialect attributes attached to the
-    /// given op's region result.
-    LogicalResult verifyRegionResultAttribute(
-        Operation *op, unsigned regionIndex, unsigned resultIndex,
-        NamedAttribute attribute) override;
   }];
 }
 
@@ -3063,9 +3040,6 @@ def SPV_IntVec4 : SPV_Vec4<SPV_Integer>;
 def SPV_IOrUIVec4 : SPV_Vec4<SPV_SignlessOrUnsignedInt>;
 def SPV_Int32Vec4 : SPV_Vec4<AnyI32>;
 
-// TODO(antiagainst): Use a more appropriate way to model optional operands
-class SPV_Optional<Type type> : Variadic<type>;
-
 // TODO(ravishankarm): From 1.4, this should also include Composite type.
 def SPV_SelectType : AnyTypeOf<[SPV_Scalar, SPV_Vector, SPV_AnyPtr]>;
 
@@ -3308,7 +3282,7 @@ def SPV_OpcodeAttr :
 class SPV_Op<string mnemonic, list<OpTrait> traits = []> :
     Op<SPIRV_Dialect, mnemonic, !listconcat(traits, [
          // TODO(antiagainst): We don't need all of the following traits for
-         // every op; only the suitabble ones should be added automatically
+         // every op; only the suitable ones should be added automatically
          // after ODS supports dialect-specific contents.
          DeclareOpInterfaceMethods<QueryMinVersionInterface>,
          DeclareOpInterfaceMethods<QueryMaxVersionInterface>,

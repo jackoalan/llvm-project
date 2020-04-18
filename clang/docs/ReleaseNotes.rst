@@ -57,6 +57,18 @@ Improvements to Clang's diagnostics
 Non-comprehensive list of changes in this release
 -------------------------------------------------
 
+- For the ARM target, C-language intrinsics are now provided for the full Arm
+  v8.1-M MVE instruction set. ``<arm_mve.h>`` supports the complete API defined
+  in the Arm C Language Extensions.
+
+
+* clang adds support for a set of  extended integer types (``_ExtInt(N)``) that
+  permit non-power of 2 integers, exposing the LLVM integer types. Since a major
+  motivating use case for these types is to limit 'bit' usage, these types don't
+  automatically promote to 'int' when operations are done between two ``ExtInt(N)``
+  types, instead math occurs at the size of the largest ``ExtInt(N)`` type.
+
+
 
 New Compiler Flags
 ------------------
@@ -98,6 +110,11 @@ Modified Compiler Flags
 - Duplicate qualifiers on asm statements (ex. `asm volatile volatile ("")`) no
   longer produces a warning via -Wduplicate-decl-specifier, but now an error
   (this matches GCC's behavior).
+- The deprecated argument ``-f[no-]sanitize-recover`` has changed to mean
+  ``-f[no-]sanitize-recover=all`` instead of
+  ``-f[no-]sanitize-recover=undefined,integer`` and is no longer deprecated.
+- The argument to ``-f[no-]sanitize-trap=...`` is now optional and defaults to
+  ``all``.
 
 New Pragmas in Clang
 --------------------
@@ -107,7 +124,9 @@ New Pragmas in Clang
 Attribute Changes in Clang
 --------------------------
 
-- ...
+- Attributes can now be specified by clang plugins. See the
+  `Clang Plugins <ClangPlugins.html#defining-attributes>`_ documentation for
+  details.
 
 Windows Support
 ---------------
@@ -304,7 +323,7 @@ Additional Information
 
 A wide variety of additional information is available on the `Clang web
 page <https://clang.llvm.org/>`_. The web page contains versions of the
-API documentation which are up-to-date with the Subversion version of
+API documentation which are up-to-date with the Git version of
 the source code. You can access versions of these documents specific to
 this release by going into the "``clang/docs/``" directory in the Clang
 tree.

@@ -702,7 +702,7 @@ def skipUnlessHasCallSiteInfo(func):
 
         f = tempfile.NamedTemporaryFile()
         cmd = "echo 'int main() {}' | " \
-              "%s -g -glldb -O1 -Xclang -femit-debug-entry-values -S -emit-llvm -x c -o %s -" % (compiler_path, f.name)
+              "%s -g -glldb -O1 -S -emit-llvm -x c -o %s -" % (compiler_path, f.name)
         if os.popen(cmd).close() is not None:
             return "Compiler can't compile with call site info enabled"
 
@@ -854,3 +854,11 @@ def skipIfAsan(func):
             return "ASAN unsupported"
         return None
     return skipTestIfFn(is_asan)(func)
+
+def skipIfReproducer(func):
+    """Skip this test if the environment is set up to run LLDB with reproducers."""
+    def is_reproducer():
+        if configuration.capture_path or configuration.replay_path:
+            return "reproducers unsupported"
+        return None
+    return skipTestIfFn(is_reproducer)(func)

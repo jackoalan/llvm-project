@@ -398,7 +398,8 @@ static void instantiateOMPDeclareVariantAttr(
 
   // Copy the template version of the OMPTraitInfo and run substitute on all
   // score and condition expressiosn.
-  OMPTraitInfo TI = Attr.getTraitInfos();
+  OMPTraitInfo &TI = S.getASTContext().getNewOMPTraitInfo();
+  TI = *Attr.getTraitInfos();
 
   // Try to substitute template parameters in score and condition expressions.
   auto SubstScoreOrConditionExpr = [&S, Subst](Expr *&E, bool) {
@@ -695,6 +696,10 @@ Decl *TemplateDeclInstantiator::VisitPragmaDetectMismatchDecl(
 Decl *
 TemplateDeclInstantiator::VisitExternCContextDecl(ExternCContextDecl *D) {
   llvm_unreachable("extern \"C\" context cannot be instantiated");
+}
+
+Decl *TemplateDeclInstantiator::VisitMSGuidDecl(MSGuidDecl *D) {
+  llvm_unreachable("GUID declaration cannot be instantiated");
 }
 
 Decl *
