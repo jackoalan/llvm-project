@@ -157,27 +157,6 @@ struct texture_typeless : base_texture {
   template <typename... Args>
   explicit texture_typeless(Args &&... args) noexcept
       : Binding(std::forward<Args>(args)...) {}
-  template <typename T>
-  explicit texture_typeless(texture1d<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texture1d_array<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texture2d<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texture2d_array<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texture3d<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texturecube<T> other) noexcept
-      : Binding(other.Binding) {}
-  template <typename T>
-  explicit texture_typeless(texturecube_array<T> other) noexcept
-      : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::TextureBinding Binding;
   template <typename T> T cast() const noexcept {
@@ -203,11 +182,12 @@ struct texture_typeless : base_texture {
   };
 #else
 #define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
-  template <typename T> struct derived : texture_typeless {                    \
+  struct derived : texture_typeless {                                          \
     using MappedType = void;                                                   \
     template <typename... Args>                                                \
     explicit derived(Args &&... args) noexcept                                 \
         : texture_typeless(std::forward<Args>(args)...) {}                     \
+    template <typename T>                                                      \
     scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
       return {};                                                               \
     }                                                                          \
