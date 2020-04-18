@@ -32,9 +32,9 @@ struct AlphaTraits {
 };
 
 struct Binding {
-  hsh::dynamic_resource_owner<hsh::uniform_buffer<UniformData>> Uniform;
-  hsh::resource_owner<hsh::vertex_buffer<MyFormat>> VBO;
-  hsh::resource_owner<hsh::texture2d> Tex;
+  hsh::dynamic_owner<hsh::uniform_buffer<UniformData>> Uniform;
+  hsh::owner<hsh::vertex_buffer<MyFormat>> VBO;
+  hsh::owner<hsh::texture2d> Tex;
   hsh::binding Binding;
 };
 Binding BuildPipeline();

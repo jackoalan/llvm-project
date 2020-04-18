@@ -129,23 +129,23 @@ struct MaterialInfo {
 };
 
 struct ModelResources {
-  hsh::dynamic_resource_owner<hsh::uniform_buffer<VertUniform<4>>> vu;
-  hsh::dynamic_resource_owner<hsh::uniform_buffer<FragmentUniform<PT_Normal>>> fragu;
-  hsh::dynamic_resource_owner<hsh::uniform_buffer<std::array<TCGMatrix, 8>>> tcgu;
-  hsh::dynamic_resource_owner<hsh::uniform_buffer<ReflectMtx>> refu;
-  hsh::resource_owner<hsh::texture2d> Lightmap;
-  hsh::resource_owner<hsh::texture2d> Diffuse;
-  hsh::resource_owner<hsh::texture2d> Emissive;
-  hsh::resource_owner<hsh::texture2d> Specular;
-  hsh::resource_owner<hsh::texture2d> ExtendedSpecular;
-  hsh::resource_owner<hsh::texture2d> Reflection;
-  hsh::resource_owner<hsh::texture2d> Alpha;
-  hsh::resource_owner<hsh::texture2d> ReflectionIndTex;
-  hsh::resource_owner<hsh::texture2d> ExtTex0;
-  hsh::resource_owner<hsh::texture2d> ExtTex1;
-  hsh::resource_owner<hsh::texture2d> ExtTex2;
-  hsh::resource_owner<hsh::texture2d> dynReflection;
-  hsh::resource_owner<hsh::vertex_buffer<VertData<0, 4, 1>>> vd;
+  hsh::dynamic_owner<hsh::uniform_buffer<VertUniform<4>>> vu;
+  hsh::dynamic_owner<hsh::uniform_buffer<FragmentUniform<PT_Normal>>> fragu;
+  hsh::dynamic_owner<hsh::uniform_buffer<std::array<TCGMatrix, 8>>> tcgu;
+  hsh::dynamic_owner<hsh::uniform_buffer<ReflectMtx>> refu;
+  hsh::owner<hsh::texture2d> Lightmap;
+  hsh::owner<hsh::texture2d> Diffuse;
+  hsh::owner<hsh::texture2d> Emissive;
+  hsh::owner<hsh::texture2d> Specular;
+  hsh::owner<hsh::texture2d> ExtendedSpecular;
+  hsh::owner<hsh::texture2d> Reflection;
+  hsh::owner<hsh::texture2d> Alpha;
+  hsh::owner<hsh::texture2d> ReflectionIndTex;
+  hsh::owner<hsh::texture2d> ExtTex0;
+  hsh::owner<hsh::texture2d> ExtTex1;
+  hsh::owner<hsh::texture2d> ExtTex2;
+  hsh::owner<hsh::texture2d> dynReflection;
+  hsh::owner<hsh::vertex_buffer<VertData<0, 4, 1>>> vd;
 };
 
 ModelInfo CreateModelInfo();

@@ -107,18 +107,17 @@ struct scissor : rect2d {
 namespace hsh {
 
 template <typename T, typename OwnerType = typename decltype(T::Binding)::Owner>
-struct resource_owner_base {
+struct owner_base {
   OwnerType Owner;
 
-  resource_owner_base() noexcept = default;
-  explicit resource_owner_base(decltype(Owner) Owner) noexcept
+  owner_base() noexcept = default;
+  explicit owner_base(decltype(Owner) Owner) noexcept
       : Owner(std::move(Owner)) {}
 
-  resource_owner_base(const resource_owner_base &other) = delete;
-  resource_owner_base &operator=(const resource_owner_base &other) = delete;
-  resource_owner_base(resource_owner_base &&other) noexcept = default;
-  resource_owner_base &
-  operator=(resource_owner_base &&other) noexcept = default;
+  owner_base(const owner_base &other) = delete;
+  owner_base &operator=(const owner_base &other) = delete;
+  owner_base(owner_base &&other) noexcept = default;
+  owner_base &operator=(owner_base &&other) noexcept = default;
 
   operator bool() const noexcept { return Owner.IsValid(); }
 
@@ -129,16 +128,16 @@ struct resource_owner_base {
 };
 
 template <typename T>
-struct dynamic_resource_owner_base
-    : resource_owner_base<T, typename decltype(T::Binding)::DynamicOwner> {
+struct dynamic_owner_base
+    : owner_base<T, typename decltype(T::Binding)::DynamicOwner> {
   using OwnerType = typename decltype(T::Binding)::DynamicOwner;
-  using resource_owner_base<T, OwnerType>::resource_owner_base;
+  using owner_base<T, OwnerType>::owner_base;
   using MappedType = typename T::MappedType;
   MappedType *map() noexcept {
     return reinterpret_cast<MappedType *>(
-        resource_owner_base<T, OwnerType>::Owner.Map());
+        owner_base<T, OwnerType>::Owner.Map());
   }
-  void unmap() noexcept { resource_owner_base<T, OwnerType>::Owner.Unmap(); }
+  void unmap() noexcept { owner_base<T, OwnerType>::Owner.Unmap(); }
   template <typename U,
             std::enable_if_t<
                 std::conjunction_v<std::is_same<U, MappedType>,
@@ -156,83 +155,74 @@ struct dynamic_resource_owner_base
   }
 };
 
-template <typename T> struct resource_owner : resource_owner_base<T> {
-  using resource_owner_base<T>::resource_owner_base;
+template <typename T> struct owner : owner_base<T> {
+  using owner_base<T>::owner_base;
 };
 
-template <typename T>
-struct dynamic_resource_owner : dynamic_resource_owner_base<T> {
-  using dynamic_resource_owner_base<T>::dynamic_resource_owner_base;
+template <typename T> struct dynamic_owner : dynamic_owner_base<T> {
+  using dynamic_owner_base<T>::dynamic_owner_base;
 };
 
 template <>
-struct resource_owner<uniform_buffer_typeless>
-    : resource_owner_base<uniform_buffer_typeless> {
-  using resource_owner_base<uniform_buffer_typeless>::resource_owner_base;
+struct owner<uniform_buffer_typeless> : owner_base<uniform_buffer_typeless> {
+  using owner_base<uniform_buffer_typeless>::owner_base;
 
   template <typename U>
-  resource_owner &
-  operator=(resource_owner<uniform_buffer<U>> &&other) noexcept {
+  owner &operator=(owner<uniform_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <typename T>
-struct dynamic_resource_owner<uniform_buffer<T>>
-    : dynamic_resource_owner_base<uniform_buffer<T>> {
-  using dynamic_resource_owner_base<
-      uniform_buffer<T>>::dynamic_resource_owner_base;
+struct dynamic_owner<uniform_buffer<T>>
+    : dynamic_owner_base<uniform_buffer<T>> {
+  using dynamic_owner_base<uniform_buffer<T>>::dynamic_owner_base;
   using MappedType = typename uniform_buffer<T>::MappedType;
   void load(const MappedType &obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<uniform_buffer<T>>::map();
+    auto *ptr = dynamic_owner_base<uniform_buffer<T>>::map();
     std::memcpy(ptr, &obj, sizeof(MappedType));
-    dynamic_resource_owner_base<uniform_buffer<T>>::unmap();
+    dynamic_owner_base<uniform_buffer<T>>::unmap();
   }
 };
 
 template <>
-struct dynamic_resource_owner<uniform_buffer_typeless>
-    : dynamic_resource_owner_base<uniform_buffer_typeless> {
-  using dynamic_resource_owner_base<
-      uniform_buffer_typeless>::dynamic_resource_owner_base;
+struct dynamic_owner<uniform_buffer_typeless>
+    : dynamic_owner_base<uniform_buffer_typeless> {
+  using dynamic_owner_base<uniform_buffer_typeless>::dynamic_owner_base;
 
   template <typename U> void load(const U &obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<uniform_buffer_typeless>::map();
+    auto *ptr = dynamic_owner_base<uniform_buffer_typeless>::map();
     std::memcpy(ptr, &obj, sizeof(U));
-    dynamic_resource_owner_base<uniform_buffer_typeless>::unmap();
+    dynamic_owner_base<uniform_buffer_typeless>::unmap();
   }
 
   template <typename U>
-  dynamic_resource_owner &
-  operator=(dynamic_resource_owner<uniform_buffer<U>> &&other) noexcept {
+  dynamic_owner &operator=(dynamic_owner<uniform_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <>
-struct resource_owner<vertex_buffer_typeless>
-    : resource_owner_base<vertex_buffer_typeless> {
-  using resource_owner_base<vertex_buffer_typeless>::resource_owner_base;
+struct owner<vertex_buffer_typeless> : owner_base<vertex_buffer_typeless> {
+  using owner_base<vertex_buffer_typeless>::owner_base;
 
   template <typename U>
-  resource_owner &operator=(resource_owner<vertex_buffer<U>> &&other) noexcept {
+  owner &operator=(owner<vertex_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <typename T>
-struct dynamic_resource_owner<vertex_buffer<T>>
-    : dynamic_resource_owner_base<vertex_buffer<T>> {
-  using dynamic_resource_owner_base<
-      vertex_buffer<T>>::dynamic_resource_owner_base;
+struct dynamic_owner<vertex_buffer<T>> : dynamic_owner_base<vertex_buffer<T>> {
+  using dynamic_owner_base<vertex_buffer<T>>::dynamic_owner_base;
   using MappedType = typename vertex_buffer<T>::MappedType;
   void load(detail::ArrayProxy<MappedType> obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<vertex_buffer<T>>::map();
+    auto *ptr = dynamic_owner_base<vertex_buffer<T>>::map();
     std::memcpy(ptr, obj.data(), sizeof(MappedType) * obj.size());
-    dynamic_resource_owner_base<vertex_buffer<T>>::unmap();
+    dynamic_owner_base<vertex_buffer<T>>::unmap();
   }
   template <std::size_t N>
   void load(const std::array<MappedType, N> &Arr) noexcept {
@@ -241,47 +231,42 @@ struct dynamic_resource_owner<vertex_buffer<T>>
 };
 
 template <>
-struct dynamic_resource_owner<vertex_buffer_typeless>
-    : dynamic_resource_owner_base<vertex_buffer_typeless> {
-  using dynamic_resource_owner_base<
-      vertex_buffer_typeless>::dynamic_resource_owner_base;
+struct dynamic_owner<vertex_buffer_typeless>
+    : dynamic_owner_base<vertex_buffer_typeless> {
+  using dynamic_owner_base<vertex_buffer_typeless>::dynamic_owner_base;
 
   template <typename U> void load(detail::ArrayProxy<U> obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<vertex_buffer_typeless>::map();
+    auto *ptr = dynamic_owner_base<vertex_buffer_typeless>::map();
     std::memcpy(ptr, obj.data(), sizeof(U) * obj.size());
-    dynamic_resource_owner_base<vertex_buffer_typeless>::unmap();
+    dynamic_owner_base<vertex_buffer_typeless>::unmap();
   }
 
   template <typename U>
-  dynamic_resource_owner &
-  operator=(resource_owner<vertex_buffer<U>> &&other) noexcept {
+  dynamic_owner &operator=(owner<vertex_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <>
-struct resource_owner<index_buffer_typeless>
-    : resource_owner_base<index_buffer_typeless> {
-  using resource_owner_base<index_buffer_typeless>::resource_owner_base;
+struct owner<index_buffer_typeless> : owner_base<index_buffer_typeless> {
+  using owner_base<index_buffer_typeless>::owner_base;
 
   template <typename U>
-  resource_owner &operator=(resource_owner<index_buffer<U>> &&other) noexcept {
+  owner &operator=(owner<index_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <typename T>
-struct dynamic_resource_owner<index_buffer<T>>
-    : dynamic_resource_owner_base<index_buffer<T>> {
-  using dynamic_resource_owner_base<
-      index_buffer<T>>::dynamic_resource_owner_base;
+struct dynamic_owner<index_buffer<T>> : dynamic_owner_base<index_buffer<T>> {
+  using dynamic_owner_base<index_buffer<T>>::dynamic_owner_base;
   using MappedType = typename index_buffer<T>::MappedType;
   void load(detail::ArrayProxy<MappedType> obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<index_buffer<T>>::map();
+    auto *ptr = dynamic_owner_base<index_buffer<T>>::map();
     std::memcpy(ptr, obj.data(), sizeof(MappedType) * obj.size());
-    dynamic_resource_owner_base<index_buffer<T>>::unmap();
+    dynamic_owner_base<index_buffer<T>>::unmap();
   }
   template <std::size_t N>
   void load(const std::array<MappedType, N> &Arr) noexcept {
@@ -290,56 +275,52 @@ struct dynamic_resource_owner<index_buffer<T>>
 };
 
 template <>
-struct dynamic_resource_owner<index_buffer_typeless>
-    : dynamic_resource_owner_base<index_buffer_typeless> {
-  using dynamic_resource_owner_base<
-      index_buffer_typeless>::dynamic_resource_owner_base;
+struct dynamic_owner<index_buffer_typeless>
+    : dynamic_owner_base<index_buffer_typeless> {
+  using dynamic_owner_base<index_buffer_typeless>::dynamic_owner_base;
 
   template <typename U> void load(detail::ArrayProxy<U> obj) noexcept {
-    auto *ptr = dynamic_resource_owner_base<index_buffer_typeless>::map();
+    auto *ptr = dynamic_owner_base<index_buffer_typeless>::map();
     std::memcpy(ptr, obj.data(), sizeof(U) * obj.size());
-    dynamic_resource_owner_base<index_buffer_typeless>::unmap();
+    dynamic_owner_base<index_buffer_typeless>::unmap();
   }
 
   template <typename U>
-  dynamic_resource_owner &
-  operator=(resource_owner<index_buffer<U>> &&other) noexcept {
+  dynamic_owner &operator=(owner<index_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
 };
 
 template <typename T, typename... Args>
-inline resource_owner<T> create_resource(const SourceLocation &location,
-                                         Args &&... args) noexcept {
-  return resource_owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
+inline owner<T> create_resource(const SourceLocation &location,
+                                Args &&... args) noexcept {
+  return owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
       location, std::forward<Args>(args)...));
 }
 
 template <typename T, typename... Args>
-inline dynamic_resource_owner<T>
-create_dynamic_resource(const SourceLocation &location,
-                        Args &&... args) noexcept {
-  return dynamic_resource_owner<T>(
-      detail::ActiveTargetTraits::CreateDynamicResource<T>(
-          location, std::forward<Args>(args)...));
+inline dynamic_owner<T> create_dynamic_resource(const SourceLocation &location,
+                                                Args &&... args) noexcept {
+  return dynamic_owner<T>(detail::ActiveTargetTraits::CreateDynamicResource<T>(
+      location, std::forward<Args>(args)...));
 }
 
 template <typename T, typename... Args>
-inline resource_owner<T> create_resource(Args &&... args) noexcept {
-  return resource_owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
+inline owner<T> create_resource(Args &&... args) noexcept {
+  return owner<T>(detail::ActiveTargetTraits::CreateResource<T>(
       SourceLocation::current(), std::forward<Args>(args)...));
 }
 
 template <typename T, typename CopyFunc>
-inline resource_owner<uniform_buffer<T>> create_uniform_buffer(
+inline owner<uniform_buffer<T>> create_uniform_buffer(
     CopyFunc copyFunc,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<uniform_buffer<T>>(location, copyFunc);
 }
 
 template <typename T>
-inline resource_owner<uniform_buffer<T>> create_uniform_buffer(
+inline owner<uniform_buffer<T>> create_uniform_buffer(
     const T &data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<uniform_buffer<T>>(
@@ -348,13 +329,13 @@ inline resource_owner<uniform_buffer<T>> create_uniform_buffer(
 }
 
 template <typename T>
-inline dynamic_resource_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
+inline dynamic_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_dynamic_resource<uniform_buffer<T>>(location);
 }
 
 template <typename T>
-inline dynamic_resource_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
+inline dynamic_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
     const T &data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_dynamic_resource<uniform_buffer<T>>(location);
@@ -363,7 +344,7 @@ inline dynamic_resource_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
 }
 
 template <typename T>
-inline resource_owner<vertex_buffer<T>> create_vertex_buffer(
+inline owner<vertex_buffer<T>> create_vertex_buffer(
     detail::ArrayProxy<T> data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<vertex_buffer<T>>(
@@ -373,21 +354,21 @@ inline resource_owner<vertex_buffer<T>> create_vertex_buffer(
 }
 
 template <typename T, std::size_t N>
-inline resource_owner<vertex_buffer<T>> create_vertex_buffer(
+inline owner<vertex_buffer<T>> create_vertex_buffer(
     const std::array<T, N> &Arr,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_vertex_buffer(detail::ArrayProxy<T>(Arr), location);
 }
 
 template <typename T>
-inline dynamic_resource_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
+inline dynamic_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
     std::size_t Size,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_dynamic_resource<vertex_buffer<T>>(location, sizeof(T) * Size);
 }
 
 template <typename T>
-inline dynamic_resource_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
+inline dynamic_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
     detail::ArrayProxy<T> data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_dynamic_resource<vertex_buffer<T>>(location, data.size());
@@ -396,7 +377,7 @@ inline dynamic_resource_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
 }
 
 template <typename T, std::size_t N>
-inline dynamic_resource_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
+inline dynamic_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
     const std::array<T, N> &Arr,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_dynamic_resource<vertex_buffer<T>>(location, N);
@@ -405,7 +386,7 @@ inline dynamic_resource_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
 }
 
 template <typename T>
-inline resource_owner<index_buffer<T>> create_index_buffer(
+inline owner<index_buffer<T>> create_index_buffer(
     detail::ArrayProxy<T> data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<index_buffer<T>>(
@@ -415,21 +396,21 @@ inline resource_owner<index_buffer<T>> create_index_buffer(
 }
 
 template <typename T, std::size_t N>
-inline resource_owner<index_buffer<T>> create_index_buffer(
+inline owner<index_buffer<T>> create_index_buffer(
     const std::array<T, N> &Arr,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_index_buffer(detail::ArrayProxy<T>(Arr), location);
 }
 
 template <typename T>
-inline dynamic_resource_owner<index_buffer<T>> create_dynamic_index_buffer(
+inline dynamic_owner<index_buffer<T>> create_dynamic_index_buffer(
     std::size_t Size,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_dynamic_resource<index_buffer<T>>(location, sizeof(T) * Size);
 }
 
 template <typename T>
-inline dynamic_resource_owner<index_buffer<T>> create_dynamic_index_buffer(
+inline dynamic_owner<index_buffer<T>> create_dynamic_index_buffer(
     detail::ArrayProxy<T> data,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_dynamic_resource<index_buffer<T>>(location, data.size());
@@ -438,7 +419,7 @@ inline dynamic_resource_owner<index_buffer<T>> create_dynamic_index_buffer(
 }
 
 template <typename T, std::size_t N>
-inline dynamic_resource_owner<index_buffer<T>> create_dynamic_index_buffer(
+inline dynamic_owner<index_buffer<T>> create_dynamic_index_buffer(
     const std::array<T, N> &Arr,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   auto ret = create_dynamic_resource<index_buffer<T>>(location, N);
@@ -447,7 +428,7 @@ inline dynamic_resource_owner<index_buffer<T>> create_dynamic_index_buffer(
 }
 
 template <typename CopyFunc>
-inline resource_owner<texture2d> create_texture2d(
+inline owner<texture2d> create_texture2d(
     extent2d extent, Format format, uint32_t numMips, CopyFunc copyFunc,
     ColorSwizzle redSwizzle = CS_Identity,
     ColorSwizzle greenSwizzle = CS_Identity,
@@ -459,7 +440,7 @@ inline resource_owner<texture2d> create_texture2d(
                                     alphaSwizzle);
 }
 
-inline dynamic_resource_owner<texture2d> create_dynamic_texture2d(
+inline dynamic_owner<texture2d> create_dynamic_texture2d(
     extent2d extent, Format format, uint32_t numMips,
     ColorSwizzle redSwizzle = CS_Identity,
     ColorSwizzle greenSwizzle = CS_Identity,
@@ -472,7 +453,7 @@ inline dynamic_resource_owner<texture2d> create_dynamic_texture2d(
 }
 
 template <typename CopyFunc>
-inline resource_owner<texture2d_array> create_texture2d_array(
+inline owner<texture2d_array> create_texture2d_array(
     extent2d extent, uint32_t numLayers, Format format, uint32_t numMips,
     CopyFunc copyFunc, ColorSwizzle redSwizzle = CS_Identity,
     ColorSwizzle greenSwizzle = CS_Identity,
@@ -484,7 +465,7 @@ inline resource_owner<texture2d_array> create_texture2d_array(
       greenSwizzle, blueSwizzle, alphaSwizzle);
 }
 
-inline dynamic_resource_owner<texture2d_array> create_dynamic_texture2d_array(
+inline dynamic_owner<texture2d_array> create_dynamic_texture2d_array(
     extent2d extent, uint32_t numLayers, Format format, uint32_t numMips,
     ColorSwizzle redSwizzle = CS_Identity,
     ColorSwizzle greenSwizzle = CS_Identity,
@@ -496,17 +477,16 @@ inline dynamic_resource_owner<texture2d_array> create_dynamic_texture2d_array(
       blueSwizzle, alphaSwizzle);
 }
 
-template <> struct resource_owner<render_texture2d> {
+template <> struct owner<render_texture2d> {
   typename decltype(render_texture2d::Binding)::Owner Owner;
 
-  resource_owner() noexcept = default;
-  explicit resource_owner(decltype(Owner) Owner) noexcept
-      : Owner(std::move(Owner)) {}
+  owner() noexcept = default;
+  explicit owner(decltype(Owner) Owner) noexcept : Owner(std::move(Owner)) {}
 
-  resource_owner(const resource_owner &other) = delete;
-  resource_owner &operator=(const resource_owner &other) = delete;
-  resource_owner(resource_owner &&other) noexcept = default;
-  resource_owner &operator=(resource_owner &&other) noexcept = default;
+  owner(const owner &other) = delete;
+  owner &operator=(const owner &other) = delete;
+  owner(owner &&other) noexcept = default;
+  owner &operator=(owner &&other) noexcept = default;
 
   render_texture2d get_color(uint32_t idx) const noexcept {
     return {Owner.GetColor(idx)};
@@ -535,32 +515,32 @@ template <> struct resource_owner<render_texture2d> {
   void reset() noexcept { Owner = decltype(Owner){}; }
 };
 
-inline resource_owner<render_texture2d> create_render_texture2d(
+inline owner<render_texture2d> create_render_texture2d(
     surface Surf, uint32_t NumColorBindings = 0, uint32_t NumDepthBindings = 0,
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<render_texture2d>(location, Surf, NumColorBindings,
                                            NumDepthBindings);
 }
 
-template <> struct resource_owner<surface> : resource_owner_base<surface> {
-  using resource_owner_base<surface>::resource_owner_base;
+template <> struct owner<surface> : owner_base<surface> {
+  using owner_base<surface>::owner_base;
   bool acquire_next_image() noexcept {
-    return resource_owner_base<surface>::Owner.AcquireNextImage();
+    return owner_base<surface>::Owner.AcquireNextImage();
   }
   void attach_resize_lambda(
       std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
-    resource_owner_base<surface>::Owner.AttachResizeLambda(std::move(Resize));
+    owner_base<surface>::Owner.AttachResizeLambda(std::move(Resize));
   }
   void attach_deleter_lambda(std::function<void()> &&Del) noexcept {
-    resource_owner_base<surface>::Owner.AttachDeleterLambda(std::move(Del));
+    owner_base<surface>::Owner.AttachDeleterLambda(std::move(Del));
   }
   void set_request_extent(const hsh::extent2d &Ext) noexcept {
-    resource_owner_base<surface>::Owner.SetRequestExtent(Ext);
+    owner_base<surface>::Owner.SetRequestExtent(Ext);
   }
 };
 
 #if HSH_ENABLE_VULKAN
-inline resource_owner<surface> create_surface(
+inline owner<surface> create_surface(
     vk::UniqueSurfaceKHR &&Surface,
     std::function<void(const hsh::extent2d &)> &&ResizeLambda = {},
     std::function<void()> &&DeleterLambda = {},
