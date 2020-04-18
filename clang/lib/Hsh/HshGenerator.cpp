@@ -3286,8 +3286,8 @@ public:
         InterfaceRecord &DRecord = InterStageRecords[D];
         if (MemberExpr *Producer =
                 DRecord.createProducerFieldReference(Context, E)) {
-          auto *AssignOp = new (Context) BinaryOperator(
-              Producer,
+          auto *AssignOp = BinaryOperator::Create(
+              Context, Producer,
               S == From ? E : SRecord.createConsumerFieldReference(Context, E),
               BO_Assign, E->getType(), VK_XValue, OK_Ordinary, {}, {});
           addStageStmt(AssignOp, HshStage(S));
@@ -3454,7 +3454,8 @@ public:
   CreateEnumSizeAssert(ASTContext &Context, DeclContext *DC, FieldDecl *FD) {
     return StaticAssertDecl::Create(
         Context, DC, {},
-        new (Context) BinaryOperator(
+        BinaryOperator::Create(
+            Context,
             new (Context) UnaryExprOrTypeTraitExpr(
                 UETT_SizeOf,
                 new (Context)
@@ -3475,7 +3476,8 @@ public:
                                               CharUnits Offset) {
     return StaticAssertDecl::Create(
         Context, DC, {},
-        new (Context) BinaryOperator(
+        BinaryOperator::Create(
+            Context,
             OffsetOfExpr::Create(Context, Context.IntTy, {},
                                  Context.getTrivialTypeSourceInfo(QualType{
                                      FD->getParent()->getTypeForDecl(), 0}),
@@ -4974,9 +4976,9 @@ class StageStmtPartitioner {
         if (cast<Expr>(LStmt)->getType().isConstQualified())
           ReportConstAssignment(BinOp, Partitioner.Context);
       }
-      return new (Partitioner.Context) BinaryOperator(
-          cast<Expr>(LStmt), cast<Expr>(RStmt), BinOp->getOpcode(),
-          BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
+      return BinaryOperator::Create(
+          Partitioner.Context, cast<Expr>(LStmt), cast<Expr>(RStmt),
+          BinOp->getOpcode(), BinOp->getType(), VK_XValue, OK_Ordinary, {}, {});
     }
 
     bool InMemberExpr = false;
