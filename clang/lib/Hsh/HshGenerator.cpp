@@ -4741,6 +4741,9 @@ class StageStmtPartitioner {
 
     Stmt *DoVisit(Stmt *S, HshStage Stage, bool ScopeBody = false) {
       dumper() << "Visiting for " << Stage << " " << S << "\n";
+      /* For building purposes, ParenExpr passes through unconditionally */
+      if (auto *P = dyn_cast<ParenExpr>(S))
+        return Visit(P, Stage);
       if (auto *E = dyn_cast<Expr>(S))
         S = E->IgnoreParenImpCasts();
       if (isa<DeclStmt>(S) || isa<CaseStmt>(S) || isa<DefaultStmt>(S)) {
@@ -4809,6 +4812,13 @@ class StageStmtPartitioner {
     Stmt *VisitExpr(Expr *E, HshStage) {
       ReportUnsupportedStmt(E, Partitioner.Context);
       return nullptr;
+    }
+
+    Stmt *VisitParenExpr(ParenExpr *P, HshStage Stage) {
+      Stmt *ExprStmt = DoVisit(P->getSubExpr(), Stage);
+      if (!ExprStmt)
+        return {};
+      return new (Partitioner.Context) ParenExpr({}, {}, cast<Expr>(ExprStmt));
     }
 
     Stmt *VisitUnaryOperator(UnaryOperator *UnOp, HshStage Stage) {
