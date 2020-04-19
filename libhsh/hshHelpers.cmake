@@ -155,6 +155,7 @@ function(target_hsh target)
 
     # Hshgen rule here
     add_custom_command(OUTPUT "${out_path}.hshhead" COMMAND "$<TARGET_FILE:hshgen>"
+            "$<$<CONFIG:Debug>:-g>"
             "$<$<BOOL:${inc_prop}>:-I$<JOIN:${inc_prop},;-I>>"
             "$<$<BOOL:${def_prop}>:-D$<JOIN:${def_prop},;-D>>"
             ARGS ${_hsh_args} "${src_path}" "${out_rel}.hshhead"
