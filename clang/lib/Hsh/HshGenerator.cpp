@@ -4613,8 +4613,9 @@ class StageStmtPartitioner {
     }
 
     void VisitMemberExpr(MemberExpr *MemberExpr, HshStage Stage) {
-      if (!InMemberExpr && Partitioner.Builtins.identifyBuiltinType(
-                               MemberExpr->getType()) == HBT_None)
+      if (!InMemberExpr &&
+          !Partitioner.Builtins.checkHshFieldTypeCompatibility(
+              Partitioner.Context, MemberExpr->getMemberDecl()))
         return;
       SaveAndRestore<bool> SavedInMemberExpr(InMemberExpr, true);
       DoVisit(MemberExpr->getBase(), Stage);

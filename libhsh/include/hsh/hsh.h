@@ -242,7 +242,7 @@ struct dynamic_owner<vertex_buffer_typeless>
   }
 
   template <typename U>
-  dynamic_owner &operator=(owner<vertex_buffer<U>> &&other) noexcept {
+  dynamic_owner &operator=(dynamic_owner<vertex_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }
@@ -286,7 +286,7 @@ struct dynamic_owner<index_buffer_typeless>
   }
 
   template <typename U>
-  dynamic_owner &operator=(owner<index_buffer<U>> &&other) noexcept {
+  dynamic_owner &operator=(dynamic_owner<index_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
     return *this;
   }

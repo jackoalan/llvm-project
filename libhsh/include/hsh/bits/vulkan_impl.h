@@ -103,6 +103,7 @@ class DoubleUploadBufferAllocation : public BufferAllocation {
 
 public:
   DoubleUploadBufferAllocation() noexcept = default;
+  vk::DeviceSize GetSecondOffset() const noexcept { return SecondOffset; }
   void *GetMappedData() const noexcept { return MappedData; }
   inline vk::DeviceSize GetOffset() const noexcept;
   void *Map() noexcept {
@@ -1561,13 +1562,13 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies;
 
     DynamicTextureOwner(
-        vulkan::TextureAllocation Allocation,
+        vulkan::TextureAllocation AllocationIn,
         vulkan::DoubleUploadBufferAllocation UploadAllocation,
         std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies,
-        vk::UniqueImageView ImageView, std::uint8_t NumMips,
-        std::uint8_t Integer) noexcept
-        : TextureOwner(std::move(Allocation), std::move(ImageView), NumMips,
-                       Integer),
+        vk::UniqueImageView ImageViewIn, std::uint8_t NumMipsIn,
+        std::uint8_t IntegerIn) noexcept
+        : TextureOwner(std::move(AllocationIn), std::move(ImageViewIn),
+                       NumMipsIn, IntegerIn),
           UploadAllocation(std::move(UploadAllocation)),
           Copies(std::move(Copies)) {}
 

@@ -77,77 +77,6 @@ target_include_directories(hsh INTERFACE "${HSH_INCLUDE_DIR}" ${HSH_EXTRA_INCLUD
 target_compile_definitions(hsh INTERFACE ${HSH_EXTRA_COMPILE_DEFINES})
 
 #
-# gather_include_directories recursively builds a list of include directories
-# across all dependencies.
-#
-
-function(_hsh_gather_include_directories_impl target_name)
-  get_target_property(target_dependencies ${target_name} INTERFACE_LINK_LIBRARIES)
-  foreach(dep ${target_dependencies})
-    if(TARGET ${dep})
-      get_target_property(dep_includes ${dep} INTERFACE_INCLUDE_DIRECTORIES)
-      if(dep_includes)
-        list(APPEND target_includes ${dep_includes})
-      endif()
-      _hsh_gather_include_directories_impl(${dep})
-    endif()
-  endforeach()
-  set(target_includes ${target_includes} PARENT_SCOPE)
-endfunction()
-
-function(hsh_gather_include_directories var target_name)
-  unset(target_includes)
-  get_directory_property(dir_includes INCLUDE_DIRECTORIES)
-  if(dir_includes)
-    list(APPEND target_includes ${dir_includes})
-  endif()
-  get_target_property(target_includes1 ${target_name} INCLUDE_DIRECTORIES)
-  if(target_includes1)
-    list(APPEND target_includes ${target_includes1})
-  endif()
-  get_target_property(target_includes2 ${target_name} INTERFACE_INCLUDE_DIRECTORIES)
-  if(target_includes2)
-    list(APPEND target_includes ${target_includes2})
-  endif()
-  _hsh_gather_include_directories_impl(${target_name})
-  list(REMOVE_DUPLICATES target_includes)
-  set(${var} ${target_includes} PARENT_SCOPE)
-endfunction()
-
-function(_hsh_gather_compile_definitions_impl target_name)
-  get_target_property(target_dependencies ${target_name} INTERFACE_LINK_LIBRARIES)
-  foreach(dep ${target_dependencies})
-    if(TARGET ${dep})
-      get_target_property(dep_defines ${dep} INTERFACE_COMPILE_DEFINITIONS)
-      if(dep_defines)
-        list(APPEND target_defines ${dep_defines})
-      endif()
-      _hsh_gather_compile_definitions_impl(${dep})
-    endif()
-  endforeach()
-  set(target_defines ${target_defines} PARENT_SCOPE)
-endfunction()
-
-function(hsh_gather_compile_definitions var target_name)
-  unset(target_defines)
-  get_directory_property(dir_defines COMPILE_DEFINITIONS)
-  if(dir_defines)
-    list(APPEND target_defines ${dir_defines})
-  endif()
-  get_target_property(target_defines1 ${target_name} COMPILE_DEFINITIONS)
-  if(target_defines1)
-    list(APPEND target_defines ${target_defines1})
-  endif()
-  get_target_property(target_defines2 ${target_name} INTERFACE_COMPILE_DEFINITIONS)
-  if(target_defines2)
-    list(APPEND target_defines ${target_defines2})
-  endif()
-  _hsh_gather_compile_definitions_impl(${target_name})
-  list(REMOVE_DUPLICATES target_defines)
-  set(${var} ${target_defines} PARENT_SCOPE)
-endfunction()
-
-#
 # target_hsh makes all sources of a target individually depend on
 # its own generated hshhead file.
 #
@@ -173,14 +102,8 @@ function(target_hsh target)
 
   # Set includes and defines for CMake target tree
   target_link_libraries(${target} PUBLIC hsh)
-  hsh_gather_include_directories(include_list ${target})
-  foreach(include ${include_list})
-    list(APPEND _hsh_args "-I${include}")
-  endforeach()
-  hsh_gather_compile_definitions(define_list ${target})
-  foreach(define ${define_list})
-    list(APPEND _hsh_args "$<$<BOOL:${define}>:-D${define}>")
-  endforeach()
+  set(inc_prop "$<TARGET_PROPERTY:${target},INCLUDE_DIRECTORIES>")
+  set(def_prop "$<TARGET_PROPERTY:${target},COMPILE_DEFINITIONS>")
 
   # Process each source of target
   get_target_property(bin_dir ${target} BINARY_DIR)
@@ -203,12 +126,13 @@ function(target_hsh target)
     get_source_file_property(src_path "${source}" LOCATION)
     file(RELATIVE_PATH rel_path "${src_dir}" "${src_path}")
     get_filename_component(rel_dir "${rel_path}" DIRECTORY)
+    get_filename_component(rel_name "${rel_path}" NAME)
     if(rel_dir)
       set(rel_dir "${rel_dir}/")
     endif()
     string(REPLACE ".." "__" rel_dir "${rel_dir}")
     set(out_dir "HshFiles/${rel_dir}")
-    set(out_path "${bin_dir}/${out_dir}${rel_path}")
+    set(out_path "${bin_dir}/${out_dir}${rel_name}")
     file(MAKE_DIRECTORY "${bin_dir}/${out_dir}")
     file(RELATIVE_PATH out_rel ${CMAKE_BINARY_DIR} "${out_path}")
 
@@ -231,10 +155,12 @@ function(target_hsh target)
 
     # Hshgen rule here
     add_custom_command(OUTPUT "${out_path}.hshhead" COMMAND "$<TARGET_FILE:hshgen>"
+            "$<$<BOOL:${inc_prop}>:-I$<JOIN:${inc_prop},;-I>>"
+            "$<$<BOOL:${def_prop}>:-D$<JOIN:${def_prop},;-D>>"
             ARGS ${_hsh_args} "${src_path}" "${out_rel}.hshhead"
             -MD -MT "${out_rel}.hshhead" -MF "${out_rel}.hshhead.d" "-hsh-profile=${use_prof}"
             DEPENDS hshgen "${src_path}" "${use_prof}" IMPLICIT_DEPENDS CXX "${src_path}"
-            ${depfile_args} WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+            ${depfile_args} WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" COMMAND_EXPAND_LISTS)
 
     # Make compiled object artifact depend on hshhead (only works for makefiles and ninja)
     set_source_files_properties("${source}" PROPERTIES

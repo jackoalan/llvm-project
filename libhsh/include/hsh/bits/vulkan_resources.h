@@ -945,6 +945,7 @@ inline auto CreateDynamicTextureOwner(
   auto TexelSize = HshFormatToTexelSize(format);
   auto TexelFormat = HshToVkFormat(format);
   auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+  auto UploadBuffer = vulkan::AllocateDoubleUploadBuffer(location, BufferSize);
 
   TargetTraits<Target::VULKAN_SPIRV>::DynamicTextureOwner Ret{
       vulkan::AllocateTexture(
@@ -955,9 +956,10 @@ inline auto CreateDynamicTextureOwner(
                               vk::ImageUsageFlagBits::eSampled |
                                   vk::ImageUsageFlagBits::eTransferDst,
                               {}, {}, {}, vk::ImageLayout::eUndefined)),
-      vulkan::AllocateDoubleUploadBuffer(location, BufferSize),
+      std::move(UploadBuffer),
       {Traits::MakeCopies(extent, numLayers, TexelSize),
-       Traits::MakeCopies(extent, numLayers, TexelSize, BufferSize)},
+       Traits::MakeCopies(extent, numLayers, TexelSize,
+                          UploadBuffer.GetSecondOffset())},
       {},
       std::uint8_t(numMips),
       HshFormatIsInteger(format)};
