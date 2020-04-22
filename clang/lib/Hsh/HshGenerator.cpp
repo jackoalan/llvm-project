@@ -887,12 +887,12 @@ public:
 
     ClassTemplateDecl *getPipelineDecl() const { return PipelineDecl; }
 
-    auto getColorAttachmentArgs(
-        const ClassTemplateSpecializationDecl *PipelineSpec) const {
+    auto
+    getColorAttachmentArgs(const ClassTemplateSpecializationDecl *PipelineSpec,
+                           bool &DualSourceAdded) const {
       assert(PipelineSpec->getSpecializedTemplateOrPartial()
                  .get<ClassTemplateDecl *>() == PipelineDecl);
-      SmallVector<Optional<ArrayRef<TemplateArgument>>, 4> Ret;
-      bool DualSourceAdded = false;
+      SmallVector<ArrayRef<TemplateArgument>, 4> Ret;
       for (const auto &Arg :
            PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
         if (Arg.getKind() == TemplateArgument::Type) {
@@ -900,13 +900,10 @@ public:
                   Arg.getAsType()->getAsCXXRecordDecl())) {
             if (CTD->getSpecializedTemplateOrPartial()
                     .get<ClassTemplateDecl *>() == ColorAttachmentDecl) {
-              Ret.emplace_back(CTD->getTemplateArgs().asArray());
+              Ret.push_back(CTD->getTemplateArgs().asArray());
             }
           } else if (Arg.getAsType()->getAsCXXRecordDecl() == DualSourceDecl) {
-            if (!DualSourceAdded) {
-              DualSourceAdded = true;
-              Ret.emplace_back();
-            }
+            DualSourceAdded = true;
           }
         }
       }
@@ -5561,8 +5558,9 @@ public:
       auto *PipelineSpec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
           PipelineSource->bases_begin()->getType()->getAsCXXRecordDecl());
       const auto &PipelineAttributes = Builtins.getPipelineAttributes();
-      auto ColorAttachmentArgs =
-          PipelineAttributes.getColorAttachmentArgs(PipelineSpec);
+      bool HasDualSource = false;
+      auto ColorAttachmentArgs = PipelineAttributes.getColorAttachmentArgs(
+          PipelineSpec, HasDualSource);
       auto PipelineArgs =
           PipelineAttributes.getPipelineArgs(Context, PipelineSpec);
       auto InShaderPipelineArgs =
@@ -5574,7 +5572,8 @@ public:
         addCoordinatorType(T);
 
       StagesBuilder Builder(Context, Builtins, Specialization,
-                            ColorAttachmentArgs.size());
+                            ColorAttachmentArgs.size() +
+                                (HasDualSource ? 1 : 0));
 
       CXXConstructorDecl *Constructor = nullptr;
       for (auto *Ctor : PipelineSource->ctors()) {
@@ -5799,11 +5798,9 @@ public:
         };
 
         for (const auto &Attachment : ColorAttachmentArgs) {
-          if (Attachment) {
-            InitOS << "      hsh::detail::ColorAttachment{";
-            PrintArguments(*Attachment);
-            InitOS << "},\n";
-          }
+          InitOS << "      hsh::detail::ColorAttachment{";
+          PrintArguments(Attachment);
+          InitOS << "},\n";
         }
 
         InitOS << "    },\n";
