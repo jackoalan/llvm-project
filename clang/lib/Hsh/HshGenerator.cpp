@@ -1007,7 +1007,6 @@ public:
 
 private:
   PipelineAttributes PipelineAttributes;
-  ClassTemplateDecl *BindingRecordType = nullptr;
   ClassTemplateDecl *UniformBufferType = nullptr;
   ClassTemplateDecl *VertexBufferType = nullptr;
   EnumDecl *EnumTarget = nullptr;
@@ -1479,9 +1478,6 @@ public:
     ReportMissingPipelineField(#Name##_ll);
 #include "ShaderInterface.def"
     }
-    BindingRecordType =
-        findClassTemplate("binding_impl"_ll, "hsh"_ll, {}, Context);
-
     UniformBufferType =
         findClassTemplate("uniform_buffer"_ll, "hsh"_ll, {}, Context);
     VertexBufferType =
