@@ -892,6 +892,7 @@ public:
       assert(PipelineSpec->getSpecializedTemplateOrPartial()
                  .get<ClassTemplateDecl *>() == PipelineDecl);
       SmallVector<Optional<ArrayRef<TemplateArgument>>, 4> Ret;
+      bool DualSourceAdded = false;
       for (const auto &Arg :
            PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
         if (Arg.getKind() == TemplateArgument::Type) {
@@ -902,7 +903,10 @@ public:
               Ret.emplace_back(CTD->getTemplateArgs().asArray());
             }
           } else if (Arg.getAsType()->getAsCXXRecordDecl() == DualSourceDecl) {
-            Ret.emplace_back();
+            if (!DualSourceAdded) {
+              DualSourceAdded = true;
+              Ret.emplace_back();
+            }
           }
         }
       }
