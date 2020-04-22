@@ -744,7 +744,7 @@ public:
     ClassTemplateDecl *BaseAttributeDecl = nullptr;
     ClassTemplateDecl *ColorAttachmentDecl = nullptr;
     CXXRecordDecl *DualSourceDecl = nullptr;
-    ClassTemplateDecl *HighPriorityDecl = nullptr;
+    CXXRecordDecl *HighPriorityDecl = nullptr;
     SmallVector<ClassTemplateDecl *, 8> Attributes; // Non-color-attachments
     SmallVector<ClassTemplateDecl *, 1>
         InShaderAttributes; // Just for early depth stencil
@@ -805,9 +805,6 @@ public:
             if (BaseSpec->getTemplateArgs()[0].getAsIntegral().getZExtValue()) {
               ColorAttachmentDecl = CTD;
               return true;
-            } else if (CTD->getName() == "high_priority") {
-              HighPriorityDecl = CTD;
-              return true;
             } else if (BaseSpec->getTemplateArgs()[1]
                            .getAsIntegral()
                            .getZExtValue()) {
@@ -828,6 +825,8 @@ public:
         return true;
       if (CRD->getName() == "dual_source")
         DualSourceDecl = CRD;
+      else if (CRD->getName() == "high_priority")
+        HighPriorityDecl = CRD;
       return true;
     }
 
@@ -997,12 +996,8 @@ public:
       for (const auto &Arg :
            PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
         if (Arg.getKind() == TemplateArgument::Type) {
-          if (auto *CTD = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
-                  Arg.getAsType()->getAsCXXRecordDecl())) {
-            if (CTD->getSpecializedTemplateOrPartial()
-                    .get<ClassTemplateDecl *>() == HighPriorityDecl)
-              if (CTD->getTemplateArgs().size())
-                return !!CTD->getTemplateArgs()[0].getAsIntegral();
+          if (Arg.getAsType()->getAsCXXRecordDecl() == HighPriorityDecl) {
+            return true;
           }
         }
       }

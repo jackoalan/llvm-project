@@ -381,6 +381,7 @@ template <typename Impl> struct DescriptorPoolWrites {
           {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
     static void Add(vertex_buffer_typeless) noexcept {}
+    static void Add(index_buffer_typeless) noexcept {}
     void Add(texture_typeless texture) noexcept {
       auto ImageIdx = ImageIt - ImageBegin;
       auto &Image = *ImageIt++;

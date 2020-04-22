@@ -323,7 +323,7 @@ template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
 template <CullMode CM = CullNone> struct cull_mode : base_attribute<> {};
 template <Compare C = Always> struct depth_compare : base_attribute<> {};
 template <bool W = true> struct depth_write : base_attribute<> {};
-template <bool HP = true> struct high_priority : base_attribute<> {};
+struct high_priority : base_attribute<> {};
 template <bool E = false>
 struct early_depth_stencil : base_attribute<false, true> {};
 template <typename... Attrs> struct pipeline {
