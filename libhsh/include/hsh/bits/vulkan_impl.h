@@ -113,13 +113,15 @@ public:
 
 class DynamicBufferAllocation : public BufferAllocation {
   DoubleUploadBufferAllocation UploadBuffer;
+  vk::DeviceSize Size;
   friend DynamicBufferAllocation
   AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                         vk::BufferUsageFlags usage) noexcept;
   DynamicBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
+                          vk::DeviceSize Size,
                           DoubleUploadBufferAllocation UploadBuffer) noexcept
       : BufferAllocation(BufferIn, AllocationIn),
-        UploadBuffer(std::move(UploadBuffer)) {}
+        UploadBuffer(std::move(UploadBuffer)), Size(Size) {}
 
 public:
   DynamicBufferAllocation() noexcept = default;
@@ -824,7 +826,7 @@ vk::DeviceSize DoubleUploadBufferAllocation::GetOffset() const noexcept {
 void DynamicBufferAllocation::Unmap() noexcept {
   const auto Offset = GetOffset();
   Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
-                         vk::BufferCopy{Offset, 0, UploadBuffer.SecondOffset});
+                         vk::BufferCopy{Offset, 0, Size});
 }
 } // namespace hsh::detail::vulkan
 
@@ -1184,7 +1186,7 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
   HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
 
-  return DynamicBufferAllocation(Buffer, Allocation,
+  return DynamicBufferAllocation(Buffer, Allocation, size,
                                  AllocateDoubleUploadBuffer(location, size));
 }
 
@@ -1704,6 +1706,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vulkan::UniqueDescriptorSet DescriptorSet;
     uint32_t NumVertexBuffers = 0;
     std::array<vk::Buffer, MaxVertexBuffers> VertexBuffers{};
+    static const std::array<vk::DeviceSize, MaxVertexBuffers> VertexOffsets;
     struct BoundIndex {
       vk::Buffer Buffer{};
       vk::IndexType Type{};
@@ -1780,9 +1783,10 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
         vulkan::Globals.Cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                                vulkan::Globals.PipelineLayout,
                                                0, DescriptorSet.Set, {});
-        vulkan::Globals.Cmd.bindVertexBuffers(0, NumVertexBuffers,
-                                              VertexBuffers.data(), {});
-        vulkan::Globals.Cmd.bindIndexBuffer(Index.Buffer, 0, Index.Type);
+        vulkan::Globals.Cmd.bindVertexBuffers(
+            0, NumVertexBuffers, VertexBuffers.data(), VertexOffsets.data());
+        if (Index.Buffer)
+          vulkan::Globals.Cmd.bindIndexBuffer(Index.Buffer, 0, Index.Type);
       }
     }
 
@@ -1824,6 +1828,8 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
 
   template <typename ResTp> struct ResourceFactory {};
 };
+inline const std::array<vk::DeviceSize, MaxVertexBuffers>
+    TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::VertexOffsets{};
 } // namespace hsh::detail
 
 #endif

@@ -70,7 +70,7 @@ VMA_CALL_PRE VkResult VMA_CALL_POST vmaCreateDoubleBuffer(
     VkDeviceSize offset2 = VmaAlignUp<VkDeviceSize>(pBufferCreateInfo->size, align);
 
     VkBufferCreateInfo doubleInfo = *pBufferCreateInfo;
-    doubleInfo.size = offset2 * 2;
+    doubleInfo.size += offset2;
 
     if(secondOffset != VMA_NULL)
     {

@@ -377,7 +377,7 @@ template <typename Impl> struct DescriptorPoolWrites {
                                          VK_WHOLE_SIZE);
       auto &Write = *WriteIt++;
       Write = vk::WriteDescriptorSet(
-          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
+          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBuffer,
           {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
     static void Add(vertex_buffer_typeless) noexcept {}
@@ -1180,7 +1180,7 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
 #if !defined(NDEBUG)
   static constexpr std::string_view WantedLayers[] = {
-      "VK_LAYER_LUNARG_standard_validation"sv,
+      "VK_LAYER_KHRONOS_validation"sv,
   };
 #endif
 
@@ -1265,7 +1265,7 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
 
 #if !defined(NDEBUG)
   static constexpr std::string_view WantedLayers[] = {
-      "VK_LAYER_LUNARG_standard_validation"sv,
+      "VK_LAYER_KHRONOS_validation"sv,
   };
 #endif
 
@@ -1375,7 +1375,7 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
 #pragma GCC diagnostic ignored "-Wuninitialized"
       : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
         Bindings{vk::DescriptorSetLayoutBinding(
-                     USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
+                     USeq, vk::DescriptorType::eUniformBuffer, 1,
                      vk::ShaderStageFlagBits::eAllGraphics)...,
                  vk::DescriptorSetLayoutBinding(
                      hsh::detail::MaxUniforms + ISeq,
