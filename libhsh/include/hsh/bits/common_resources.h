@@ -317,6 +317,7 @@ template <BlendFactor SrcColorBlendFactor = One,
           ColorComponentFlags ColorWriteComponents =
               ColorComponentFlags(CC_Red | CC_Green | CC_Blue | CC_Alpha)>
 struct color_attachment : base_attribute<true> {};
+struct dual_source : base_attribute<true> {};
 template <Topology T = Triangles> struct topology : base_attribute<> {};
 template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
 template <CullMode CM = CullNone> struct cull_mode : base_attribute<> {};

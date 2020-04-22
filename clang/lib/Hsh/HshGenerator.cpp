@@ -743,6 +743,7 @@ public:
     using base = DeclVisitor<PipelineAttributes, bool>;
     ClassTemplateDecl *BaseAttributeDecl = nullptr;
     ClassTemplateDecl *ColorAttachmentDecl = nullptr;
+    CXXRecordDecl *DualSourceDecl = nullptr;
     ClassTemplateDecl *HighPriorityDecl = nullptr;
     SmallVector<ClassTemplateDecl *, 8> Attributes; // Non-color-attachments
     SmallVector<ClassTemplateDecl *, 1>
@@ -822,6 +823,14 @@ public:
       return true;
     }
 
+    bool VisitCXXRecordDecl(CXXRecordDecl *CRD) {
+      if (!InPipelineNS)
+        return true;
+      if (CRD->getName() == "dual_source")
+        DualSourceDecl = CRD;
+      return true;
+    }
+
     static void ValidateAttributeDecl(ASTContext &Context,
                                       ClassTemplateDecl *CTD) {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
@@ -882,7 +891,7 @@ public:
         const ClassTemplateSpecializationDecl *PipelineSpec) const {
       assert(PipelineSpec->getSpecializedTemplateOrPartial()
                  .get<ClassTemplateDecl *>() == PipelineDecl);
-      SmallVector<ArrayRef<TemplateArgument>, 4> Ret;
+      SmallVector<Optional<ArrayRef<TemplateArgument>>, 4> Ret;
       for (const auto &Arg :
            PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
         if (Arg.getKind() == TemplateArgument::Type) {
@@ -890,8 +899,10 @@ public:
                   Arg.getAsType()->getAsCXXRecordDecl())) {
             if (CTD->getSpecializedTemplateOrPartial()
                     .get<ClassTemplateDecl *>() == ColorAttachmentDecl) {
-              Ret.push_back(CTD->getTemplateArgs().asArray());
+              Ret.emplace_back(CTD->getTemplateArgs().asArray());
             }
+          } else if (Arg.getAsType()->getAsCXXRecordDecl() == DualSourceDecl) {
+            Ret.emplace_back();
           }
         }
       }
@@ -5784,9 +5795,11 @@ public:
         };
 
         for (const auto &Attachment : ColorAttachmentArgs) {
-          InitOS << "      hsh::detail::ColorAttachment{";
-          PrintArguments(Attachment);
-          InitOS << "},\n";
+          if (Attachment) {
+            InitOS << "      hsh::detail::ColorAttachment{";
+            PrintArguments(*Attachment);
+            InitOS << "},\n";
+          }
         }
 
         InitOS << "    },\n";
