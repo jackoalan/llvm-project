@@ -1007,6 +1007,8 @@ public:
 
 private:
   PipelineAttributes PipelineAttributes;
+  CXXRecordDecl *BindingRecordType = nullptr;
+  FunctionTemplateDecl *RebindTemplateFunc = nullptr;
   ClassTemplateDecl *UniformBufferType = nullptr;
   ClassTemplateDecl *VertexBufferType = nullptr;
   EnumDecl *EnumTarget = nullptr;
@@ -1398,26 +1400,39 @@ private:
     return nullptr;
   }
 
-  FunctionTemplateDecl *findMethodTemplate(ClassTemplateDecl *Class,
-                                           StringRef Name,
+  FunctionTemplateDecl *findMethodTemplate(CXXRecordDecl *Class, StringRef Name,
                                            ASTContext &Context) const {
-    auto *TemplDecl = Class->getTemplatedDecl();
+    auto ClassName = Class->getName();
+    Class = Class->getDefinition();
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    if (!Class) {
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "definition of %0 is not available; is hsh.h included?"))
+          << ClassName;
+      return nullptr;
+    }
     using FuncTemplIt =
         CXXRecordDecl::specific_decl_iterator<FunctionTemplateDecl>;
     FunctionTemplateDecl *Ret = nullptr;
-    for (FuncTemplIt TI(TemplDecl->decls_begin()), TE(TemplDecl->decls_end());
-         TI != TE; ++TI) {
+    for (FuncTemplIt TI(Class->decls_begin()), TE(Class->decls_end()); TI != TE;
+         ++TI) {
       if (TI->getName() == Name)
         Ret = *TI;
     }
     if (Ret)
       return Ret;
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
     Diags.Report(Diags.getCustomDiagID(
         DiagnosticsEngine::Error, "unable to locate declaration of "
                                   "method template %0::%1; is hsh.h included?"))
         << Class->getName() << Name;
     return nullptr;
+  }
+
+  FunctionTemplateDecl *findMethodTemplate(ClassTemplateDecl *Class,
+                                           StringRef Name,
+                                           ASTContext &Context) const {
+    return findMethodTemplate(Class->getTemplatedDecl(), Name, Context);
   }
 
   VarDecl *findVar(StringRef Name, StringRef SubNS, ASTContext &Context) const {
@@ -1478,6 +1493,10 @@ public:
     ReportMissingPipelineField(#Name##_ll);
 #include "ShaderInterface.def"
     }
+    BindingRecordType = findCXXRecord("binding"_ll, {}, Context);
+    RebindTemplateFunc =
+        findMethodTemplate(BindingRecordType, "_rebind"_ll, Context);
+
     UniformBufferType =
         findClassTemplate("uniform_buffer"_ll, "hsh"_ll, {}, Context);
     VertexBufferType =
@@ -1851,6 +1870,51 @@ public:
         Context.getTemplateSpecializationType(TemplateName(TDecl), Args);
     Underlying = TypeName::getFullyQualifiedType(Underlying, Context);
     return Context.getTrivialTypeSourceInfo(Underlying);
+  }
+
+  QualType getBindingRefType(ASTContext &Context) const {
+    return Context.getLValueReferenceType(
+        QualType{BindingRecordType->getTypeForDecl(), 0});
+  }
+
+  CXXMemberCallExpr *makeSpecializedRebindCall(
+      ASTContext &Context, QualType SpecType, ParmVarDecl *BindingParm,
+      ArrayRef<QualType> CallArgs, ArrayRef<Expr *> CallExprs) const {
+    auto *Args =
+        TemplateArgumentList::CreateCopy(Context, TemplateArgument(SpecType));
+    void *InsertPos;
+    CXXMethodDecl *Method = dyn_cast_or_null<CXXMethodDecl>(
+        RebindTemplateFunc->findSpecialization(Args->asArray(), InsertPos));
+    if (!Method) {
+      Method = CXXMethodDecl::Create(
+          Context, BindingRecordType, {},
+          {RebindTemplateFunc->getDeclName(), {}},
+          Context.getFunctionType(
+              Context.VoidTy, CallArgs,
+              FunctionProtoType::ExtProtoInfo().withExceptionSpec(
+                  EST_BasicNoexcept)),
+          nullptr, SC_None, false, CSK_unspecified, {});
+      Method->setAccess(AS_public);
+      Method->setFunctionTemplateSpecialization(RebindTemplateFunc, Args,
+                                                InsertPos);
+    }
+    auto AValidLocation = Context.getSourceManager().getLocForStartOfFile(
+        Context.getSourceManager().getMainFileID());
+    TemplateArgumentListInfo TemplateArgs(AValidLocation, AValidLocation);
+    TemplateArgs.addArgument(
+        TemplateArgumentLoc(TemplateArgument(SpecType),
+                            Context.getTrivialTypeSourceInfo(SpecType)));
+    return CXXMemberCallExpr::Create(
+        Context,
+        MemberExpr::Create(
+            Context,
+            DeclRefExpr::Create(
+                Context, {}, {}, BindingParm, false, SourceLocation{},
+                BindingParm->getType().getNonReferenceType(), VK_XValue),
+            false, SourceLocation{}, {}, SourceLocation{}, Method,
+            DeclAccessPair::make(Method, AS_public), {}, &TemplateArgs,
+            Method->getType(), VK_XValue, OK_Ordinary, NOUR_None),
+        CallExprs, Context.VoidTy, VK_XValue, {});
   }
 
   const class PipelineAttributes &getPipelineAttributes() const {
@@ -5610,35 +5674,63 @@ public:
       Specialization->addDecl(
           AccessSpecDecl::Create(Context, AS_public, Specialization, {}, {}));
 
-      // Make constructor
+      // Make _rebind
       {
-        SmallVector<QualType, 16> ConstructorArgs;
-        SmallVector<ParmVarDecl *, 16> ConstructorParms;
-        ConstructorArgs.reserve(Constructor->getNumParams());
-        ConstructorParms.reserve(Constructor->getNumParams());
+        SmallVector<QualType, 16> RebindArgs;
+        SmallVector<ParmVarDecl *, 16> RebindParms;
+        SmallVector<QualType, 16> RebindCallArgs;
+        SmallVector<Expr *, 32> RebindCallExprs;
+        RebindArgs.reserve(Constructor->getNumParams() + 1);
+        RebindParms.reserve(Constructor->getNumParams() + 1);
+        RebindCallArgs.reserve(Constructor->getNumParams() +
+                               Builder.getNumSamplerBindings());
+        RebindCallExprs.reserve(RebindCallArgs.size());
+
+        RebindArgs.push_back(TypeName::getFullyQualifiedType(
+            Builtins.getBindingRefType(Context), Context));
+        RebindParms.push_back(ParmVarDecl::Create(
+            Context, Specialization, {}, {}, &Context.Idents.get("__binding"),
+            RebindArgs.back(), {}, SC_None, nullptr));
         for (const auto *Param : Constructor->parameters()) {
-          ConstructorArgs.push_back(
+          RebindArgs.push_back(
               TypeName::getFullyQualifiedType(Param->getType(), Context));
-          ConstructorParms.push_back(ParmVarDecl::Create(
+          RebindParms.push_back(ParmVarDecl::Create(
               Context, Specialization, {}, {}, Param->getIdentifier(),
-              ConstructorArgs.back(), {}, SC_None, nullptr));
+              RebindArgs.back(), {}, SC_None, nullptr));
+          RebindCallArgs.push_back(RebindArgs.back());
+          RebindCallExprs.push_back(DeclRefExpr::Create(
+              Context, {}, {}, RebindParms.back(), false, SourceLocation{},
+              RebindCallArgs.back(), VK_XValue));
+        }
+
+        for (const auto &SamplerBinding : Builder.getSamplerBindings()) {
+          RebindCallExprs.push_back(Builtins.makeSamplerBinding(
+              Context, SamplerBinding.TextureDecl, SamplerBinding.RecordIdx));
+          RebindCallArgs.push_back(TypeName::getFullyQualifiedType(
+              RebindCallExprs.back()->getType(), Context));
         }
 
         CanQualType CDType =
             Specialization->getTypeForDecl()->getCanonicalTypeUnqualified();
-        CXXConstructorDecl *BindingCtor = CXXConstructorDecl::Create(
+
+        CXXMethodDecl *RebindMethod = CXXMethodDecl::Create(
             Context, Specialization, {},
-            {Context.DeclarationNames.getCXXConstructorName(CDType), {}},
+            {Context.DeclarationNames.getIdentifier(
+                 &Context.Idents.get("_rebind")),
+             {}},
             Context.getFunctionType(
-                CDType, ConstructorArgs,
+                Context.VoidTy, RebindArgs,
                 FunctionProtoType::ExtProtoInfo().withExceptionSpec(
                     EST_BasicNoexcept)),
-            {}, {nullptr, ExplicitSpecKind::ResolvedTrue}, false, false,
-            CSK_unspecified);
-        BindingCtor->setParams(ConstructorParms);
-        BindingCtor->setAccess(AS_public);
-        BindingCtor->setBody(CompoundStmt::Create(Context, {}, {}, {}));
-        Specialization->addDecl(BindingCtor);
+            {}, SC_Static, false, CSK_unspecified, {});
+        RebindMethod->setParams(RebindParms);
+        RebindMethod->setAccess(AS_public);
+        RebindMethod->setBody(CompoundStmt::Create(
+            Context,
+            Builtins.makeSpecializedRebindCall(Context, CDType, RebindParms[0],
+                                               RebindCallArgs, RebindCallExprs),
+            {}, {}));
+        Specialization->addDecl(RebindMethod);
       }
 
       // Add per-target shader data vars
@@ -5887,9 +5979,9 @@ public:
     if (CheckConstexprTemplateSpecialization(
             Context, Expansion.Construct->getType(), &NonConstExprs)) {
       *OS << "(hsh::binding &__binding, Res... Resources) noexcept {\n"
-             "  __binding._rebind<::"
+             "  ::"
           << BindingName
-          << ">(Resources...);\n"
+          << "::_rebind(__binding, Resources...);\n"
              "}\n};\n"
              "#define "
           << Expansion.Name << "(...) _bind<::" << Expansion.Name << ">(";
@@ -5988,8 +6080,7 @@ public:
           void print(raw_ostream &OS, const PrintingPolicy &Policy,
                      StringRef BindingName, unsigned Indentation = 0) const {
             if (Leaf) {
-              indent(OS, Indentation)
-                  << "__binding._rebind<::" << BindingName << '<';
+              indent(OS, Indentation) << "::" << BindingName << '<';
               bool NeedsArgComma = false;
               for (auto &Arg : Leaf->getTemplateArgs().asArray()) {
                 if (NeedsArgComma)
@@ -5998,7 +6089,7 @@ public:
                   NeedsArgComma = true;
                 Arg.print(Policy, OS);
               }
-              OS << ">>(Resources...); return;\n";
+              OS << ">>::_rebind(__binding, Resources...); return;\n";
             } else if (!Name.empty()) {
               if (IntCast)
                 indent(OS, Indentation) << "switch (int(" << Name << ")) {\n";

@@ -377,8 +377,8 @@ template <typename Impl> struct DescriptorPoolWrites {
                                          VK_WHOLE_SIZE);
       auto &Write = *WriteIt++;
       Write = vk::WriteDescriptorSet(
-          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBuffer,
-          {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
+          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBuffer, {},
+          reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
     static void Add(vertex_buffer_typeless) noexcept {}
     static void Add(index_buffer_typeless) noexcept {}
@@ -1125,11 +1125,12 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
 
 template <>
 struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<surface> {
-  static auto Create(const SourceLocation &location,
-                     vk::UniqueSurfaceKHR &&Surface,
-                     std::function<void(const hsh::extent2d &)> &&ResizeLambda,
-                     std::function<void()> &&DeleterLambda,
-                     const hsh::extent2d &RequestExtent) noexcept {
+  static auto
+  Create(const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
+         std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+             &&ResizeLambda,
+         std::function<void()> &&DeleterLambda,
+         const hsh::extent2d &RequestExtent) noexcept {
     vulkan::Globals.SetDebugObjectName(location.with_field("Surface"),
                                        Surface.get());
     if (!vulkan::Globals.CheckSurfaceSupported(Surface.get()))

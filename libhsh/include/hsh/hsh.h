@@ -26,6 +26,20 @@ struct offset2d {
   constexpr offset2d(vk::Offset2D off) noexcept : x(off.x), y(off.y) {}
   operator vk::Offset2D() const noexcept { return vk::Offset2D(x, y); }
 #endif
+  offset2d operator+(const offset2d &other) const noexcept {
+    return {x + other.x, y + other.y};
+  }
+  offset2d &operator+=(const offset2d &other) noexcept {
+    *this = *this + other;
+    return *this;
+  }
+  offset2d operator-(const offset2d &other) const noexcept {
+    return {x - other.x, y - other.y};
+  }
+  offset2d &operator-=(const offset2d &other) noexcept {
+    *this = *this - other;
+    return *this;
+  }
 };
 struct offset2dF {
   double x, y;
@@ -528,8 +542,12 @@ template <> struct owner<surface> : owner_base<surface> {
     return owner_base<surface>::Owner.AcquireNextImage();
   }
   void attach_resize_lambda(
-      std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+      std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+          &&Resize) noexcept {
     owner_base<surface>::Owner.AttachResizeLambda(std::move(Resize));
+  }
+  void attach_decoration_lambda(std::function<void()> &&Dec) noexcept {
+    owner_base<surface>::Owner.AttachDecorationLambda(std::move(Dec));
   }
   void attach_deleter_lambda(std::function<void()> &&Del) noexcept {
     owner_base<surface>::Owner.AttachDeleterLambda(std::move(Del));
@@ -537,12 +555,16 @@ template <> struct owner<surface> : owner_base<surface> {
   void set_request_extent(const hsh::extent2d &Ext) noexcept {
     owner_base<surface>::Owner.SetRequestExtent(Ext);
   }
+  void set_margins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {
+    owner_base<surface>::Owner.SetMargins(L, R, T, B);
+  }
 };
 
 #if HSH_ENABLE_VULKAN
 inline owner<surface> create_surface(
     vk::UniqueSurfaceKHR &&Surface,
-    std::function<void(const hsh::extent2d &)> &&ResizeLambda = {},
+    std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+        &&ResizeLambda = {},
     std::function<void()> &&DeleterLambda = {},
     const hsh::extent2d &RequestExtent = {},
     const SourceLocation &location = SourceLocation::current()) noexcept {

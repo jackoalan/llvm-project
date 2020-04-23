@@ -160,6 +160,20 @@ public:
   vk::Image GetImage() const noexcept { return Image; }
 };
 
+struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
+  std::array<vk::ClearValue, 2> ClearValues;
+  RenderPassBeginInfo() = default;
+  RenderPassBeginInfo(vk::RenderPass RenderPass, vk::Framebuffer Framebuffer,
+                      vk::Extent2D Extent) noexcept
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+      : vk::RenderPassBeginInfo(RenderPass, Framebuffer, vk::Rect2D({}, Extent),
+                                ClearValues.size(), ClearValues.data()),
+#pragma GCC diagnostic pop
+        ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {
+  }
+};
+
 class SurfaceAllocation {
   friend class DeletedSurfaceAllocation;
   friend class RenderTextureAllocation;
@@ -167,21 +181,34 @@ class SurfaceAllocation {
   SourceLocation Location;
   vk::UniqueSurfaceKHR Surface;
   vk::UniqueSwapchainKHR Swapchain;
-  vk::UniqueRenderPass OwnedRenderPass;
-  std::vector<vk::Image> SwapchainImages;
+  vk::UniqueRenderPass OwnedRenderPass, OwnedDirectRenderPass;
+  struct SwapchainImage {
+    vk::Image Image;
+    vk::UniqueImageView ColorView;
+    vk::UniqueFramebuffer Framebuffer;
+    RenderPassBeginInfo RenderPassBegin;
+  };
+  std::vector<SwapchainImage> SwapchainImages;
   vk::Extent2D Extent;
+  int32_t MarginL = 0, MarginR = 0, MarginT = 0, MarginB = 0;
   vk::SurfaceFormatKHR SurfaceFormat;
   uint32_t NextImage = UINT32_MAX;
-  std::function<void(const hsh::extent2d &)> ResizeLambda;
+  std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+      ResizeLambda;
+  std::function<void()> DecorationLambda;
   std::function<void()> DeleterLambda;
   vk::Extent2D RequestExtent;
   bool RequestExtentPending = true;
+
+  inline vk::Viewport ProcessMargins(vk::Viewport vp) noexcept;
+  inline vk::Rect2D ProcessMargins(vk::Rect2D s) noexcept;
 
 public:
   inline ~SurfaceAllocation() noexcept;
   inline explicit SurfaceAllocation(
       const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
-      std::function<void(const hsh::extent2d &)> &&ResizeLambda,
+      std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+          &&ResizeLambda,
       std::function<void()> &&DeleterLambda,
       const hsh::extent2d &RequestExtent) noexcept;
   SurfaceAllocation(const SurfaceAllocation &other) = delete;
@@ -191,10 +218,20 @@ public:
   inline bool PreRender() noexcept;
   inline bool AcquireNextImage() noexcept;
   inline void AttachResizeLambda(
-      std::function<void(const hsh::extent2d &)> &&Resize) noexcept;
+      std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+          &&Resize) noexcept;
+  inline void AttachDecorationLambda(std::function<void()> &&Dec) noexcept;
   inline void AttachDeleterLambda(std::function<void()> &&Del) noexcept;
   inline void SetRequestExtent(const hsh::extent2d &Ext) noexcept;
   inline void PostRender() noexcept;
+  inline vk::Extent2D ContentExtent() const noexcept;
+  inline void DrawDecorations() noexcept;
+  void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {
+    MarginL = L;
+    MarginR = R;
+    MarginT = T;
+    MarginB = B;
+  }
   const vk::Extent2D &GetExtent() const noexcept { return Extent; }
   vk::Format GetColorFormat() const noexcept { return SurfaceFormat.format; }
   SurfaceAllocation *GetNext() const noexcept { return Next; }
@@ -204,7 +241,7 @@ class RenderTextureAllocation {
   friend class DeletedRenderTextureAllocation;
   RenderTextureAllocation *Prev = nullptr, *Next = nullptr;
   SourceLocation Location;
-  SurfaceAllocation *Surface;
+  SurfaceAllocation *Surface = nullptr;
   vk::Extent2D Extent;
   vk::Format ColorFormat = vk::Format::eUndefined;
   uint32_t NumColorBindings, NumDepthBindings;
@@ -213,20 +250,7 @@ class RenderTextureAllocation {
   TextureAllocation DepthTexture;
   vk::UniqueImageView DepthView;
   vk::UniqueFramebuffer Framebuffer;
-  struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
-    std::array<vk::ClearValue, 2> ClearValues;
-    RenderPassBeginInfo() = default;
-    RenderPassBeginInfo(vk::RenderPass RenderPass, vk::Framebuffer Framebuffer,
-                        vk::Extent2D Extent) noexcept
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-        : vk::RenderPassBeginInfo(RenderPass, Framebuffer,
-                                  vk::Rect2D({}, Extent), ClearValues.size(),
-                                  ClearValues.data()),
-#pragma GCC diagnostic pop
-          ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {
-    }
-  } RenderPassBegin;
+  RenderPassBeginInfo RenderPassBegin;
   struct Binding {
     TextureAllocation Texture;
     vk::UniqueImageView ImageView;
@@ -262,9 +286,10 @@ public:
   void PreRender() noexcept {
     if (Surface) {
       auto &SurfAlloc = *Surface;
-      if (SurfAlloc.GetExtent() != Extent ||
+      auto SurfContentExtent = SurfAlloc.ContentExtent();
+      if (SurfContentExtent != Extent ||
           SurfAlloc.GetColorFormat() != ColorFormat) {
-        Extent = SurfAlloc.GetExtent();
+        Extent = SurfContentExtent;
         ColorFormat = SurfAlloc.GetColorFormat();
         Prepare();
       }
@@ -468,7 +493,7 @@ struct VulkanGlobals {
   vk::Queue Queue;
   vk::PipelineMultisampleStateCreateInfo MultisampleState{
       {}, vk::SampleCountFlagBits::e1};
-  vk::RenderPass RenderPass;
+  vk::RenderPass RenderPass, DirectRenderPass;
   float Anisotropy = 0.f;
   unsigned DynamicBufferIndex = 0;
   vk::DeviceSize DynamicBufferMask = 0;
@@ -537,6 +562,11 @@ struct VulkanGlobals {
     return RenderPass;
   }
 
+  vk::RenderPass GetDirectRenderPass() const noexcept {
+    assert(DirectRenderPass && "No surfaces created yet");
+    return DirectRenderPass;
+  }
+
   bool CheckSurfaceSupported(vk::SurfaceKHR Surface) const noexcept {
     return PhysDevice.getSurfaceSupportKHR(QueueFamilyIdx, Surface).value ==
            VK_TRUE;
@@ -588,6 +618,23 @@ template <typename Mgr> inline void WritePipelineCache(Mgr &M) noexcept {
       Globals.PipelineCacheUUID);
 }
 
+inline vk::Viewport
+SurfaceAllocation::ProcessMargins(vk::Viewport vp) noexcept {
+  vp.x += MarginL;
+  vp.y += MarginT;
+  vp.width -= MarginL + MarginR;
+  vp.height -= MarginT + MarginB;
+  return vp;
+}
+
+inline vk::Rect2D SurfaceAllocation::ProcessMargins(vk::Rect2D s) noexcept {
+  s.offset.x += MarginL;
+  s.offset.y += MarginT;
+  s.extent.width -= MarginL + MarginR;
+  s.extent.height -= MarginT + MarginB;
+  return s;
+}
+
 bool SurfaceAllocation::PreRender() noexcept {
   auto Capabilities =
       Globals.PhysDevice.getSurfaceCapabilitiesKHR(Surface.get()).value;
@@ -626,12 +673,40 @@ bool SurfaceAllocation::PreRender() noexcept {
             .value;
     Globals.SetDebugObjectName(Location.with_field("Swapchain"),
                                Swapchain.get());
-    SwapchainImages = Globals.Device.getSwapchainImagesKHR(*Swapchain).value;
+    auto Images = Globals.Device.getSwapchainImagesKHR(*Swapchain).value;
+    SwapchainImages.clear();
+    SwapchainImages.reserve(Images.size());
+    uint32_t Idx = 0;
+    for (auto &Image : Images) {
+      auto &Out = SwapchainImages.emplace_back();
+      Out.Image = Image;
+      Out.ColorView = Globals.Device
+                          .createImageViewUnique(vk::ImageViewCreateInfo(
+                              {}, Out.Image, vk::ImageViewType::e2D,
+                              SurfaceFormat.format, {},
+                              vk::ImageSubresourceRange(
+                                  vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)))
+                          .value;
+      Globals.SetDebugObjectName(Location.with_field("SCColorView", Idx),
+                                 Out.ColorView.get());
+      vk::ImageView Views[] = {Out.ColorView.get()};
+      auto RenderPass = Globals.GetDirectRenderPass();
+      Out.Framebuffer =
+          Globals.Device
+              .createFramebufferUnique(vk::FramebufferCreateInfo(
+                  {}, RenderPass, 1, Views, Extent.width, Extent.height, 1))
+              .value;
+      Globals.SetDebugObjectName(Location.with_field("SCFramebuffer", Idx),
+                                 Out.Framebuffer.get());
+      Out.RenderPassBegin =
+          RenderPassBeginInfo(RenderPass, Out.Framebuffer.get(), Extent);
+      ++Idx;
+    }
     Extent = Capabilities.currentExtent;
     assert((!Next || SurfaceFormat.format == Next->SurfaceFormat.format) &&
            "Subsequent surfaces must have the same color format");
     if (ResizeLambda)
-      ResizeLambda(Extent);
+      ResizeLambda(Extent, ContentExtent());
     return true;
   }
   return false;
@@ -648,8 +723,14 @@ bool SurfaceAllocation::AcquireNextImage() noexcept {
 }
 
 void SurfaceAllocation::AttachResizeLambda(
-    std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+    std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+        &&Resize) noexcept {
   ResizeLambda = std::move(Resize);
+}
+
+void SurfaceAllocation::AttachDecorationLambda(
+    std::function<void()> &&Dec) noexcept {
+  DecorationLambda = std::move(Dec);
 }
 
 void SurfaceAllocation::AttachDeleterLambda(
@@ -672,6 +753,21 @@ void SurfaceAllocation::PostRender() noexcept {
       Globals.Queue.presentKHR(&Info);
     }
     NextImage = UINT32_MAX;
+  }
+}
+
+vk::Extent2D SurfaceAllocation::ContentExtent() const noexcept {
+  return vk::Extent2D{Extent.width - MarginL - MarginR,
+                      Extent.height - MarginT - MarginB};
+}
+
+void SurfaceAllocation::DrawDecorations() noexcept {
+  if (DecorationLambda) {
+    auto &DstImage = SwapchainImages[NextImage];
+    Globals.Cmd.beginRenderPass(DstImage.RenderPassBegin,
+                                vk::SubpassContents::eInline);
+    DecorationLambda();
+    Globals.Cmd.endRenderPass();
   }
 }
 
@@ -714,7 +810,8 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
 
 SurfaceAllocation::SurfaceAllocation(
     const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
-    std::function<void(const hsh::extent2d &)> &&ResizeLambda,
+    std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+        &&ResizeLambda,
     std::function<void()> &&DeleterLambda,
     const hsh::extent2d &RequestExtent) noexcept
     : Next(Globals.SurfaceHead), Location(location),
@@ -779,6 +876,37 @@ SurfaceAllocation::SurfaceAllocation(
     Globals.SetDebugObjectName(location.with_field("OwnedRenderPass"),
                                OwnedRenderPass.get());
     Globals.RenderPass = OwnedRenderPass.get();
+
+    struct DirectRenderPassCreateInfo : vk::RenderPassCreateInfo {
+      std::array<vk::AttachmentDescription, 1> Attachments;
+      std::array<vk::SubpassDescription, 1> Subpasses;
+      vk::AttachmentReference ColorRef{
+          0, vk::ImageLayout::eColorAttachmentOptimal};
+      constexpr DirectRenderPassCreateInfo(vk::Format colorFormat) noexcept
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+          : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
+                                     Subpasses.size(), Subpasses.data()),
+#pragma GCC diagnostic pop
+            Attachments{vk::AttachmentDescription(
+                {}, colorFormat, vk::SampleCountFlagBits::e1,
+                vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
+                vk::AttachmentLoadOp::eDontCare,
+                vk::AttachmentStoreOp::eDontCare,
+                vk::ImageLayout::eColorAttachmentOptimal,
+                vk::ImageLayout::eColorAttachmentOptimal)},
+            Subpasses{vk::SubpassDescription(
+                {}, vk::PipelineBindPoint::eGraphics, {}, {}, 1, &ColorRef)} {
+      }
+    };
+    OwnedDirectRenderPass =
+        Globals.Device
+            .createRenderPassUnique(
+                DirectRenderPassCreateInfo(GetColorFormat()))
+            .value;
+    Globals.SetDebugObjectName(location.with_field("OwnedDirectRenderPass"),
+                               OwnedDirectRenderPass.get());
+    Globals.DirectRenderPass = OwnedDirectRenderPass.get();
   }
 }
 
@@ -1385,12 +1513,13 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
                                              bool Reattach) noexcept {
   assert(Surface->NextImage != UINT32_MAX &&
          "acquireNextImage not called on surface for this frame");
-  assert(Surface->Extent == Extent &&
+  auto SurfaceContentExtent = Surface->ContentExtent();
+  assert(SurfaceContentExtent == Extent &&
          "Mismatched render texture / surface extents");
   bool DelimitRenderPass = this == Globals.AttachedRenderTexture;
   if (DelimitRenderPass)
     Globals.Cmd.endRenderPass();
-  auto DstImage = Surface->SwapchainImages[Surface->NextImage];
+  auto &DstImage = Surface->SwapchainImages[Surface->NextImage];
   Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
@@ -1398,12 +1527,15 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
       vk::ImageMemoryBarrier(
           vk::AccessFlagBits::eMemoryRead, vk::AccessFlagBits::eTransferWrite,
           vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
-  _Resolve(ColorTexture.GetImage(), DstImage, vk::ImageAspectFlagBits::eColor,
-           vk::Offset3D(), vk::Extent3D(Extent, 1));
+  _Resolve(ColorTexture.GetImage(), DstImage.Image,
+           vk::ImageAspectFlagBits::eColor,
+           vk::Offset3D(Surface->MarginL, Surface->MarginT),
+           vk::Extent3D(Extent, 1));
+  Surface->DrawDecorations();
   Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
@@ -1411,7 +1543,7 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
       vk::ImageMemoryBarrier(
           vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eMemoryRead,
           vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
-          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
@@ -1691,14 +1823,21 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     operator SurfaceBinding() const noexcept { return GetBinding(); }
     bool AcquireNextImage() noexcept { return Allocation->AcquireNextImage(); }
     void AttachResizeLambda(
-        std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+        std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+            &&Resize) noexcept {
       Allocation->AttachResizeLambda(std::move(Resize));
+    }
+    void AttachDecorationLambda(std::function<void()> &&Dec) noexcept {
+      Allocation->AttachDecorationLambda(std::move(Dec));
     }
     void AttachDeleterLambda(std::function<void()> &&Del) noexcept {
       Allocation->AttachDeleterLambda(std::move(Del));
     }
     void SetRequestExtent(const hsh::extent2d &Ext) noexcept {
       Allocation->SetRequestExtent(Ext);
+    }
+    void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {
+      Allocation->SetMargins(L, R, T, B);
     }
   };
   struct PipelineBinding {

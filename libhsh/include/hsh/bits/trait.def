@@ -181,9 +181,17 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       return false;
     }
   }
-  void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept {
+  void AttachResizeLambda(std::function<void(const hsh::extent2d &, const hsh::extent2d &)> &&Resize) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.AttachResizeLambda(std::move(Resize)); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  void AttachDecorationLambda(std::function<void()> &&Dec) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.AttachDecorationLambda(std::move(Dec)); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -200,6 +208,14 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
   void SetRequestExtent(const hsh::extent2d &Ext) noexcept {
     switch (CurrentTarget) {
 #define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.SetRequestExtent(Ext); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.SetMargins(L, R, T, B); break;
 #include "targets.def"
     default:
       assert(false && "unhandled case");
@@ -283,9 +299,11 @@ void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept { 
 #ifdef HSH_SURFACE_OWNER
 #define HSH_ACTIVE_TARGET(Enumeration) \
 bool AcquireNextImage() noexcept { return _##Enumeration.AcquireNextImage(); } \
-void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept { _##Enumeration.AttachResizeLambda(std::move(Resize)); } \
+void AttachResizeLambda(std::function<void(const hsh::extent2d &, const hsh::extent2d &)> &&Resize) noexcept { _##Enumeration.AttachResizeLambda(std::move(Resize)); } \
+void AttachDecorationLambda(std::function<void()> &&Dec) noexcept { _##Enumeration.AttachDecorationLambda(std::move(Dec)); } \
 void AttachDeleterLambda(std::function<void()> &&Del) noexcept { _##Enumeration.AttachDeleterLambda(std::move(Del)); } \
-void SetRequestExtent(const hsh::extent2d &Ext) noexcept { _##Enumeration.SetRequestExtent(Ext); }
+void SetRequestExtent(const hsh::extent2d &Ext) noexcept { _##Enumeration.SetRequestExtent(Ext); } \
+void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept { _##Enumeration.SetMargins(L, R, T, B); }
 #include "targets.def"
 #endif
 #ifdef HSH_PIPELINE_BINDING
@@ -331,9 +349,11 @@ void ResolveDepthBinding(uint32_t idx, rect2d region, bool reattach) noexcept {}
 #endif
 #ifdef HSH_SURFACE_OWNER
 bool AcquireNextImage() noexcept { return false; }
-void AttachResizeLambda(std::function<void(const hsh::extent2d &)> &&Resize) noexcept {}
+void AttachResizeLambda(std::function<void(const hsh::extent2d &, const hsh::extent2d &)> &&Resize) noexcept {}
+void AttachDecorationLambda(std::function<void()> &&Dec) noexcept {}
 void AttachDeleterLambda(std::function<void()> &&Del) noexcept {}
 void SetRequestExtent(const hsh::extent2d &Ext) noexcept {}
+void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {}
 #endif
 #ifdef HSH_PIPELINE_BINDING
 template <typename Impl, typename... Args>
