@@ -479,9 +479,9 @@ struct ColorAttachment {
   enum ColorComponentFlags ColorWriteComponents =
       ColorComponentFlags(CC_Red | CC_Green | CC_Blue | CC_Alpha);
   constexpr bool blendEnabled() const noexcept {
-    return SrcColorBlendFactor == One && DstColorBlendFactor == Zero &&
-           ColorBlendOp == Add && SrcAlphaBlendFactor == One &&
-           DstAlphaBlendFactor == Zero && AlphaBlendOp == Add;
+    return !(SrcColorBlendFactor == One && DstColorBlendFactor == Zero &&
+             ColorBlendOp == Add && SrcAlphaBlendFactor == One &&
+             DstAlphaBlendFactor == Zero && AlphaBlendOp == Add);
   }
   constexpr ColorAttachment() noexcept = default;
   constexpr ColorAttachment(

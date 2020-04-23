@@ -85,48 +85,25 @@ class UploadBufferAllocation : public BufferAllocation {
       : BufferAllocation(BufferIn, AllocationIn), MappedData(MappedData) {}
 
 public:
+  UploadBufferAllocation() noexcept = default;
   void *GetMappedData() const noexcept { return MappedData; }
-};
-
-class DoubleUploadBufferAllocation : public BufferAllocation {
-  friend class DynamicBufferAllocation;
-  friend DoubleUploadBufferAllocation
-  AllocateDoubleUploadBuffer(const SourceLocation &location,
-                             vk::DeviceSize size) noexcept;
-  void *MappedData = nullptr;
-  vk::DeviceSize SecondOffset = 0;
-  DoubleUploadBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
-                               void *MappedData,
-                               vk::DeviceSize SecondOffset) noexcept
-      : BufferAllocation(BufferIn, AllocationIn), MappedData(MappedData),
-        SecondOffset(SecondOffset) {}
-
-public:
-  DoubleUploadBufferAllocation() noexcept = default;
-  vk::DeviceSize GetSecondOffset() const noexcept { return SecondOffset; }
-  void *GetMappedData() const noexcept { return MappedData; }
-  inline vk::DeviceSize GetOffset() const noexcept;
-  void *Map() noexcept {
-    return reinterpret_cast<uint8_t *>(MappedData) + GetOffset();
-  }
 };
 
 class DynamicBufferAllocation : public BufferAllocation {
-  DoubleUploadBufferAllocation UploadBuffer;
+  UploadBufferAllocation UploadBuffer;
   vk::DeviceSize Size;
   friend DynamicBufferAllocation
   AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                         vk::BufferUsageFlags usage) noexcept;
   DynamicBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
                           vk::DeviceSize Size,
-                          DoubleUploadBufferAllocation UploadBuffer) noexcept
+                          UploadBufferAllocation UploadBuffer) noexcept
       : BufferAllocation(BufferIn, AllocationIn),
         UploadBuffer(std::move(UploadBuffer)), Size(Size) {}
 
 public:
   DynamicBufferAllocation() noexcept = default;
-  vk::DeviceSize GetOffset() const noexcept { return UploadBuffer.GetOffset(); }
-  void *Map() noexcept { return UploadBuffer.Map(); }
+  void *Map() noexcept { return UploadBuffer.GetMappedData(); }
   inline void Unmap() noexcept;
 };
 
@@ -177,6 +154,8 @@ struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
 class SurfaceAllocation {
   friend class DeletedSurfaceAllocation;
   friend class RenderTextureAllocation;
+  friend class DeletedSurfaceSwapchainImage;
+  friend class DeletedResources;
   SurfaceAllocation *Prev = nullptr, *Next = nullptr;
   SourceLocation Location;
   vk::UniqueSurfaceKHR Surface;
@@ -187,6 +166,12 @@ class SurfaceAllocation {
     vk::UniqueImageView ColorView;
     vk::UniqueFramebuffer Framebuffer;
     RenderPassBeginInfo RenderPassBegin;
+    SwapchainImage() = default;
+    SwapchainImage(const SwapchainImage &other) = delete;
+    SwapchainImage &operator=(const SwapchainImage &other) = delete;
+    SwapchainImage(SwapchainImage &&other) noexcept = default;
+    SwapchainImage &operator=(SwapchainImage &&other) noexcept = default;
+    inline ~SwapchainImage() noexcept;
   };
   std::vector<SwapchainImage> SwapchainImages;
   vk::Extent2D Extent;
@@ -209,8 +194,8 @@ public:
       const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
       std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
           &&ResizeLambda,
-      std::function<void()> &&DeleterLambda,
-      const hsh::extent2d &RequestExtent) noexcept;
+      std::function<void()> &&DeleterLambda, const hsh::extent2d &RequestExtent,
+      int32_t L, int32_t R, int32_t T, int32_t B) noexcept;
   SurfaceAllocation(const SurfaceAllocation &other) = delete;
   SurfaceAllocation &operator=(const SurfaceAllocation &other) = delete;
   SurfaceAllocation(SurfaceAllocation &&other) noexcept = delete;
@@ -401,6 +386,26 @@ public:
   operator=(DeletedSurfaceAllocation &&other) noexcept = default;
 };
 
+class DeletedSurfaceSwapchainImage {
+  vk::UniqueImageView ColorView;
+  vk::UniqueFramebuffer Framebuffer;
+
+public:
+  explicit DeletedSurfaceSwapchainImage(
+      SurfaceAllocation::SwapchainImage &&Obj) noexcept
+      : ColorView(std::move(Obj.ColorView)),
+        Framebuffer(std::move(Obj.Framebuffer)) {}
+
+  DeletedSurfaceSwapchainImage(const DeletedSurfaceSwapchainImage &other) =
+      delete;
+  DeletedSurfaceSwapchainImage &
+  operator=(const DeletedSurfaceSwapchainImage &other) = delete;
+  DeletedSurfaceSwapchainImage(DeletedSurfaceSwapchainImage &&other) noexcept =
+      default;
+  DeletedSurfaceSwapchainImage &
+  operator=(DeletedSurfaceSwapchainImage &&other) noexcept = default;
+};
+
 class DeletedRenderTextureAllocation {
   DeletedTextureAllocation ColorTexture;
   vk::UniqueImageView ColorView;
@@ -450,6 +455,7 @@ class DeletedResources {
   std::vector<DeletedBufferAllocation> Buffers;
   std::vector<DeletedTextureAllocation> Textures;
   std::vector<DeletedSurfaceAllocation> Surfaces;
+  std::vector<DeletedSurfaceSwapchainImage> SwapchainImages;
   std::vector<DeletedRenderTextureAllocation> RenderTextures;
 
 public:
@@ -462,6 +468,9 @@ public:
   void DeleteLater(SurfaceAllocation &&Obj) noexcept {
     Surfaces.emplace_back(std::move(Obj));
   }
+  void DeleteLater(SurfaceAllocation::SwapchainImage &&Obj) noexcept {
+    SwapchainImages.emplace_back(std::move(Obj));
+  }
   void DeleteLater(RenderTextureAllocation &&Obj) noexcept {
     RenderTextures.emplace_back(std::move(Obj));
   }
@@ -469,6 +478,7 @@ public:
     Buffers.clear();
     Textures.clear();
     Surfaces.clear();
+    SwapchainImages.clear();
     RenderTextures.clear();
   }
   DeletedResources() noexcept = default;
@@ -495,8 +505,6 @@ struct VulkanGlobals {
       {}, vk::SampleCountFlagBits::e1};
   vk::RenderPass RenderPass, DirectRenderPass;
   float Anisotropy = 0.f;
-  unsigned DynamicBufferIndex = 0;
-  vk::DeviceSize DynamicBufferMask = 0;
   std::array<vk::CommandBuffer, 2> CommandBuffers;
   std::array<vk::Fence, 2> CommandFences;
   vk::CommandBuffer Cmd;
@@ -519,8 +527,6 @@ struct VulkanGlobals {
     Cmd = CommandBuffers[CurBufferIdx];
     CmdFence = CommandFences[CurBufferIdx];
     Device.waitForFences(CmdFence, VK_TRUE, 500000000);
-    DynamicBufferIndex = CurBufferIdx;
-    DynamicBufferMask = CurBufferIdx ? ~VkDeviceSize(0) : 0;
     DeletedResources = &(*DeletedResourcesArr)[CurBufferIdx];
     DeletedResources->Purge();
 
@@ -548,8 +554,7 @@ struct VulkanGlobals {
     vk::PipelineStageFlags pipeStageFlags =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
     Device.resetFences({CopyFence, CmdFence});
-    Queue.submit(vk::SubmitInfo(AcquiredImage ? 1 : 0, &ImageAcquireSem,
-                                &pipeStageFlags, 1, &CopyCmd),
+    Queue.submit(vk::SubmitInfo(0, {}, &pipeStageFlags, 1, &CopyCmd),
                  CopyFence);
     Queue.submit(vk::SubmitInfo(AcquiredImage ? 1 : 0, &ImageAcquireSem,
                                 &pipeStageFlags, 1, &Cmd, AcquiredImage ? 1 : 0,
@@ -673,7 +678,14 @@ bool SurfaceAllocation::PreRender() noexcept {
         assert((SC.supportedUsageFlags & WantedUsage) == WantedUsage);
         setImageUsage(WantedUsage);
         setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
-        setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque);
+        if (SC.supportedCompositeAlpha &
+            vk::CompositeAlphaFlagBitsKHR::ePreMultiplied)
+          setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::ePreMultiplied);
+        else if (SC.supportedCompositeAlpha &
+                 vk::CompositeAlphaFlagBitsKHR::eInherit)
+          setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eInherit);
+        else
+          setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque);
         setPresentMode(vk::PresentModeKHR::eFifo);
         setOldSwapchain(OldSwapchain);
       }
@@ -766,8 +778,9 @@ void SurfaceAllocation::PostRender() noexcept {
 }
 
 vk::Extent2D SurfaceAllocation::ContentExtent() const noexcept {
-  return vk::Extent2D{Extent.width - MarginL - MarginR,
-                      Extent.height - MarginT - MarginB};
+  return vk::Extent2D{
+      uint32_t(std::max(1, int32_t(Extent.width) - MarginL - MarginR)),
+      uint32_t(std::max(1, int32_t(Extent.height) - MarginT - MarginB))};
 }
 
 void SurfaceAllocation::DrawDecorations() noexcept {
@@ -789,6 +802,9 @@ void SurfaceAllocation::DrawDecorations() noexcept {
                                       VK_REMAINING_ARRAY_LAYERS)));
     Globals.Cmd.beginRenderPass(DstImage.RenderPassBegin,
                                 vk::SubpassContents::eInline);
+    Globals.Cmd.setViewport(
+        0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
+    Globals.Cmd.setScissor(0, vk::Rect2D({}, {Extent.width, Extent.height}));
     DecorationLambda();
     Globals.Cmd.endRenderPass();
     Globals.Cmd.pipelineBarrier(
@@ -858,14 +874,19 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
   Globals.DeletedResources->DeleteLater(std::move(*this));
 }
 
+SurfaceAllocation::SwapchainImage::~SwapchainImage() noexcept {
+  Globals.DeletedResources->DeleteLater(std::move(*this));
+}
+
 SurfaceAllocation::SurfaceAllocation(
     const SourceLocation &location, vk::UniqueSurfaceKHR &&Surface,
     std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
         &&ResizeLambda,
-    std::function<void()> &&DeleterLambda,
-    const hsh::extent2d &RequestExtent) noexcept
+    std::function<void()> &&DeleterLambda, const hsh::extent2d &RequestExtent,
+    int32_t L, int32_t R, int32_t T, int32_t B) noexcept
     : Next(Globals.SurfaceHead), Location(location),
-      Surface(std::move(Surface)), ResizeLambda(std::move(ResizeLambda)),
+      Surface(std::move(Surface)), MarginL(L), MarginR(R), MarginT(T),
+      MarginB(B), ResizeLambda(std::move(ResizeLambda)),
       DeleterLambda(std::move(DeleterLambda)), RequestExtent(RequestExtent) {
   Globals.SurfaceHead = this;
   if (Next)
@@ -999,14 +1020,9 @@ RenderTextureAllocation::RenderTextureAllocation(
   Prepare();
 }
 
-vk::DeviceSize DoubleUploadBufferAllocation::GetOffset() const noexcept {
-  return SecondOffset & Globals.DynamicBufferMask;
-}
-
 void DynamicBufferAllocation::Unmap() noexcept {
-  const auto Offset = GetOffset();
   Globals.CopyCmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
-                             vk::BufferCopy{Offset, 0, Size});
+                             vk::BufferCopy{0, 0, Size});
 }
 } // namespace hsh::detail::vulkan
 
@@ -1194,19 +1210,6 @@ vmaCreateBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
       pBuffer, pAllocation, pAllocationInfo);
 }
 
-inline VkResult
-vmaCreateDoubleBuffer(const vk::BufferCreateInfo &pBufferCreateInfo,
-                      const VmaAllocationCreateInfo &pAllocationCreateInfo,
-                      VkBuffer *pBuffer, VmaAllocation *pAllocation,
-                      VmaAllocationInfo *pAllocationInfo,
-                      vk::DeviceSize *secondOffset) noexcept {
-  return ::vmaCreateDoubleBuffer(
-      Globals.Allocator,
-      reinterpret_cast<const VkBufferCreateInfo *>(&pBufferCreateInfo),
-      reinterpret_cast<const VmaAllocationCreateInfo *>(&pAllocationCreateInfo),
-      pBuffer, pAllocation, pAllocationInfo, secondOffset);
-}
-
 inline VkResult vmaFindMemoryTypeIndexForBufferInfo(
     const VkBufferCreateInfo &pBufferCreateInfo,
     const VmaAllocationCreateInfo &pAllocationCreateInfo,
@@ -1300,24 +1303,6 @@ AllocateUploadBuffer(const SourceLocation &location,
   return UploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData);
 }
 
-inline DoubleUploadBufferAllocation
-AllocateDoubleUploadBuffer(const SourceLocation &location,
-                           vk::DeviceSize size) noexcept {
-  VkBuffer Buffer;
-  VmaAllocation Allocation;
-  VmaAllocationInfo AllocInfo;
-  VkDeviceSize SecondOffset;
-  UploadBufferAllocationCreateInfo CreateInfo(Globals.UploadPool);
-  VmaLocationStrSetter LocationStr(CreateInfo, location, "DoubleUpload");
-  auto Result = vmaCreateDoubleBuffer(
-      vk::BufferCreateInfo({}, size, vk::BufferUsageFlagBits::eTransferSrc),
-      CreateInfo, &Buffer, &Allocation, &AllocInfo, &SecondOffset);
-  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
-  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
-  return DoubleUploadBufferAllocation(Buffer, Allocation, AllocInfo.pMappedData,
-                                      SecondOffset);
-}
-
 inline BufferAllocation
 AllocateStaticBuffer(const SourceLocation &location, vk::DeviceSize size,
                      vk::BufferUsageFlags usage) noexcept {
@@ -1367,7 +1352,7 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
   Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
 
   return DynamicBufferAllocation(Buffer, Allocation, size,
-                                 AllocateDoubleUploadBuffer(location, size));
+                                 AllocateUploadBuffer(location, size));
 }
 
 inline TextureAllocation AllocateTexture(const SourceLocation &location,
@@ -1584,9 +1569,12 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
+  vk::Offset3D DestOff{};
+  if (Surface->Extent.width > Surface->MarginL + Surface->MarginR &&
+      Surface->Extent.height > Surface->MarginT + Surface->MarginB)
+    DestOff = vk::Offset3D(Surface->MarginL, Surface->MarginT);
   _Resolve(ColorTexture.GetImage(), DstImage.Image,
-           vk::ImageAspectFlagBits::eColor, vk::Offset3D(),
-           vk::Offset3D(Surface->MarginL, Surface->MarginT),
+           vk::ImageAspectFlagBits::eColor, vk::Offset3D(), DestOff,
            vk::Extent3D(Extent, 1));
   Surface->DrawDecorations();
   if (DelimitRenderPass) {
@@ -1734,15 +1722,14 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     operator TextureBinding() const noexcept { return GetBinding(); }
   };
   struct DynamicTextureOwner : TextureOwner {
-    vulkan::DoubleUploadBufferAllocation UploadAllocation;
-    std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies;
+    vulkan::UploadBufferAllocation UploadAllocation;
+    std::array<vk::BufferImageCopy, MaxMipCount> Copies;
 
-    DynamicTextureOwner(
-        vulkan::TextureAllocation AllocationIn,
-        vulkan::DoubleUploadBufferAllocation UploadAllocation,
-        std::array<std::array<vk::BufferImageCopy, MaxMipCount>, 2> Copies,
-        vk::UniqueImageView ImageViewIn, std::uint8_t NumMipsIn,
-        std::uint8_t IntegerIn) noexcept
+    DynamicTextureOwner(vulkan::TextureAllocation AllocationIn,
+                        vulkan::UploadBufferAllocation UploadAllocation,
+                        std::array<vk::BufferImageCopy, MaxMipCount> Copies,
+                        vk::UniqueImageView ImageViewIn, std::uint8_t NumMipsIn,
+                        std::uint8_t IntegerIn) noexcept
         : TextureOwner(std::move(AllocationIn), std::move(ImageViewIn),
                        NumMipsIn, IntegerIn),
           UploadAllocation(std::move(UploadAllocation)),
@@ -1763,8 +1750,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
                                         VK_REMAINING_ARRAY_LAYERS)));
       vulkan::Globals.CopyCmd.copyBufferToImage(
           UploadAllocation.GetBuffer(), Allocation.GetImage(),
-          vk::ImageLayout::eTransferDstOptimal, NumMips,
-          Copies[vulkan::Globals.DynamicBufferIndex].data());
+          vk::ImageLayout::eTransferDstOptimal, NumMips, Copies.data());
       vulkan::Globals.CopyCmd.pipelineBarrier(
           vk::PipelineStageFlagBits::eTransfer,
           vk::PipelineStageFlagBits::eVertexShader |
@@ -1784,7 +1770,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
                                         VK_REMAINING_ARRAY_LAYERS)));
     }
 
-    void *Map() noexcept { return UploadAllocation.Map(); }
+    void *Map() noexcept { return UploadAllocation.GetMappedData(); }
     void Unmap() noexcept { MakeCopies(); }
   };
   struct RenderTextureBinding {

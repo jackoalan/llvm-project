@@ -566,11 +566,12 @@ inline owner<surface> create_surface(
     std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
         &&ResizeLambda = {},
     std::function<void()> &&DeleterLambda = {},
-    const hsh::extent2d &RequestExtent = {},
+    const hsh::extent2d &RequestExtent = {}, int32_t L = 0, int32_t R = 0,
+    int32_t T = 0, int32_t B = 0,
     const SourceLocation &location = SourceLocation::current()) noexcept {
-  return create_resource<surface>(location, std::move(Surface),
-                                  std::move(ResizeLambda),
-                                  std::move(DeleterLambda), RequestExtent);
+  return create_resource<surface>(
+      location, std::move(Surface), std::move(ResizeLambda),
+      std::move(DeleterLambda), RequestExtent, L, R, T, B);
 }
 #endif
 
