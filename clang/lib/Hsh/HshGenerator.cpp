@@ -744,6 +744,7 @@ public:
     ClassTemplateDecl *BaseAttributeDecl = nullptr;
     ClassTemplateDecl *ColorAttachmentDecl = nullptr;
     CXXRecordDecl *DualSourceDecl = nullptr;
+    CXXRecordDecl *DirectRenderDecl = nullptr;
     CXXRecordDecl *HighPriorityDecl = nullptr;
     SmallVector<ClassTemplateDecl *, 8> Attributes; // Non-color-attachments
     SmallVector<ClassTemplateDecl *, 1>
@@ -825,6 +826,8 @@ public:
         return true;
       if (CRD->getName() == "dual_source")
         DualSourceDecl = CRD;
+      else if (CRD->getName() == "direct_render")
+        DirectRenderDecl = CRD;
       else if (CRD->getName() == "high_priority")
         HighPriorityDecl = CRD;
       return true;
@@ -997,6 +1000,19 @@ public:
            PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
         if (Arg.getKind() == TemplateArgument::Type) {
           if (Arg.getAsType()->getAsCXXRecordDecl() == HighPriorityDecl) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    bool
+    isDirectRender(const ClassTemplateSpecializationDecl *PipelineSpec) const {
+      for (const auto &Arg :
+           PipelineSpec->getTemplateArgs()[0].getPackAsArray()) {
+        if (Arg.getKind() == TemplateArgument::Type) {
+          if (Arg.getAsType()->getAsCXXRecordDecl() == DirectRenderDecl) {
             return true;
           }
         }
@@ -5620,6 +5636,7 @@ public:
           PipelineAttributes.getPipelineArgs(Context, PipelineSpec);
       auto InShaderPipelineArgs =
           PipelineAttributes.getInShaderPipelineArgs(Context, PipelineSpec);
+      bool IsDirectRender = PipelineAttributes.isDirectRender(PipelineSpec);
 
       if (PipelineAttributes.isHighPriority(PipelineSpec))
         addHighCoordinatorType(T);
@@ -5890,6 +5907,7 @@ public:
 
         InitOS << "    hsh::detail::PipelineInfo{";
         PrintArguments(PipelineArgs);
+        InitOS << ", " << (IsDirectRender ? "true" : "false");
         InitOS << "}\n";
 
         InitOS << "  }";

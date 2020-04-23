@@ -489,6 +489,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
   vk::PipelineColorBlendStateCreateInfo ColorBlendState;
   std::array<vk::SamplerCreateInfo, NSamplers> Samplers;
   SourceLocation Location;
+  bool DirectRenderPass;
 
   template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq,
             std::size_t... SampSeq, std::size_t... AttSeq>
@@ -568,7 +569,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
             0,
             HshToVkBorderColor(std::get<SampSeq>(Samps).BorderColor,
                                false)}...},
-        Location(Location) {}
+        Location(Location), DirectRenderPass(PipelineInfo.DirectRenderPass) {}
 
   constexpr ShaderConstData(
       std::array<ShaderCode<Target::VULKAN_SPIRV>, NStages> S,
@@ -624,7 +625,8 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
         &ColorBlendState,
         &DynamicState,
         vulkan::Globals.PipelineLayout,
-        vulkan::Globals.GetRenderPass()};
+        DirectRenderPass ? vulkan::Globals.GetDirectRenderPass()
+                         : vulkan::Globals.GetRenderPass()};
   }
 };
 

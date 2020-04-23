@@ -323,6 +323,7 @@ template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
 template <CullMode CM = CullNone> struct cull_mode : base_attribute<> {};
 template <Compare C = Always> struct depth_compare : base_attribute<> {};
 template <bool W = true> struct depth_write : base_attribute<> {};
+struct direct_render : base_attribute<> {};
 struct high_priority : base_attribute<> {};
 template <bool E = false>
 struct early_depth_stencil : base_attribute<false, true> {};
@@ -503,13 +504,14 @@ struct PipelineInfo {
   enum CullMode CullMode = CullNone;
   enum Compare DepthCompare = Always;
   bool DepthWrite = true;
+  bool DirectRenderPass = false;
   constexpr PipelineInfo() noexcept = default;
   constexpr PipelineInfo(enum Topology Topology, unsigned PatchControlPoints,
                          enum CullMode CullMode, enum Compare DepthCompare,
-                         bool DepthWrite) noexcept
+                         bool DepthWrite, bool DirectRenderPass) noexcept
       : Topology(Topology), PatchControlPoints(PatchControlPoints),
-        CullMode(CullMode), DepthCompare(DepthCompare), DepthWrite(DepthWrite) {
-  }
+        CullMode(CullMode), DepthCompare(DepthCompare), DepthWrite(DepthWrite),
+        DirectRenderPass(DirectRenderPass) {}
 };
 
 template <Target T, std::uint32_t NStages, std::uint32_t NBindings,
