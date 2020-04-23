@@ -261,7 +261,7 @@ class RenderTextureAllocation {
   inline void Prepare() noexcept;
   static inline void _Resolve(vk::Image SrcImage, vk::Image DstImage,
                               vk::ImageAspectFlagBits Aspect,
-                              vk::Offset3D Offset,
+                              vk::Offset3D SrcOffset, vk::Offset3D DstOffset,
                               vk::Extent3D Extent) noexcept;
   inline void Resolve(vk::Image SrcImage, vk::Image DstImage,
                       vk::ImageAspectFlagBits Aspect, vk::Offset3D Offset,
@@ -501,6 +501,8 @@ struct VulkanGlobals {
   std::array<vk::Fence, 2> CommandFences;
   vk::CommandBuffer Cmd;
   vk::Fence CmdFence;
+  vk::CommandBuffer CopyCmd;
+  vk::Fence CopyFence;
   vk::Pipeline BoundPipeline;
   vk::DescriptorSet BoundDescriptorSet;
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
@@ -527,6 +529,8 @@ struct VulkanGlobals {
     for (auto *RT = RenderTextureHead; RT; RT = RT->GetNext())
       RT->PreRender();
 
+    CopyCmd.begin(vk::CommandBufferBeginInfo(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
     Cmd.begin(vk::CommandBufferBeginInfo(
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
   }
@@ -538,11 +542,15 @@ struct VulkanGlobals {
     }
     BoundPipeline = vk::Pipeline{};
     BoundDescriptorSet = vk::DescriptorSet{};
+    CopyCmd.end();
     Cmd.end();
 
     vk::PipelineStageFlags pipeStageFlags =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    Device.resetFences(CmdFence);
+    Device.resetFences({CopyFence, CmdFence});
+    Queue.submit(vk::SubmitInfo(AcquiredImage ? 1 : 0, &ImageAcquireSem,
+                                &pipeStageFlags, 1, &CopyCmd),
+                 CopyFence);
     Queue.submit(vk::SubmitInfo(AcquiredImage ? 1 : 0, &ImageAcquireSem,
                                 &pipeStageFlags, 1, &Cmd, AcquiredImage ? 1 : 0,
                                 &RenderCompleteSem),
@@ -550,6 +558,7 @@ struct VulkanGlobals {
     for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
     AcquiredImage = false;
+    Device.waitForFences(CopyFence, VK_TRUE, 500000000);
     ++Frame;
   }
 
@@ -645,6 +654,9 @@ bool SurfaceAllocation::PreRender() noexcept {
   if (!Swapchain || Capabilities.currentExtent != Extent ||
       RequestExtentPending) {
     RequestExtentPending = false;
+
+    Extent = Capabilities.currentExtent;
+
     struct SwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
       explicit SwapchainCreateInfo(const vk::SurfaceCapabilitiesKHR &SC,
                                    vk::SurfaceKHR Surface,
@@ -702,9 +714,6 @@ bool SurfaceAllocation::PreRender() noexcept {
           RenderPassBeginInfo(RenderPass, Out.Framebuffer.get(), Extent);
       ++Idx;
     }
-    Extent = Capabilities.currentExtent;
-    assert((!Next || SurfaceFormat.format == Next->SurfaceFormat.format) &&
-           "Subsequent surfaces must have the same color format");
     if (ResizeLambda)
       ResizeLambda(Extent, ContentExtent());
     return true;
@@ -762,12 +771,53 @@ vk::Extent2D SurfaceAllocation::ContentExtent() const noexcept {
 }
 
 void SurfaceAllocation::DrawDecorations() noexcept {
+  auto &DstImage = SwapchainImages[NextImage];
   if (DecorationLambda) {
-    auto &DstImage = SwapchainImages[NextImage];
+    Globals.Cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::DependencyFlagBits::eByRegion, {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits::eTransferWrite,
+            vk::AccessFlagBits::eColorAttachmentRead |
+                vk::AccessFlagBits::eColorAttachmentWrite,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
+            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                      VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
     Globals.Cmd.beginRenderPass(DstImage.RenderPassBegin,
                                 vk::SubpassContents::eInline);
     DecorationLambda();
     Globals.Cmd.endRenderPass();
+    Globals.Cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+        {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits::eColorAttachmentRead |
+                vk::AccessFlagBits::eColorAttachmentWrite,
+            vk::AccessFlagBits::eMemoryRead,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
+            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                      VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
+  } else {
+    Globals.Cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+        {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eMemoryRead,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::ePresentSrcKHR, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
+            vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                      VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
   }
 }
 
@@ -830,8 +880,8 @@ SurfaceAllocation::SurfaceAllocation(
     }
   }
   assert(SurfaceFormat.format != vk::Format::eUndefined);
-
-  PreRender();
+  assert((!Next || SurfaceFormat.format == Next->SurfaceFormat.format) &&
+         "Subsequent surfaces must have the same color format");
 
   if (!Globals.RenderPass) {
     struct RenderPassCreateInfo : vk::RenderPassCreateInfo {
@@ -908,6 +958,8 @@ SurfaceAllocation::SurfaceAllocation(
                                OwnedDirectRenderPass.get());
     Globals.DirectRenderPass = OwnedDirectRenderPass.get();
   }
+
+  PreRender();
 }
 
 RenderTextureAllocation::~RenderTextureAllocation() noexcept {
@@ -953,8 +1005,8 @@ vk::DeviceSize DoubleUploadBufferAllocation::GetOffset() const noexcept {
 
 void DynamicBufferAllocation::Unmap() noexcept {
   const auto Offset = GetOffset();
-  Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
-                         vk::BufferCopy{Offset, 0, Size});
+  Globals.CopyCmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
+                             vk::BufferCopy{Offset, 0, Size});
 }
 } // namespace hsh::detail::vulkan
 
@@ -1444,7 +1496,8 @@ void RenderTextureAllocation::BeginRenderPass() noexcept {
 
 void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                                        vk::ImageAspectFlagBits Aspect,
-                                       vk::Offset3D Offset,
+                                       vk::Offset3D SrcOffset,
+                                       vk::Offset3D DstOffset,
                                        vk::Extent3D Extent) noexcept {
   Globals.Cmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eColorAttachmentOutput,
@@ -1464,15 +1517,15 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
     Globals.Cmd.resolveImage(
         SrcImage, vk::ImageLayout::eTransferSrcOptimal, DstImage,
         vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageResolve(vk::ImageSubresourceLayers(Aspect, 0, 0, 1), Offset,
-                         vk::ImageSubresourceLayers(Aspect, 0, 0, 1), Offset,
+        vk::ImageResolve(vk::ImageSubresourceLayers(Aspect, 0, 0, 1), SrcOffset,
+                         vk::ImageSubresourceLayers(Aspect, 0, 0, 1), DstOffset,
                          Extent));
   } else {
     Globals.Cmd.copyImage(
         SrcImage, vk::ImageLayout::eTransferSrcOptimal, DstImage,
         vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageCopy(vk::ImageSubresourceLayers(Aspect, 0, 0, 1), Offset,
-                      vk::ImageSubresourceLayers(Aspect, 0, 0, 1), Offset,
+        vk::ImageCopy(vk::ImageSubresourceLayers(Aspect, 0, 0, 1), SrcOffset,
+                      vk::ImageSubresourceLayers(Aspect, 0, 0, 1), DstOffset,
                       Extent));
   }
   Globals.Cmd.pipelineBarrier(
@@ -1499,7 +1552,7 @@ void RenderTextureAllocation::Resolve(vk::Image SrcImage, vk::Image DstImage,
   if (DelimitRenderPass)
     Globals.Cmd.endRenderPass();
 
-  _Resolve(SrcImage, DstImage, Aspect, Offset, ExtentIn);
+  _Resolve(SrcImage, DstImage, Aspect, Offset, Offset, ExtentIn);
 
   if (DelimitRenderPass) {
     if (Reattach)
@@ -1532,21 +1585,10 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
   _Resolve(ColorTexture.GetImage(), DstImage.Image,
-           vk::ImageAspectFlagBits::eColor,
+           vk::ImageAspectFlagBits::eColor, vk::Offset3D(),
            vk::Offset3D(Surface->MarginL, Surface->MarginT),
            vk::Extent3D(Extent, 1));
   Surface->DrawDecorations();
-  Globals.Cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
-      {}, {},
-      vk::ImageMemoryBarrier(
-          vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eMemoryRead,
-          vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR,
-          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage.Image,
-          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                    VK_REMAINING_MIP_LEVELS, 0,
-                                    VK_REMAINING_ARRAY_LAYERS)));
   if (DelimitRenderPass) {
     if (Reattach)
       BeginRenderPass();
@@ -1707,7 +1749,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
           Copies(std::move(Copies)) {}
 
     void MakeCopies() noexcept {
-      vulkan::Globals.Cmd.pipelineBarrier(
+      vulkan::Globals.CopyCmd.pipelineBarrier(
           vk::PipelineStageFlagBits::eTopOfPipe,
           vk::PipelineStageFlagBits::eTransfer,
           vk::DependencyFlagBits::eByRegion, {}, {},
@@ -1719,11 +1761,11 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
               vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                         VK_REMAINING_MIP_LEVELS, 0,
                                         VK_REMAINING_ARRAY_LAYERS)));
-      vulkan::Globals.Cmd.copyBufferToImage(
+      vulkan::Globals.CopyCmd.copyBufferToImage(
           UploadAllocation.GetBuffer(), Allocation.GetImage(),
           vk::ImageLayout::eTransferDstOptimal, NumMips,
           Copies[vulkan::Globals.DynamicBufferIndex].data());
-      vulkan::Globals.Cmd.pipelineBarrier(
+      vulkan::Globals.CopyCmd.pipelineBarrier(
           vk::PipelineStageFlagBits::eTransfer,
           vk::PipelineStageFlagBits::eVertexShader |
               vk::PipelineStageFlagBits::eTessellationControlShader |

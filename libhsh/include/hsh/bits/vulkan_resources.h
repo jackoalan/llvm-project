@@ -753,8 +753,8 @@ inline auto CreateBufferOwner(const SourceLocation &location,
   auto Ret = vulkan::AllocateStaticBuffer(
       location, size, bufferType | vk::BufferUsageFlagBits::eTransferDst);
 
-  vulkan::Globals.Cmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
-                                 vk::BufferCopy(0, 0, size));
+  vulkan::Globals.CopyCmd.copyBuffer(UploadBuffer.GetBuffer(), Ret.GetBuffer(),
+                                     vk::BufferCopy(0, 0, size));
 
   return Ret;
 }
@@ -902,7 +902,7 @@ inline auto CreateTextureOwner(
           .value;
   vulkan::Globals.SetDebugObjectName(location, Ret.ImageView.get());
 
-  vulkan::Globals.Cmd.pipelineBarrier(
+  vulkan::Globals.CopyCmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTopOfPipe,
       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
       {}, {},
@@ -914,10 +914,10 @@ inline auto CreateTextureOwner(
           vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
-  vulkan::Globals.Cmd.copyBufferToImage(
+  vulkan::Globals.CopyCmd.copyBufferToImage(
       UploadBuffer.GetBuffer(), Ret.Allocation.GetImage(),
       vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
-  vulkan::Globals.Cmd.pipelineBarrier(
+  vulkan::Globals.CopyCmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eVertexShader |
           vk::PipelineStageFlagBits::eTessellationControlShader |
@@ -1334,6 +1334,7 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
     EnabledFeatures.tessellationShader = Features.tessellationShader;
     EnabledFeatures.samplerAnisotropy = Features.samplerAnisotropy;
     EnabledFeatures.textureCompressionBC = Features.textureCompressionBC;
+    EnabledFeatures.dualSrcBlend = Features.dualSrcBlend;
   }
 };
 
@@ -1415,7 +1416,7 @@ struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
 struct MyCommandBufferAllocateInfo : vk::CommandBufferAllocateInfo {
   constexpr MyCommandBufferAllocateInfo(vk::CommandPool cmdPool) noexcept
       : vk::CommandBufferAllocateInfo(cmdPool, vk::CommandBufferLevel::ePrimary,
-                                      2) {}
+                                      3) {}
 };
 
 struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
@@ -1491,7 +1492,7 @@ class vulkan_device_owner {
     detail::vulkan::DescriptorPoolChain DescriptorPoolChain;
     vk::UniqueCommandPool CommandPool;
     std::vector<vk::UniqueCommandBuffer> CommandBuffers;
-    std::array<vk::UniqueFence, 2> CommandFences;
+    std::array<vk::UniqueFence, 3> CommandFences;
     vk::UniqueSemaphore ImageAcquireSem;
     vk::UniqueSemaphore RenderCompleteSem;
     bool BuiltPipelines = false;
@@ -1781,9 +1782,14 @@ public:
           Data.Device
               ->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
               .value,
+          Data.Device
+              ->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlags{}))
+              .value,
       };
       for (int i = 0; i < 2; ++i)
         detail::vulkan::Globals.CommandFences[i] = Data.CommandFences[i].get();
+      detail::vulkan::Globals.CopyCmd = Data.CommandBuffers[2].get();
+      detail::vulkan::Globals.CopyFence = Data.CommandFences[2].get();
       Data.ImageAcquireSem = Data.Device->createSemaphoreUnique({}).value;
       detail::vulkan::Globals.ImageAcquireSem = Data.ImageAcquireSem.get();
       Data.RenderCompleteSem = Data.Device->createSemaphoreUnique({}).value;
