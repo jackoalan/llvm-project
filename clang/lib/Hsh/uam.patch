@@ -1,0 +1,27 @@
+diff --git a/meson.build b/meson.build
+index 871cd20..34f8766 100644
+--- a/meson.build
++++ b/meson.build
+@@ -73,9 +73,8 @@ uam_incs = []
+ subdir('source')
+ subdir('mesa-imported')
+ 
+-uam = executable(
++uam = static_library(
+ 	'uam',
+ 	uam_files,
+ 	include_directories: uam_incs,
+-	install: true,
+ )
+diff --git a/source/compiler_iface.h b/source/compiler_iface.h
+index 63e1042..855b95b 100644
+--- a/source/compiler_iface.h
++++ b/source/compiler_iface.h
+@@ -17,6 +17,7 @@
+ 
+ class DekoCompiler
+ {
++public:
+ 	pipeline_stage m_stage;
+ 	glsl_program m_glsl;
+ 	const struct tgsi_token* m_tgsi;

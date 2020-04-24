@@ -33,6 +33,8 @@
 
 #include "dxc/dxcapi.h"
 
+#include "compiler_iface.h"
+
 #define XSTR(X) #X
 #define STR(X) XSTR(X)
 
@@ -3179,6 +3181,7 @@ MakePrintingPolicy(HshBuiltins &Builtins, HshTarget Target,
   switch (Target) {
   default:
   case HT_GLSL:
+  case HT_DEKO3D:
     return std::make_unique<GLSLPrintingPolicy>(Builtins, Target,
                                                 InShaderPipelineArgs);
   case HT_HLSL:
@@ -3921,6 +3924,84 @@ public:
   }
 };
 
+class StagesCompilerDeko : public StagesCompilerBase {
+  DiagnosticsEngine &Diags;
+
+  static constexpr std::array<pipeline_stage, 6> ShaderProfiles{
+      pipeline_stage_vertex, pipeline_stage_tess_ctrl, pipeline_stage_tess_eval,
+      pipeline_stage_geometry, pipeline_stage_fragment};
+
+  template <typename T> static constexpr T Align256(T x) {
+    return (x + 0xFF) & ~0xFF;
+  }
+  static constexpr unsigned s_shaderStartOffset = 0x80 - sizeof(NvShaderHeader);
+
+protected:
+  StageBinaries doCompile(ArrayRef<std::string> Sources) const override {
+    StageBinaries Binaries;
+    auto OutIt = Binaries.begin();
+    auto ProfileIt = ShaderProfiles.begin();
+    int StageIt = 0;
+    for (const auto &Stage : Sources) {
+      auto &Out = OutIt++->first;
+      const pipeline_stage Profile = *ProfileIt++;
+      const auto HStage = HshStage(StageIt++);
+      if (Stage.empty())
+        continue;
+
+      DekoCompiler Compiler(ShaderProfiles[Profile]);
+
+      if (!Compiler.CompileGlsl(Stage.data())) {
+        Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                           "%0 problem from deko"))
+            << HshStageToString(HStage);
+        continue;
+      }
+
+      auto Write = [&](void *data, size_t size) {
+        std::memcpy(&*Out.insert(Out.end(), size, 0), data, size);
+      };
+      auto FileAlign256 = [&]() {
+        Out.insert(Out.end(), Align256(Out.size()) - Out.size(), 0);
+      };
+
+      DkshHeader hdr = {};
+      hdr.magic = DKSH_MAGIC;
+      hdr.header_sz = sizeof(DkshHeader);
+      hdr.control_sz = Align256(sizeof(DkshHeader) + sizeof(DkshProgramHeader));
+      hdr.code_sz = Align256((Profile != pipeline_stage_compute ? 0x80 : 0x00) +
+                             Compiler.m_codeSize) +
+                    Align256(Compiler.m_dataSize);
+      hdr.programs_off = sizeof(DkshHeader);
+      hdr.num_programs = 1;
+
+      Write(&hdr, sizeof(hdr));
+      Write(&Compiler.m_dkph, sizeof(Compiler.m_dkph));
+      FileAlign256();
+
+      if (Profile != pipeline_stage_compute) {
+        static const char s_padding[s_shaderStartOffset] =
+            "lol nvidia why did you make us waste space here";
+        Write((void *)s_padding, sizeof(s_padding));
+        Write(&Compiler.m_nvsh, sizeof(Compiler.m_nvsh));
+      }
+
+      Write(Compiler.m_code, Compiler.m_codeSize);
+      FileAlign256();
+
+      if (Compiler.m_dataSize) {
+        Write(Compiler.m_data, Compiler.m_dataSize);
+        FileAlign256();
+      }
+    }
+    return Binaries;
+  }
+
+public:
+  explicit StagesCompilerDeko(HshTarget Target, DiagnosticsEngine &Diags)
+      : StagesCompilerBase(Target), Diags(Diags) {}
+};
+
 std::unique_ptr<StagesCompilerBase>
 MakeCompiler(HshTarget Target, bool DebugInfo, StringRef ResourceDir,
              DiagnosticsEngine &Diags, HshBuiltins &Builtins) {
@@ -3939,6 +4020,8 @@ MakeCompiler(HshTarget Target, bool DebugInfo, StringRef ResourceDir,
   case HT_METAL_BIN_IOS:
   case HT_METAL_BIN_TVOS:
     return std::make_unique<StagesCompilerText>(Target);
+  case HT_DEKO3D:
+    return std::make_unique<StagesCompilerDeko>(Target, Diags);
   }
 }
 

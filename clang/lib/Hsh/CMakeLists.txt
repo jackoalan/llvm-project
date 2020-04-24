@@ -1,5 +1,6 @@
 include(ExternalProject)
 
+# DXCompiler library
 set(lib_destination "${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}")
 set(lib_install_destination "lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}")
 
@@ -66,11 +67,54 @@ add_custom_command(OUTPUT "${dxc_header}"
                    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
                    COMMENT "Fetching and building DirectXShaderCompiler")
 
+# UAM library
+find_program(MESON meson)
+if(NOT MESON)
+  message(FATAL_ERROR "Failed to find meson, which is required to build bundled radare2")
+endif()
+
+find_program(NINJA ninja)
+if(NOT NINJA)
+  message(FATAL_ERROR "Failed to find ninja, which is required to build bundled radare2")
+endif()
+
+set(MESON_OPTIONS "--prefix=${CLANG_BINARY_DIR}")
+
+ExternalProject_Add(
+        UAM
+        GIT_REPOSITORY https://github.com/devkitPro/uam.git
+        GIT_TAG f997445ca68adbc0abafaa9a89ecf67cd09e87a3
+        PATCH_COMMAND "${GIT_EXECUTABLE}" apply "${CMAKE_CURRENT_SOURCE_DIR}/uam.patch"
+        CONFIGURE_COMMAND
+        "${MESON}" "<SOURCE_DIR>" ${MESON_OPTIONS} && "${MESON}" configure ${MESON_OPTIONS}
+        BUILD_COMMAND "${NINJA}"
+        INSTALL_COMMAND "")
+
+ExternalProject_Get_Property(UAM SOURCE_DIR BINARY_DIR)
+set(uam_source_dir "${SOURCE_DIR}")
+set(uam_binary_dir "${BINARY_DIR}")
+
+# Use UAM's main library as a dependency barrier to defer
+# building clangHsh until after UAM is built.
+set(uam_library "${uam_binary_dir}/libuam.a")
+add_custom_command(OUTPUT "${uam_library}"
+        COMMAND "${CMAKE_COMMAND}" ARGS
+        --build . --target UAM
+        DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        COMMENT "Fetching and building UAM")
+
+include_directories(
+        "${uam_source_dir}/source"
+        "${uam_source_dir}/mesa-imported")
+
 add_clang_library(clangHsh
         "${dxc_header}"
+        "${uam_library}"
         HshGenerator.cpp
         LINK_LIBS
         clangTooling)
+target_link_libraries(clangHsh PRIVATE "${uam_library}")
 
 # Enable -fms-extensions for clang to use MS uuid extensions for COM.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

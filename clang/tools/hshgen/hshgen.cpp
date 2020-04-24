@@ -137,6 +137,7 @@ int main(int argc, const char **argv) {
       {hshgen::HT_METAL_BIN_MAC, "Metal Binary macOS Target (requires Xcode)"},
       {hshgen::HT_METAL_BIN_IOS, "Metal Binary iOS Target (requires Xcode)"},
       {hshgen::HT_METAL_BIN_TVOS, "Metal Binary tvOS Target (requires Xcode)"},
+      {hshgen::HT_DEKO3D, "Deko Binary Target"},
   };
 
   if (!cl::ParseCommandLineOptions(argc, argv, "Hsh Codegen Tool"))
