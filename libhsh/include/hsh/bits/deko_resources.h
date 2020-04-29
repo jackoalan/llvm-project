@@ -486,6 +486,15 @@ template <std::uint32_t NStages, std::uint32_t NBindings,
           std::uint32_t NAttachments>
 struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
                        NSamplers, NAttachments> {
+  struct Sampler : dk::Sampler {
+    void Initialize(dk::SamplerDescriptor &Out,
+                    const dk::ImageView &ImageView) const noexcept {
+      dk::Sampler ModSampler = *this;
+      ModSampler.setLodClamp(0.f, ImageView.mipLevelCount);
+      // TODO: Handle format-dependent border color
+    }
+  };
+
   std::array<dk::ShaderMaker, NStages> StageCodes;
   std::array<DkStage, NStages> Stages;
   std::array<DkVtxBufferState, NBindings> VertexBindingDescriptions;
@@ -497,7 +506,7 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
   dk::DepthStencilState DepthStencilState;
   dk::ColorState ColorBlendState;
   DkColorWriteState ColorWriteState;
-  std::array<dk::Sampler, NSamplers> Samplers;
+  std::array<Sampler, NSamplers> Samplers;
   bool PrimitiveRestart;
 
   template <std::size_t... SSeq, std::size_t... BSeq, std::size_t... ASeq,
