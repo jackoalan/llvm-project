@@ -277,11 +277,9 @@ enum ColorSwizzle : std::uint8_t {
 enum Format : std::uint8_t {
   R8_UNORM,
   RG8_UNORM,
-  RGB8_UNORM,
   RGBA8_UNORM,
   R16_UNORM,
   RG16_UNORM,
-  RGB16_UNORM,
   RGBA16_UNORM,
   R32_UINT,
   RG32_UINT,
@@ -289,11 +287,9 @@ enum Format : std::uint8_t {
   RGBA32_UINT,
   R8_SNORM,
   RG8_SNORM,
-  RGB8_SNORM,
   RGBA8_SNORM,
   R16_SNORM,
   RG16_SNORM,
-  RGB16_SNORM,
   RGBA16_SNORM,
   R32_SINT,
   RG32_SINT,
@@ -366,8 +362,10 @@ template <hsh::Target T> struct SamplerObject {};
 
 /* Associates texture with sampler object index in shader data. */
 struct SamplerBinding {
-  texture_typeless tex;
-  unsigned idx = 0;
+  texture_typeless Tex; /* Reference to actual texture being sampled. */
+  unsigned Idx = 0; /* Index of sampler information in const data. */
+  unsigned TexIdx =
+      0; /* Index of texture being sampled (as listed in parameters). */
 };
 
 enum InputRate : std::uint8_t { PerVertex, PerInstance };
@@ -390,16 +388,12 @@ constexpr std::size_t HshFormatToTexelSize(Format format) noexcept {
     return 1;
   case RG8_UNORM:
     return 2;
-  case RGB8_UNORM:
-    return 3;
   case RGBA8_UNORM:
     return 4;
   case R16_UNORM:
     return 2;
   case RG16_UNORM:
     return 4;
-  case RGB16_UNORM:
-    return 6;
   case RGBA16_UNORM:
     return 8;
   case R32_UINT:
@@ -414,16 +408,12 @@ constexpr std::size_t HshFormatToTexelSize(Format format) noexcept {
     return 1;
   case RG8_SNORM:
     return 2;
-  case RGB8_SNORM:
-    return 3;
   case RGBA8_SNORM:
     return 4;
   case R16_SNORM:
     return 2;
   case RG16_SNORM:
     return 4;
-  case RGB16_SNORM:
-    return 6;
   case RGBA16_SNORM:
     return 8;
   case R32_SINT:

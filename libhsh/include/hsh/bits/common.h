@@ -153,4 +153,8 @@ template <Target T> struct TargetTraits {
 template <hsh::Target T> struct SamplerObject;
 struct SamplerBinding;
 template <typename T> struct ClassWrapper {};
+
+template <typename T, typename U> constexpr T AlignUp(T val, U align) {
+  return (val + align - 1) &~ (align - 1);
+}
 } // namespace hsh::detail

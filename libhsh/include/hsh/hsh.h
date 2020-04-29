@@ -16,7 +16,9 @@
 #include "bits/builtin_types.h"
 #include "bits/common.h"
 #include "bits/source_location.h"
+
 #include "bits/vulkan.h"
+#include "bits/deko.h"
 
 namespace hsh {
 struct offset2d {
@@ -68,6 +70,9 @@ struct extent2d {
   constexpr extent2d(vk::Extent2D ext) noexcept : w(ext.width), h(ext.height) {}
   operator vk::Extent2D() const noexcept { return vk::Extent2D(w, h); }
 #endif
+  bool operator==(const extent2d &other) const noexcept {
+    return w == other.w && h == other.h;
+  }
 };
 struct rect2d {
   offset2d offset;
@@ -112,11 +117,13 @@ struct scissor : rect2d {
 } // namespace hsh
 
 #include "bits/vulkan_impl.h"
+#include "bits/deko_impl.h"
 
 #include "bits/select_target_traits.h"
 
 #include "bits/common_resources.h"
 #include "bits/vulkan_resources.h"
+#include "bits/deko_resources.h"
 
 namespace hsh {
 

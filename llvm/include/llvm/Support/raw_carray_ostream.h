@@ -47,8 +47,13 @@ class raw_carray_ostream : public raw_ostream {
   uint64_t current_pos() const override { return 0; }
 
 public:
-  explicit raw_carray_ostream(raw_ostream &OS, StringRef Name) : OS(OS) {
-    OS << "const uint8_t " << Name << "[] = {";
+  explicit raw_carray_ostream(raw_ostream &OS, StringRef Name,
+                              StringRef AttrString = {})
+      : OS(OS) {
+    OS << "const uint8_t " << Name << "[]";
+    if (!AttrString.empty())
+      OS << '\n' << AttrString;
+    OS << " = {";
   }
   ~raw_carray_ostream() override {
     flush();

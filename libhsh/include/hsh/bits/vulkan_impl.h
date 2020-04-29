@@ -1276,7 +1276,7 @@ struct UploadBufferAllocationCreateInfo : VmaAllocationCreateInfo {
 inline vk::UniqueVmaPool CreateUploadPool() noexcept {
   struct UploadPoolCreateInfo : VmaPoolCreateInfo {
     constexpr UploadPoolCreateInfo() noexcept
-        : VmaPoolCreateInfo{0, 0, 64ull * 1024 * 1024, 0, 0, 0} {}
+        : VmaPoolCreateInfo{0, 0, 64ull * 1024ull * 1024ull, 0, 0, 0} {}
   };
   UploadPoolCreateInfo CreateInfo;
   auto Result = vmaFindMemoryTypeIndexForBufferInfo(
@@ -1570,8 +1570,8 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
                                     VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
   vk::Offset3D DestOff{};
-  if (Surface->Extent.width > Surface->MarginL + Surface->MarginR &&
-      Surface->Extent.height > Surface->MarginT + Surface->MarginB)
+  if (int32_t(Surface->Extent.width) > Surface->MarginL + Surface->MarginR &&
+      int32_t(Surface->Extent.height) > Surface->MarginT + Surface->MarginB)
     DestOff = vk::Offset3D(Surface->MarginL, Surface->MarginT);
   _Resolve(ColorTexture.GetImage(), DstImage.Image,
            vk::ImageAspectFlagBits::eColor, vk::Offset3D(), DestOff,

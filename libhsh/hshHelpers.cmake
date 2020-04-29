@@ -59,6 +59,13 @@ else()
     message(STATUS "[hsh]: Found vulkan headers")
     list(APPEND HSH_TARGETS_FOUND vulkan-spirv)
   endif()
+
+  #find_path(LIBNX_INCLUDE_DIR NAMES deko3d.hpp PATHS "/opt/devkitpro/libnx/include")
+  find_path(LIBNX_INCLUDE_DIR NAMES deko3d.hpp PATHS "/home/jacko/Desktop/deko3d/include")
+  if (LIBNX_INCLUDE_DIR)
+    message(STATUS "[hsh]: Found libnx headers")
+    list(APPEND HSH_EXTRA_INCLUDE_DIRS "${LIBNX_INCLUDE_DIR}")
+  endif()
 endif()
 
 set(HSH_TARGETS ${HSH_TARGETS_FOUND} CACHE STRING "Enabled backend targets for all hsh-enabled targets")
@@ -66,6 +73,11 @@ set(HSH_TARGETS ${HSH_TARGETS_FOUND} CACHE STRING "Enabled backend targets for a
 if (vulkan-spirv IN_LIST HSH_TARGETS)
   list(APPEND HSH_EXTRA_COMPILE_DEFINES HSH_ENABLE_VULKAN=1)
   message(STATUS "[hsh]: Enabling vulkan hsh target")
+endif()
+
+if (deko3d IN_LIST HSH_TARGETS)
+  list(APPEND HSH_EXTRA_COMPILE_DEFINES HSH_ENABLE_DEKO3D=1)
+  message(STATUS "[hsh]: Enabling deko3d hsh target")
 endif()
 
 #

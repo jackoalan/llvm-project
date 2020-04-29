@@ -21,16 +21,12 @@ constexpr vk::Format HshToVkFormat(Format Format) noexcept {
     return vk::Format::eR8Unorm;
   case RG8_UNORM:
     return vk::Format::eR8G8Unorm;
-  case RGB8_UNORM:
-    return vk::Format::eR8G8B8Unorm;
   case RGBA8_UNORM:
     return vk::Format::eR8G8B8A8Unorm;
   case R16_UNORM:
     return vk::Format::eR16Unorm;
   case RG16_UNORM:
     return vk::Format::eR16G16Unorm;
-  case RGB16_UNORM:
-    return vk::Format::eR16G16B16Unorm;
   case RGBA16_UNORM:
     return vk::Format::eR16G16B16A16Unorm;
   case R32_UINT:
@@ -45,16 +41,12 @@ constexpr vk::Format HshToVkFormat(Format Format) noexcept {
     return vk::Format::eR8Snorm;
   case RG8_SNORM:
     return vk::Format::eR8G8Snorm;
-  case RGB8_SNORM:
-    return vk::Format::eR8G8B8Snorm;
   case RGBA8_SNORM:
     return vk::Format::eR8G8B8A8Snorm;
   case R16_SNORM:
     return vk::Format::eR16Snorm;
   case RG16_SNORM:
     return vk::Format::eR16G16Snorm;
-  case RGB16_SNORM:
-    return vk::Format::eR16G16B16Snorm;
   case RGBA16_SNORM:
     return vk::Format::eR16G16B16A16Snorm;
   case R32_SINT:
@@ -410,8 +402,8 @@ template <typename Impl> struct DescriptorPoolWrites {
       auto SamplerIdx = SamplerIt - SamplerBegin;
       auto &Sampler = *SamplerIt++;
       Sampler = vk::DescriptorImageInfo(
-          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.idx].get().Get(
-              Impl::cdata_VULKAN_SPIRV.Samplers[sampler.idx], sampler.tex,
+          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.Idx].get().Get(
+              Impl::cdata_VULKAN_SPIRV.Samplers[sampler.Idx], sampler.Tex,
               Impl::cdata_VULKAN_SPIRV.Location.with_field("Sampler",
                                                            SamplerIdx)));
       auto &Write = *WriteIt++;

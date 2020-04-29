@@ -259,11 +259,9 @@ enum HshAttributeKind { PerVertex, PerInstance };
 enum HshFormat : uint8_t {
   R8_UNORM,
   RG8_UNORM,
-  RGB8_UNORM,
   RGBA8_UNORM,
   R16_UNORM,
   RG16_UNORM,
-  RGB16_UNORM,
   RGBA16_UNORM,
   R32_UINT,
   RG32_UINT,
@@ -271,11 +269,9 @@ enum HshFormat : uint8_t {
   RGBA32_UINT,
   R8_SNORM,
   RG8_SNORM,
-  RGB8_SNORM,
   RGBA8_SNORM,
   R16_SNORM,
   RG16_SNORM,
-  RGB16_SNORM,
   RGBA16_SNORM,
   R32_SINT,
   RG32_SINT,
@@ -1958,11 +1954,14 @@ public:
 
   CXXFunctionalCastExpr *makeSamplerBinding(ASTContext &Context,
                                             ParmVarDecl *Tex,
-                                            unsigned SamplerIdx) const {
-    std::array<Expr *, 2> Args{
+                                            unsigned SamplerIdx,
+                                            unsigned TextureIdx) const {
+    std::array<Expr *, 3> Args{
         DeclRefExpr::Create(Context, {}, {}, Tex, false, SourceLocation{},
                             Tex->getType(), VK_XValue),
         IntegerLiteral::Create(Context, APInt(32, SamplerIdx), Context.IntTy,
+                               {}),
+        IntegerLiteral::Create(Context, APInt(32, TextureIdx), Context.IntTy,
                                {})};
     auto *Init = new (Context) InitListExpr(Context, {}, Args, {});
     return CXXFunctionalCastExpr::Create(
@@ -2262,6 +2261,7 @@ struct SamplerRecord {
 
 struct SamplerBinding {
   unsigned RecordIdx;
+  unsigned TextureIdx;
   ParmVarDecl *TextureDecl;
   unsigned UseStages;
 };
@@ -2314,7 +2314,7 @@ constexpr HshBuiltinType BuiltinTypeOfTexture(HshTextureKind Kind) {
 }
 
 struct TextureRecord {
-  StringRef Name;
+  const ParmVarDecl *TexParm;
   HshTextureKind Kind;
   unsigned UseStages;
 };
@@ -2332,7 +2332,7 @@ struct VertexAttribute {
 };
 
 struct SampleCall {
-  CXXMemberCallExpr *Expr;
+  const CXXMemberCallExpr *Expr;
   const ParmVarDecl *Decl;
   unsigned SamplerIndex;
 };
@@ -2405,6 +2405,30 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
     for (const auto &[Name, Arg] : InShaderPipelineArgs) {
       if (Name == "early_depth_stencil")
         EarlyDepthStencil = Arg.getAsIntegral().getZExtValue();
+    }
+  }
+
+  static void PrintNZeros(raw_ostream &OS, unsigned N) {
+    bool NeedsComma = false;
+    for (unsigned i = 0; i < N; ++i) {
+      if (NeedsComma)
+        OS << ", ";
+      else
+        NeedsComma = true;
+      OS << '0';
+    }
+  }
+
+  static void PrintNExprs(raw_ostream &OS,
+                          const std::function<void(Expr *)> &ExprArg,
+                          unsigned N, Expr *E) {
+    bool NeedsComma = false;
+    for (unsigned i = 0; i < N; ++i) {
+      if (NeedsComma)
+        OS << ", ";
+      else
+        NeedsComma = true;
+      ExprArg(E);
     }
   }
 
@@ -2532,6 +2556,221 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
     }
     return false;
   }
+
+  SmallVector<const CXXRecordDecl *, 8> NestedRecords;
+
+  void PrintNestedStructs(raw_ostream &OS, ASTContext &Context) {
+    unsigned Idx = 0;
+    for (const auto *Record : NestedRecords) {
+      OS << "struct __Struct" << Idx++ << " {\n";
+      for (auto *FD : Record->fields()) {
+        PrintStructField(OS, Context, FD->getType(), FD->getName(), false, 1);
+        OS << ";\n";
+      }
+      OS << "};\n";
+    }
+  }
+
+  void GatherNestedStructField(ASTContext &Context, QualType Tp,
+                               bool WaitingForArray) {
+    if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
+      if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
+        GatherNestedStructFields(Context, SubRecord, WaitingForArray);
+        return;
+      }
+    }
+
+    if (const auto *AT =
+            dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+
+      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
+        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
+          GatherNestedStructFields(Context, SubRecord, false);
+          return;
+        }
+      }
+
+      GatherNestedStructField(Context, AT->getElementType(), false);
+      return;
+    }
+  }
+
+  void GatherNestedStructFields(ASTContext &Context,
+                                const CXXRecordDecl *Record,
+                                bool WaitingForArray) {
+    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+      for (auto *FD : Record->fields()) {
+        GatherNestedStructField(Context, FD->getType(), true);
+      }
+    } else {
+      for (auto *FD : Record->fields()) {
+        GatherNestedStructField(Context, FD->getType(), false);
+      }
+      if (std::find(NestedRecords.begin(), NestedRecords.end(), Record) ==
+          NestedRecords.end())
+        NestedRecords.push_back(Record);
+    }
+  }
+
+  void GatherNestedPackoffsetFields(ASTContext &Context,
+                                    const CXXRecordDecl *Record,
+                                    CharUnits BaseOffset = {}) {
+    bool WaitingForArray = Builtins.isStdArrayType(Record);
+
+    for (auto *FD : Record->fields()) {
+      GatherNestedStructField(Context, FD->getType(), WaitingForArray);
+    }
+  }
+
+  static constexpr std::array<char, 4> VectorComponents{'x', 'y', 'z', 'w'};
+
+  void PrintStructField(raw_ostream &OS, ASTContext &Context, QualType Tp,
+                        const Twine &FieldName, bool WaitingForArray,
+                        unsigned Indent) {
+    if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
+      if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
+        PrintStructFields(OS, Context, SubRecord, FieldName, WaitingForArray,
+                          Indent);
+        return;
+      }
+    }
+
+    if (const auto *AT =
+            dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+      unsigned Size = AT->getSize().getZExtValue();
+      Twine Tw1 = Twine('[') + Twine(Size);
+      Twine Tw2 = Tw1 + Twine(']');
+      Twine ArrayFieldName = FieldName + Tw2;
+
+      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
+        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
+          PrintStructFields(OS, Context, SubRecord, ArrayFieldName, false,
+                            Indent);
+          return;
+        }
+      }
+
+      PrintStructField(OS, Context, AT->getElementType(), ArrayFieldName, false,
+                       Indent);
+      return;
+    }
+
+    if (!WaitingForArray) {
+      OS.indent(Indent * 2);
+      Tp.print(OS, *this, FieldName, Indent);
+    }
+  }
+
+  void PrintStructFields(raw_ostream &OS, ASTContext &Context,
+                         const CXXRecordDecl *Record, const Twine &FieldName,
+                         bool WaitingForArray, unsigned Indent) {
+    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+      for (auto *FD : Record->fields()) {
+        PrintStructField(OS, Context, FD->getType(), FieldName, true, Indent);
+      }
+    } else {
+      auto *Search =
+          std::find(NestedRecords.begin(), NestedRecords.end(), Record);
+      assert(Search != NestedRecords.end());
+      OS.indent(Indent * 2)
+          << "__Struct" << Search - NestedRecords.begin() << ' ' << FieldName;
+    }
+  }
+
+  void PrintPackoffsetField(raw_ostream &OS, ASTContext &Context, QualType Tp,
+                            const Twine &FieldName, bool WaitingForArray,
+                            CharUnits Offset) {
+    assert(Offset.getQuantity() % 4 == 0);
+    ImplClass::PrintBeforePackoffset(OS, Offset);
+    PrintStructField(OS, Context, Tp, FieldName, WaitingForArray, 1);
+    ImplClass::PrintAfterPackoffset(OS, Offset);
+  }
+
+  void PrintPackoffsetFields(raw_ostream &OS, ASTContext &Context,
+                             const CXXRecordDecl *Record,
+                             const Twine &PrefixName,
+                             CharUnits BaseOffset = {}) {
+    bool WaitingForArray = Builtins.isStdArrayType(Record);
+
+    const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
+    for (auto *FD : Record->fields()) {
+      auto Offset = BaseOffset + Context.toCharUnitsFromBits(
+                                     RL.getFieldOffset(FD->getFieldIndex()));
+      Twine Tw1 = PrefixName + Twine('_');
+      PrintPackoffsetField(OS, Context, FD->getType(),
+                           WaitingForArray ? PrefixName : Tw1 + FD->getName(),
+                           WaitingForArray, Offset);
+    }
+  }
+
+  void PrintAttributeField(raw_ostream &OS, ASTContext &Context, QualType Tp,
+                           const Twine &FieldName, bool WaitingForArray,
+                           unsigned Indent, unsigned &Location,
+                           unsigned ArraySize) {
+    if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
+      if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
+        PrintAttributeFields(OS, Context, SubRecord, FieldName, WaitingForArray,
+                             Indent, Location);
+        return;
+      }
+    }
+
+    if (const auto *AT =
+            dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+      unsigned Size = AT->getSize().getZExtValue();
+      Twine Tw1 = Twine('[') + Twine(Size);
+      Twine Tw2 = Tw1 + Twine(']');
+      Twine ArrayFieldName = FieldName + Tw2;
+
+      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
+        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
+          PrintAttributeFields(OS, Context, SubRecord, ArrayFieldName, false,
+                               Indent, Location);
+          return;
+        }
+      }
+
+      PrintAttributeField(OS, Context, AT->getElementType(), ArrayFieldName,
+                          false, Indent, Location, Size);
+      return;
+    }
+
+    if (!WaitingForArray) {
+      HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
+      if (HshBuiltins::isMatrixType(HBT)) {
+        switch (HBT) {
+        case HBT_float3x3:
+          static_cast<const ImplClass &>(*this).PrintAttributeFieldSpelling(
+              OS, Tp, FieldName, Location, Indent);
+          Location += 3 * ArraySize;
+          break;
+        case HBT_float4x4:
+          static_cast<const ImplClass &>(*this).PrintAttributeFieldSpelling(
+              OS, Tp, FieldName, Location, Indent);
+          Location += 4 * ArraySize;
+          break;
+        default:
+          llvm_unreachable("Unhandled matrix type");
+        }
+      } else {
+        static_cast<const ImplClass &>(*this).PrintAttributeFieldSpelling(
+            OS, Tp, FieldName, Location, Indent);
+        Location += ArraySize;
+      }
+    }
+  }
+
+  void PrintAttributeFields(raw_ostream &OS, ASTContext &Context,
+                            const CXXRecordDecl *Record, const Twine &FieldName,
+                            bool WaitingForArray, unsigned Indent,
+                            unsigned &Location) {
+    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+      for (auto *FD : Record->fields()) {
+        PrintAttributeField(OS, Context, FD->getType(), FieldName, true, Indent,
+                            Location, 1);
+      }
+    }
+  }
 };
 
 struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
@@ -2576,6 +2815,75 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
     }
   }
 
+  bool overrideCXXOperatorCall(
+      CXXOperatorCallExpr *C, raw_ostream &OS,
+      const std::function<void(Expr *)> &ExprArg) const override {
+    if (C->getNumArgs() == 1) {
+      if (C->getOperator() == OO_Star) {
+        /* Ignore derefs */
+        ExprArg(C->getArg(0));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool overrideCXXTemporaryObjectExpr(
+      CXXTemporaryObjectExpr *C, raw_ostream &OS,
+      const std::function<void(Expr *)> &ExprArg) const override {
+    auto DTp = Builtins.identifyBuiltinType(C->getType());
+    if (HshBuiltins::isVectorType(DTp)) {
+      if (C->getNumArgs() == 0) {
+        /* Implicit zero vector construction */
+        OS << HshBuiltins::getSpelling<SourceTarget>(DTp) << '(';
+        PrintNZeros(OS, HshBuiltins::getVectorSize(DTp));
+        OS << ')';
+        return true;
+      } else if (C->getNumArgs() == 1 &&
+                 !HshBuiltins::isVectorType(
+                     Builtins.identifyBuiltinType(C->getArg(0)->getType()))) {
+        /* Implicit scalar-to-vector conversion */
+        OS << HshBuiltins::getSpelling<SourceTarget>(DTp) << '(';
+        PrintNExprs(OS, ExprArg, HshBuiltins::getVectorSize(DTp), C->getArg(0));
+        OS << ')';
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void PrintBeforePackoffset(raw_ostream &OS, CharUnits Offset) {
+    OS.indent(2) << "layout(offset = " << Offset.getQuantity() << ")\n";
+  }
+
+  static void PrintAfterPackoffset(raw_ostream &OS, CharUnits Offset) {
+    OS << ";\n";
+  }
+
+  void PrintAttributeFieldSpelling(raw_ostream &OS, QualType Tp,
+                                   const Twine &FieldName, unsigned Location,
+                                   unsigned Indent) const {
+    OS << "layout(location = " << Location << ") in ";
+    Tp.print(OS, *this);
+    OS << " " << FieldName << ";\n";
+  }
+
+  static constexpr llvm::StringLiteral GLSLRuntimeSupport{
+      R"(#version 450 core
+float saturate(float val) {
+  return clamp(val, 0.0, 1.0);
+}
+vec2 saturate(vec2 val) {
+  return clamp(val, vec2(0.0, 0.0), vec2(1.0, 1.0));
+}
+vec3 saturate(vec3 val) {
+  return clamp(val, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+}
+vec4 saturate(vec4 val) {
+  return clamp(val, vec4(0.0, 0.0, 0.0, 0.0), vec4(1.0, 1.0, 1.0, 1.0));
+}
+)"};
+
   void printStage(raw_ostream &OS, ASTContext &Context,
                   ArrayRef<FunctionRecord> FunctionRecords,
                   ArrayRef<UniformRecord> UniformRecords,
@@ -2586,27 +2894,53 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
                   unsigned NumColorAttachments, CompoundStmt *Stmts,
                   HshStage Stage, HshStage From, HshStage To,
                   ArrayRef<SampleCall> SampleCalls) override {
-    OS << "#version 450 core\n";
+    OS << GLSLRuntimeSupport;
+
+    auto PrintFunction = [&](const FunctionDecl *FD) {
+      SuppressSpecifiers = false;
+      FD->getReturnType().print(OS, *this);
+      OS << ' ';
+      SuppressSpecifiers = true;
+      FD->print(OS, *this);
+    };
+    bool OldTerseOutput = TerseOutput;
+    TerseOutput = true;
+    bool OldSuppressSpecifiers = SuppressSpecifiers;
+    for (auto &Function : FunctionRecords) {
+      if ((1u << Stage) & Function.UseStages) {
+        PrintFunction(Function.Function);
+        OS << ";\n";
+      }
+    }
+    TerseOutput = false;
+    for (auto &Function : FunctionRecords) {
+      if ((1u << Stage) & Function.UseStages) {
+        PrintFunction(Function.Function);
+      }
+    }
+    TerseOutput = OldTerseOutput;
+    SuppressSpecifiers = OldSuppressSpecifiers;
+
+    NestedRecords.clear();
+    for (auto &Record : UniformRecords) {
+      if ((1u << Stage) & Record.UseStages)
+        GatherNestedPackoffsetFields(Context, Record.Record);
+    }
+
+    PrintNestedStructs(OS, Context);
+
     unsigned Binding = 0;
     for (auto &Record : UniformRecords) {
       if ((1u << Stage) & Record.UseStages) {
-        OS << "layout(binding = " << Binding << ") uniform "
-           << Record.Record->getName() << " {\n";
-        SmallString<32> Prefix(Record.Name);
-        Prefix += '_';
-        FieldPrefix = Prefix;
-        for (auto *FD : Record.Record->fields()) {
-          OS << "  ";
-          FD->print(OS, *this, 1);
-          OS << ";\n";
-        }
-        FieldPrefix = StringRef{};
+        OS << "layout(std140, binding = " << Binding << ") uniform b" << Binding
+           << '_' << Record.Record->getName() << " {\n";
+        PrintPackoffsetFields(OS, Context, Record.Record, Record.Name);
         OS << "};\n";
       }
       ++Binding;
     }
 
-    if (FromRecord) {
+    if (FromRecord && !FromRecord->fields().empty()) {
       OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
          << " {\n";
       for (auto *FD : FromRecord->fields()) {
@@ -2617,7 +2951,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
       OS << "} _from_" << HshStageToString(From) << ";\n";
     }
 
-    if (ToRecord) {
+    if (ToRecord && !ToRecord->fields().empty()) {
       OS << "out " << HshStageToString(Stage) << "_to_" << HshStageToString(To)
          << " {\n";
       for (auto *FD : ToRecord->fields()) {
@@ -2633,29 +2967,9 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
       for (const auto &Attribute : Attributes) {
         for (const auto *FD : Attribute.Record->fields()) {
           QualType Tp = FD->getType().getUnqualifiedType();
-          HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
-          if (HshBuiltins::isMatrixType(HBT)) {
-            switch (HBT) {
-            case HBT_float3x3:
-              OS << "layout(location = " << Location << ") in ";
-              Tp.print(OS, *this);
-              OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
-              Location += 3;
-              break;
-            case HBT_float4x4:
-              OS << "layout(location = " << Location << ") in ";
-              Tp.print(OS, *this);
-              OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
-              Location += 4;
-              break;
-            default:
-              llvm_unreachable("Unhandled matrix type");
-            }
-          } else {
-            OS << "layout(location = " << Location++ << ") in ";
-            Tp.print(OS, *this);
-            OS << " " << Attribute.Name << "_" << FD->getName() << ";\n";
-          }
+          Twine Tw1 = Twine(Attribute.Name) + Twine('_');
+          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(), false, 0,
+                              Location, 1);
         }
       }
     }
@@ -2666,7 +2980,7 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
         OS << "layout(binding = " << TexBinding << ") uniform "
            << HshBuiltins::getSpelling<SourceTarget>(
                   BuiltinTypeOfTexture(Tex.Kind))
-           << " " << Tex.Name << ";\n";
+           << " " << Tex.TexParm->getName() << ";\n";
       ++TexBinding;
     }
 
@@ -2775,30 +3089,6 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     return false;
   }
 
-  static void PrintNZeros(raw_ostream &OS, unsigned N) {
-    bool NeedsComma = false;
-    for (unsigned i = 0; i < N; ++i) {
-      if (NeedsComma)
-        OS << ", ";
-      else
-        NeedsComma = true;
-      OS << '0';
-    }
-  }
-
-  static void PrintNExprs(raw_ostream &OS,
-                          const std::function<void(Expr *)> &ExprArg,
-                          unsigned N, Expr *E) {
-    bool NeedsComma = false;
-    for (unsigned i = 0; i < N; ++i) {
-      if (NeedsComma)
-        OS << ", ";
-      else
-        NeedsComma = true;
-      ExprArg(E);
-    }
-  }
-
   bool overrideCXXTemporaryObjectExpr(
       CXXTemporaryObjectExpr *C, raw_ostream &OS,
       const std::function<void(Expr *)> &ExprArg) const override {
@@ -2857,178 +3147,32 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
       Indent() << AfterStatements;
   }
 
+  static void PrintBeforePackoffset(raw_ostream &OS, CharUnits Offset) {}
+
+  static void PrintAfterPackoffset(raw_ostream &OS, CharUnits Offset) {
+    auto Words = Offset.getQuantity() / 4;
+    auto Vectors = Words / 4;
+    auto Rem = Words % 4;
+    OS << " : packoffset(c" << Vectors << '.' << VectorComponents[Rem]
+       << ");\n";
+  }
+
+  void PrintAttributeFieldSpelling(raw_ostream &OS, QualType Tp,
+                                   const Twine &FieldName, unsigned Location,
+                                   unsigned Indent) const {
+    if (Target == HT_VULKAN_SPIRV)
+      OS.indent(Indent * 2) << "[[vk::location(" << Location << ")]] ";
+    else
+      OS.indent(Indent * 2);
+    Tp.print(OS, *this);
+    OS << " " << FieldName << " : ATTR" << Location << ";\n";
+  }
+
   static constexpr llvm::StringLiteral HLSLRuntimeSupport{
       R"(static float3x3 float4x4_to_float3x3(float4x4 mtx) {
   return float3x3(mtx[0].xyz, mtx[1].xyz, mtx[2].xyz);
 }
 )"};
-
-  static constexpr std::array<char, 4> VectorComponents{'x', 'y', 'z', 'w'};
-
-  void PrintStructField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                        const Twine &FieldName, bool WaitingForArray,
-                        unsigned Indent) {
-    if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
-      if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
-        PrintStructFields(OS, Context, SubRecord, FieldName, WaitingForArray,
-                          Indent);
-        return;
-      }
-    }
-
-    if (const auto *AT =
-            dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
-      unsigned Size = AT->getSize().getZExtValue();
-      Twine Tw1 = Twine('[') + Twine(Size);
-      Twine Tw2 = Tw1 + Twine(']');
-      Twine ArrayFieldName = FieldName + Tw2;
-
-      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
-        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
-          PrintStructFields(OS, Context, SubRecord, ArrayFieldName, false,
-                            Indent);
-          return;
-        }
-      }
-
-      PrintStructField(OS, Context, AT->getElementType(), ArrayFieldName, false,
-                       Indent);
-      return;
-    }
-
-    if (!WaitingForArray) {
-      OS.indent(Indent * 2);
-      Tp.print(OS, *this, FieldName, Indent);
-    }
-  }
-
-  void PrintStructFields(raw_ostream &OS, ASTContext &Context,
-                         const CXXRecordDecl *Record, const Twine &FieldName,
-                         bool WaitingForArray, unsigned Indent) {
-    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
-      for (auto *FD : Record->fields()) {
-        PrintStructField(OS, Context, FD->getType(), FieldName, true, Indent);
-      }
-    } else {
-      OS.indent(Indent * 2) << "struct {\n";
-      for (auto *FD : Record->fields()) {
-        PrintStructField(OS, Context, FD->getType(), FD->getName(), false,
-                         Indent + 1);
-        OS << ";\n";
-      }
-      OS.indent(Indent * 2) << "} " << FieldName;
-    }
-  }
-
-  void PrintPackoffsetField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                            const Twine &FieldName, bool WaitingForArray,
-                            CharUnits Offset) {
-    auto Words = Offset.getQuantity() / 4;
-    assert(Offset.getQuantity() % 4 == 0);
-    auto Vectors = Words / 4;
-    auto Rem = Words % 4;
-    PrintStructField(OS, Context, Tp, FieldName, WaitingForArray, 1);
-    OS << " : packoffset(c" << Vectors << '.' << VectorComponents[Rem]
-       << ");\n";
-  }
-
-  void PrintPackoffsetFields(raw_ostream &OS, ASTContext &Context,
-                             const CXXRecordDecl *Record,
-                             const Twine &PrefixName,
-                             CharUnits BaseOffset = {}) {
-    bool WaitingForArray = Builtins.isStdArrayType(Record);
-
-    const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
-    for (auto *FD : Record->fields()) {
-      auto Offset = BaseOffset + Context.toCharUnitsFromBits(
-                                     RL.getFieldOffset(FD->getFieldIndex()));
-      Twine Tw1 = PrefixName + Twine('_');
-      PrintPackoffsetField(OS, Context, FD->getType(),
-                           WaitingForArray ? PrefixName : Tw1 + FD->getName(),
-                           WaitingForArray, Offset);
-    }
-  }
-
-  void PrintAttributeField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                           const Twine &FieldName, bool WaitingForArray,
-                           unsigned Indent, unsigned &Location,
-                           unsigned ArraySize) {
-    if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
-      if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
-        PrintAttributeFields(OS, Context, SubRecord, FieldName, WaitingForArray,
-                             Indent, Location);
-        return;
-      }
-    }
-
-    if (const auto *AT =
-            dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
-      unsigned Size = AT->getSize().getZExtValue();
-      Twine Tw1 = Twine('[') + Twine(Size);
-      Twine Tw2 = Tw1 + Twine(']');
-      Twine ArrayFieldName = FieldName + Tw2;
-
-      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
-        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
-          PrintAttributeFields(OS, Context, SubRecord, ArrayFieldName, false,
-                               Indent, Location);
-          return;
-        }
-      }
-
-      PrintAttributeField(OS, Context, AT->getElementType(), ArrayFieldName,
-                          false, Indent, Location, Size);
-      return;
-    }
-
-    if (!WaitingForArray) {
-      HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
-      if (HshBuiltins::isMatrixType(HBT)) {
-        switch (HBT) {
-        case HBT_float3x3:
-          if (Target == HT_VULKAN_SPIRV)
-            OS.indent(Indent * 2) << "[[vk::location(" << Location << ")]] ";
-          else
-            OS.indent(Indent * 2);
-          Tp.print(OS, *this);
-          OS << " " << FieldName << " : ATTR" << Location << ";\n";
-          Location += 3 * ArraySize;
-          break;
-        case HBT_float4x4:
-          if (Target == HT_VULKAN_SPIRV)
-            OS.indent(Indent * 2) << "[[vk::location(" << Location << ")]] ";
-          else
-            OS.indent(Indent * 2);
-          Tp.print(OS, *this);
-          OS << " " << FieldName << " : ATTR" << Location << ";\n";
-          Location += 4 * ArraySize;
-          break;
-        default:
-          llvm_unreachable("Unhandled matrix type");
-        }
-      } else {
-        if (Target == HT_VULKAN_SPIRV)
-          OS.indent(Indent * 2) << "[[vk::location(" << Location << ")]] ";
-        else
-          OS.indent(Indent * 2);
-        Tp.print(OS, *this);
-        OS << " " << FieldName << " : ATTR" << Location << ";\n";
-        Location += ArraySize;
-      }
-    }
-  }
-
-  void PrintAttributeFields(raw_ostream &OS, ASTContext &Context,
-                            const CXXRecordDecl *Record, const Twine &FieldName,
-                            bool WaitingForArray, unsigned Indent,
-                            unsigned &Location) {
-    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
-      for (auto *FD : Record->fields()) {
-        PrintAttributeField(OS, Context, FD->getType(), FieldName, true, Indent,
-                            Location, 1);
-      }
-    }
-  }
 
   void printStage(raw_ostream &OS, ASTContext &Context,
                   ArrayRef<FunctionRecord> FunctionRecords,
@@ -3069,6 +3213,14 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
     }
     TerseOutput = OldTerseOutput;
     SuppressSpecifiers = OldSuppressSpecifiers;
+
+    NestedRecords.clear();
+    for (auto &Record : UniformRecords) {
+      if ((1u << Stage) & Record.UseStages)
+        GatherNestedPackoffsetFields(Context, Record.Record);
+    }
+
+    PrintNestedStructs(OS, Context);
 
     unsigned Binding = 0;
     for (auto &Record : UniformRecords) {
@@ -3125,7 +3277,8 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
       if ((1u << Stage) & Tex.UseStages)
         OS << HshBuiltins::getSpelling<SourceTarget>(
                   BuiltinTypeOfTexture(Tex.Kind))
-           << " " << Tex.Name << " : register(t" << TexBinding << ");\n";
+           << " " << Tex.TexParm->getName() << " : register(t" << TexBinding
+           << ");\n";
       ++TexBinding;
     }
 
@@ -3439,9 +3592,14 @@ public:
               return B.RecordIdx == RecordIdx && B.TextureDecl == PVD;
             });
         if (BindingSearch == SamplerBindings.end()) {
+          auto TextureSearch =
+              std::find_if(Textures.begin(), Textures.end(),
+                           [&](const auto &Tex) { return Tex.TexParm == PVD; });
+          assert(TextureSearch != Textures.end());
           BindingSearch = SamplerBindings.insert(
               SamplerBindings.end(),
-              SamplerBinding{RecordIdx, PVD, 1u << Stage});
+              SamplerBinding{RecordIdx, TextureSearch - Textures.begin(), PVD,
+                             1u << Stage});
         } else {
           BindingSearch->UseStages |= 1u << Stage;
         }
@@ -3661,14 +3819,16 @@ public:
     UniformRecords.push_back(UniformRecord{Name, Record, Stages});
   }
 
-  void registerTexture(StringRef Name, HshTextureKind Kind, unsigned Stages) {
-    auto Search = std::find_if(Textures.begin(), Textures.end(),
-                               [&](const auto &T) { return T.Name == Name; });
+  void registerTexture(const ParmVarDecl *TexParm, HshTextureKind Kind,
+                       unsigned Stages) {
+    auto Search =
+        std::find_if(Textures.begin(), Textures.end(),
+                     [&](const auto &T) { return T.TexParm == TexParm; });
     if (Search != Textures.end()) {
       Search->UseStages |= Stages;
       return;
     }
-    Textures.push_back(TextureRecord{Name, Kind, Stages});
+    Textures.push_back(TextureRecord{TexParm, Kind, Stages});
   }
 
   void registerParmVarRef(ParmVarDecl *PVD, HshStage Stage) {
@@ -3690,6 +3850,15 @@ public:
       Search->UseStages |= 1u << unsigned(Stage);
     } else {
       ReportOverloadedFunctionUsage(FD, Search->Function, Context);
+    }
+  }
+
+  void prepare(CXXConstructorDecl *Ctor) {
+    for (auto *Param : Ctor->parameters()) {
+      auto HBT = Builtins.identifyBuiltinType(Param->getType());
+      if (HshBuiltins::isTextureType(HBT)) {
+        registerTexture(Param, KindOfTextureType(HBT), 0);
+      }
     }
   }
 
@@ -3715,7 +3884,7 @@ public:
         Stages = Search->second;
       auto HBT = Builtins.identifyBuiltinType(Param->getType());
       if (HshBuiltins::isTextureType(HBT)) {
-        registerTexture(Param->getName(), KindOfTextureType(HBT), Stages);
+        registerTexture(Param, KindOfTextureType(HBT), Stages);
       } else if (auto *UR = Builtins.getUniformRecord(Param)) {
         registerUniform(Param->getName(), UR, Stages);
       } else if (auto *AR = Builtins.getVertexAttributeRecord(Param)) {
@@ -3952,6 +4121,7 @@ protected:
       DekoCompiler Compiler(ShaderProfiles[Profile]);
 
       if (!Compiler.CompileGlsl(Stage.data())) {
+        llvm::errs() << Stage << '\n';
         Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                            "%0 problem from deko"))
             << HshStageToString(HStage);
@@ -4883,9 +5053,14 @@ class StageStmtPartitioner {
     Expr *InterStageReferenceExpr(Expr *E, HshStage ToStage) {
       llvm::APSInt ConstVal;
       if (E->isIntegerConstantExpr(ConstVal, Partitioner.Context)) {
-        return IntegerLiteral::Create(Partitioner.Context,
-                                      ConstVal.extOrTrunc(32),
-                                      Partitioner.Context.IntTy, {});
+        if (E->isKnownToHaveBooleanValue()) {
+          return new (Partitioner.Context)
+              CXXBoolLiteralExpr(!!ConstVal, Partitioner.Context.BoolTy, {});
+        } else {
+          return IntegerLiteral::Create(Partitioner.Context,
+                                        ConstVal.extOrTrunc(32),
+                                        Partitioner.Context.IntTy, {});
+        }
       }
       if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
         if (isa<EnumConstantDecl>(DRE->getDecl()))
@@ -5749,6 +5924,11 @@ public:
 #if ENABLE_DUMP
       CallCtx->dumpCFG(true);
 #endif
+
+      // Prepare for partitioning
+      Builder.prepare(Constructor);
+
+      // GO!
       StageStmtPartitioner(Context, Builtins).run(*CallCtx, Builder);
       if (Context.getDiagnostics().hasErrorOccurred())
         return;
@@ -5805,7 +5985,8 @@ public:
 
         for (const auto &SamplerBinding : Builder.getSamplerBindings()) {
           RebindCallExprs.push_back(Builtins.makeSamplerBinding(
-              Context, SamplerBinding.TextureDecl, SamplerBinding.RecordIdx));
+              Context, SamplerBinding.TextureDecl, SamplerBinding.RecordIdx,
+              SamplerBinding.TextureIdx));
           RebindCallArgs.push_back(TypeName::getFullyQualifiedType(
               RebindCallExprs.back()->getType(), Context));
         }
@@ -5875,15 +6056,22 @@ public:
           auto Stage = HshStage(StageIt++);
           if (Data.empty())
             continue;
-          auto HashStr = MakeHashString(Hash);
           InitOS << "      hsh::detail::ShaderCode<";
           Builtins.printTargetEnumString(InitOS, HostPolicy, Target);
           InitOS << ">{";
           Builtins.printStageEnumString(InitOS, HostPolicy, Stage);
+          std::string ControlHashStr;
+          if (Target == HT_DEKO3D) {
+            /* Additional shader parameters for deko */
+            auto ControlHash =
+                xxHash64(ArrayRef<uint8_t>{Data.data() + 24, 64});
+            ControlHashStr = MakeHashString(ControlHash);
+            InitOS << ", _dekoc_" << ControlHashStr;
+          }
+          auto HashStr = MakeHashString(Hash);
           InitOS << ", {_hshs_" << HashStr << ", 0x" << HashStr << "}},\n";
-          if (SeenHashes.find(Hash) != SeenHashes.end())
+          if (!SeenHashes.insert(Hash).second)
             continue;
-          SeenHashes.insert(Hash);
           {
             raw_comment_ostream CommentOut(*OS);
             CommentOut << "// " << HshStageToString(Stage)
@@ -5892,12 +6080,28 @@ public:
             CommentOut << Source;
           }
           *OS << "inline ";
-          if (Target != HT_VULKAN_SPIRV) {
-            raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr);
-            DataOut.write((const char *)Data.data(), Data.size());
-          } else {
+          if (Target == HT_VULKAN_SPIRV) {
             raw_carray32_ostream DataOut(*OS, "_hshs_"s + HashStr);
             DataOut.write((const uint32_t *)Data.data(), Data.size() / 4);
+          } else if (Target == HT_DEKO3D) {
+            /* Dksh headers are packed together by the linker */
+            {
+              raw_carray_ostream ControlOut(
+                  *OS, "_dekoc_"s + ControlHashStr,
+                  "__attribute__((section(\".deko.control\"), aligned(64)))");
+              ControlOut.write((const char *)Data.data() + 24, 64);
+            }
+            {
+              *OS << "\ninline ";
+              raw_carray_ostream DataOut(
+                  *OS, "_hshs_"s + HashStr,
+                  "__attribute__((section(\".deko.shader\"), "
+                  "aligned(DK_SHADER_CODE_ALIGNMENT)))");
+              DataOut.write((const char *)Data.data() + 256, Data.size() - 256);
+            }
+          } else {
+            raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr);
+            DataOut.write((const char *)Data.data(), Data.size());
           }
           *OS << "\ninline hsh::detail::ShaderObject<";
           Builtins.printTargetEnumString(*OS, HostPolicy, Target);
@@ -6190,7 +6394,7 @@ public:
                   NeedsArgComma = true;
                 Arg.print(Policy, OS);
               }
-              OS << ">>::_rebind(__binding, Resources...); return;\n";
+              OS << ">::_rebind(__binding, Resources...); return;\n";
             } else if (!Name.empty()) {
               if (IntCast)
                 indent(OS, Indentation) << "switch (int(" << Name << ")) {\n";
