@@ -1551,8 +1551,7 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
                                              bool Reattach) noexcept {
   assert(Surface->NextImage != UINT32_MAX &&
          "acquireNextImage not called on surface for this frame");
-  auto SurfaceContentExtent = Surface->ContentExtent();
-  assert(SurfaceContentExtent == Extent &&
+  assert(Surface->ContentExtent() == Extent &&
          "Mismatched render texture / surface extents");
   bool DelimitRenderPass = this == Globals.AttachedRenderTexture;
   if (DelimitRenderPass)
@@ -1750,7 +1749,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
                                         VK_REMAINING_ARRAY_LAYERS)));
       vulkan::Globals.CopyCmd.copyBufferToImage(
           UploadAllocation.GetBuffer(), Allocation.GetImage(),
-          vk::ImageLayout::eTransferDstOptimal, NumMips, Copies.data());
+          vk::ImageLayout::eTransferDstOptimal, {NumMips, Copies.data()});
       vulkan::Globals.CopyCmd.pipelineBarrier(
           vk::PipelineStageFlagBits::eTransfer,
           vk::PipelineStageFlagBits::eVertexShader |

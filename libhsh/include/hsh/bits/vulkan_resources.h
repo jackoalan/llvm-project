@@ -444,7 +444,7 @@ template <typename T>
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     index_buffer<T> ibo) noexcept {
   Index.Buffer = ibo.Binding.get_VULKAN_SPIRV();
-  Index.Type = vk::index_type<T>::indexType;
+  Index.Type = vk::IndexTypeValue<T>::value;
 }
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
     texture_typeless) noexcept {
@@ -905,7 +905,7 @@ inline auto CreateTextureOwner(
                                     VK_REMAINING_ARRAY_LAYERS)));
   vulkan::Globals.CopyCmd.copyBufferToImage(
       UploadBuffer.GetBuffer(), Ret.Allocation.GetImage(),
-      vk::ImageLayout::eTransferDstOptimal, numMips, Copies.data());
+      vk::ImageLayout::eTransferDstOptimal, {numMips, Copies.data()});
   vulkan::Globals.CopyCmd.pipelineBarrier(
       vk::PipelineStageFlagBits::eTransfer,
       vk::PipelineStageFlagBits::eVertexShader |

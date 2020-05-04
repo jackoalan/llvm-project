@@ -2,6 +2,8 @@
 
 #if HSH_ENABLE_DEKO3D
 
+#include <memory>
+
 namespace hsh::detail::deko {
 class BufferAllocation {
   friend class DeletedAllocation;
@@ -32,8 +34,15 @@ public:
   uint32_t GetSize() const noexcept { return Buffer.size; }
 };
 
+template <typename T> class DescriptorSetAllocation;
+
 class UploadBufferAllocation : public BufferAllocation {
   friend UploadBufferAllocation AllocateUploadBuffer(uint32_t size) noexcept;
+  friend class StaticBufferAllocation
+  AllocateStaticBuffer(uint32_t size, uint32_t alignment) noexcept;
+  template <typename U>
+  friend DescriptorSetAllocation<U>
+  AllocateDescriptorSet(uint32_t Count) noexcept;
   void *MappedData = nullptr;
   UploadBufferAllocation(DkBufExtents BufferIn, DmaAllocation AllocationIn,
                          void *MappedData) noexcept
@@ -42,7 +51,7 @@ class UploadBufferAllocation : public BufferAllocation {
 public:
   UploadBufferAllocation() noexcept = default;
   void *GetMappedData() const noexcept { return MappedData; }
-  void Flush() noexcept;
+  inline void Flush() noexcept;
 };
 
 class StaticBufferAllocation : public UploadBufferAllocation {
@@ -330,8 +339,6 @@ public:
 struct DekoGlobals {
   dk::Device Device;
   DmaAllocator Allocator;
-  struct DescriptorPoolChain *DescriptorPoolChain = nullptr;
-  dk::Fence *ImageAcquireSem = nullptr;
   dk::Queue Queue;
   dk::MemBlock ShaderMem;
   float Anisotropy = 0.f;
@@ -341,6 +348,7 @@ struct DekoGlobals {
   dk::Fence *CmdFence = nullptr;
   dk::CmdBuf CopyCmd;
   dk::Fence *CopyFence = nullptr;
+  dk::Fence *ImageAcquireSem = nullptr;
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
   uint64_t Frame = 0;
   bool AcquiredImage = false;
@@ -357,24 +365,21 @@ struct DekoGlobals {
     CmdFence->wait();
     DeletedResources = &(*DeletedResourcesArr)[CurBufferIdx];
     DeletedResources->Purge();
-
     CopyCmd.clear();
     Cmd.clear();
   }
 
   void PostRender() noexcept {
-    if (AttachedRenderTexture) {
-      AttachedRenderTexture = nullptr;
-    }
+    AttachedRenderTexture = nullptr;
     DkCmdList CopyList = CopyCmd.finishList();
     DkCmdList CmdList = Cmd.finishList();
-
     Queue.submitCommands(CopyList);
-    Queue.signalFence(*CopyFence, false);
+    Queue.signalFence(*CopyFence, true);
     Queue.submitCommands(CmdList);
     for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
     AcquiredImage = false;
+    Queue.flush();
     CopyFence->wait();
     ++Frame;
   }
@@ -441,7 +446,7 @@ SurfaceAllocation::SurfaceAllocation(void *Surface,
 
   dk::ImageLayoutMaker LayoutMaker(Globals.Device);
   LayoutMaker.setFlags(DkImageFlags_Usage2DEngine | DkImageFlags_UsagePresent |
-                       DkImageFlags_HwCompression);
+                       DkImageFlags_UsageRender | DkImageFlags_HwCompression);
   LayoutMaker.setFormat(FBColorFormat);
   LayoutMaker.setDimensions(Extent.w, Extent.h);
 
@@ -513,18 +518,19 @@ void DynamicBufferAllocation::Unmap() noexcept {
                              UploadBuffer.GetSize());
 }
 
-template <typename T> void DescriptorSetAllocation<T>::Bind() noexcept {
+template <typename T> inline void DescriptorSetAllocation<T>::Bind() noexcept {
   assert(0 && "Invalid descriptor type");
 }
 
-template <> void DescriptorSetAllocation<dk::ImageDescriptor>::Bind() noexcept {
+template <>
+inline void DescriptorSetAllocation<dk::ImageDescriptor>::Bind() noexcept {
   if (IsValid())
     deko::Globals.Cmd.bindImageDescriptorSet(
         Buffer.addr, Buffer.size / sizeof(dk::ImageDescriptor));
 }
 
 template <>
-void DescriptorSetAllocation<dk::SamplerDescriptor>::Bind() noexcept {
+inline void DescriptorSetAllocation<dk::SamplerDescriptor>::Bind() noexcept {
   if (IsValid())
     deko::Globals.Cmd.bindSamplerDescriptorSet(
         Buffer.addr, Buffer.size / sizeof(dk::SamplerDescriptor));
@@ -972,17 +978,21 @@ template <> struct TargetTraits<Target::DEKO3D> {
     void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept {}
   };
   struct Pipeline {
-    uint32_t StageMask = 0;
     uint32_t NumShaders = 0;
     std::array<const DkShader *, 5> Shaders;
-    DkPrimitive Primitive;
 
-    void Bind() const noexcept {
+    void Bind(uint32_t StageMask) const noexcept {
       deko::Globals.Cmd.bindShaders(StageMask, {NumShaders, Shaders.data()});
     }
   };
   struct PipelineBinding {
-    Pipeline *Pipeline = nullptr;
+    const Pipeline *Pipeline = nullptr;
+    uint32_t StageMask = 0;
+    DkPrimitive Primitive{};
+    uint32_t NumVtxBufferStates = 0;
+    uint32_t NumVtxAttribStates = 0;
+    const DkVtxBufferState *VtxBufferStates = nullptr;
+    const DkVtxAttribState *VtxAttribStates = nullptr;
     deko::DescriptorSetAllocation<dk::ImageDescriptor> ImageDescriptors;
     deko::DescriptorSetAllocation<dk::SamplerDescriptor> SamplerDescriptors;
     uint32_t NumUniformBuffers = 0;
@@ -995,6 +1005,15 @@ template <> struct TargetTraits<Target::DEKO3D> {
       DkGpuAddr Buffer = DK_GPU_ADDR_INVALID;
       DkIdxFormat Type;
     } Index;
+    uint32_t PatchSize = 0;
+    uint32_t NumBlendStates = 0;
+    const DkBlendState *BlendStates = nullptr;
+    const DkRasterizerState *RasterizerState = nullptr;
+    const DkDepthStencilState *DepthStencilState = nullptr;
+    const DkColorState *ColorState = nullptr;
+    const DkColorWriteState *ColorWriteState = nullptr;
+    bool PrimitiveRestart = false;
+
     struct Iterators {
       decltype(UniformBuffers)::iterator UniformBufferBegin;
       decltype(UniformBuffers)::iterator UniformBufferIt;
@@ -1028,12 +1047,12 @@ template <> struct TargetTraits<Target::DEKO3D> {
     void Rebind(bool UpdateDescriptors, Args... args) noexcept;
 
     void Bind() noexcept {
-      Pipeline->Bind();
+      Pipeline->Bind(StageMask);
       ImageDescriptors.Bind();
       SamplerDescriptors.Bind();
       for (DkStage s = DkStage_Vertex; s <= DkStage_Fragment;
            s = DkStage(int(s) + 1)) {
-        if (Pipeline->StageMask & (1 << s)) {
+        if (StageMask & (1 << s)) {
           deko::Globals.Cmd.bindUniformBuffers(
               s, 0, {NumUniformBuffers, UniformBuffers.data()});
           deko::Globals.Cmd.bindTextures(s, 0, {NumTextures, Textures.data()});
@@ -1041,18 +1060,30 @@ template <> struct TargetTraits<Target::DEKO3D> {
       }
       deko::Globals.Cmd.bindVtxBuffers(
           0, {NumVertexBuffers, VertexBuffers.data()});
+      deko::Globals.Cmd.bindVtxBufferState(
+          {NumVtxBufferStates, VtxBufferStates});
+      deko::Globals.Cmd.bindVtxAttribState(
+          {NumVtxAttribStates, VtxAttribStates});
       if (Index.Buffer != DK_GPU_ADDR_INVALID)
         deko::Globals.Cmd.bindIdxBuffer(Index.Type, Index.Buffer);
+      if (Primitive == DkPrimitive_Patches)
+        deko::Globals.Cmd.setPatchSize(PatchSize);
+      deko::Globals.Cmd.bindBlendStates(0, {NumBlendStates, BlendStates});
+      deko::Globals.Cmd.bindRasterizerState(*RasterizerState);
+      deko::Globals.Cmd.bindDepthStencilState(*DepthStencilState);
+      deko::Globals.Cmd.bindColorState(*ColorState);
+      deko::Globals.Cmd.bindColorWriteState(*ColorWriteState);
+      deko::Globals.Cmd.setPrimitiveRestart(PrimitiveRestart, UINT32_MAX);
     }
 
     void Draw(uint32_t start, uint32_t count) noexcept {
       Bind();
-      deko::Globals.Cmd.draw(Pipeline->Primitive, count, 1, start, 0);
+      deko::Globals.Cmd.draw(Primitive, count, 1, start, 0);
     }
 
     void DrawIndexed(uint32_t start, uint32_t count) noexcept {
       Bind();
-      deko::Globals.Cmd.drawIndexed(Pipeline->Primitive, count, 1, start, 0, 0);
+      deko::Globals.Cmd.drawIndexed(Primitive, count, 1, start, 0, 0);
     }
   };
 

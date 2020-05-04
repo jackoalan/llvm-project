@@ -66,9 +66,7 @@ constexpr uint32_t DmaMemTypePreferredBlockSize[] = {
 
 #endif
 
-
 ///////////////////////////////////////////////////////////////////////////////
-
 
 #define DMA_NUM_MEMORY_TYPES DmaMT_Max
 #define DMA_NUM_MEMORY_HEAPS 1
@@ -78,7 +76,7 @@ constexpr uint32_t DmaMemTypePreferredBlockSize[] = {
 #define DMA_WHOLE_SIZE (~0UL)
 
 typedef void *(*PFN_dmaAllocationFunction)(void *pUserData, size_t size,
-                                          size_t alignment);
+                                           size_t alignment);
 
 typedef void (*PFN_dmaFreeFunction)(void *pUserData, void *pMemory);
 
@@ -3642,7 +3640,7 @@ END OF CONFIGURATION
 static const uint32_t DMA_ALLOCATION_INTERNAL_STRATEGY_MIN_OFFSET = 0x10000000u;
 
 static DmaAllocationCallbacks DmaEmptyAllocationCallbacks = {DMA_NULL, DMA_NULL,
-                                                            DMA_NULL};
+                                                             DMA_NULL};
 
 // Returns number of bits set to 1 in (v).
 static inline uint32_t DmaCountBitsSet(uint32_t v) {
@@ -5771,8 +5769,7 @@ public:
   DmaBlockVector(DmaAllocator hAllocator, DmaPool hParentPool,
                  uint32_t memoryTypeIndex, uint32_t preferredBlockSize,
                  size_t minBlockCount, size_t maxBlockCount,
-                 uint32_t frameInUseCount, bool explicitBlockSize,
-                 uint32_t algorithm);
+                 uint32_t frameInUseCount, uint32_t algorithm);
   ~DmaBlockVector();
 
   DkResult CreateMinBlocks();
@@ -5835,7 +5832,6 @@ private:
   const size_t m_MinBlockCount;
   const size_t m_MaxBlockCount;
   const uint32_t m_FrameInUseCount;
-  const bool m_ExplicitBlockSize;
   const uint32_t m_Algorithm;
   DMA_RW_MUTEX m_Mutex;
 
@@ -7158,7 +7154,7 @@ DkResult DmaAllocation_T::DedicatedAllocMap(DmaAllocator hAllocator,
     } else {
       DMA_ASSERT(0 &&
                  "Dedicated allocation mapped too many times simultaneously.");
-      return DkResult_BadMemFlags;
+      return DkResult_Fail;
     }
   } else {
     *ppData = dkMemBlockGetCpuAddr(m_DedicatedAllocation.m_hMemory);
@@ -10168,7 +10164,6 @@ DmaPool_T::DmaPool_T(DmaAllocator hAllocator,
           createInfo.blockSize != 0 ? createInfo.blockSize : preferredBlockSize,
           createInfo.minBlockCount, createInfo.maxBlockCount,
           createInfo.frameInUseCount,
-          createInfo.blockSize != 0, // explicitBlockSize
           createInfo.flags & DMA_POOL_CREATE_ALGORITHM_MASK), // algorithm
       m_Id(0), m_Name(DMA_NULL) {}
 
@@ -10194,15 +10189,14 @@ DmaBlockVector::DmaBlockVector(DmaAllocator hAllocator, DmaPool hParentPool,
                                uint32_t memoryTypeIndex,
                                uint32_t preferredBlockSize,
                                size_t minBlockCount, size_t maxBlockCount,
-                               uint32_t frameInUseCount, bool explicitBlockSize,
-                               uint32_t algorithm)
+                               uint32_t frameInUseCount, uint32_t algorithm)
     : m_hAllocator(hAllocator), m_hParentPool(hParentPool),
       m_MemoryTypeIndex(memoryTypeIndex),
       m_PreferredBlockSize(preferredBlockSize), m_MinBlockCount(minBlockCount),
       m_MaxBlockCount(maxBlockCount), m_FrameInUseCount(frameInUseCount),
-      m_ExplicitBlockSize(explicitBlockSize), m_Algorithm(algorithm),
-      m_HasEmptyBlock(false), m_Blocks(DmaStlAllocator<DmaDeviceMemoryBlock *>(
-                                  hAllocator->GetAllocationCallbacks())),
+      m_Algorithm(algorithm), m_HasEmptyBlock(false),
+      m_Blocks(DmaStlAllocator<DmaDeviceMemoryBlock *>(
+          hAllocator->GetAllocationCallbacks())),
       m_NextBlockId(0) {}
 
 DmaBlockVector::~DmaBlockVector() {
@@ -10310,10 +10304,9 @@ DkResult DmaBlockVector::AllocatePage(uint32_t currentFrameIndex, uint32_t size,
   const bool withinBudget =
       (createInfo.flags & DMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT) != 0;
 
-  const bool canFallbackToDedicated = !IsCustomPool();
   const bool canCreateNewBlock =
       ((createInfo.flags & DMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT) == 0) &&
-      (m_Blocks.size() < m_MaxBlockCount) && (!canFallbackToDedicated);
+      (m_Blocks.size() < m_MaxBlockCount);
   uint32_t strategy = createInfo.flags & DMA_ALLOCATION_CREATE_STRATEGY_MASK;
 
   // If linearAlgorithm is used, canMakeOtherLost is available only when used as
@@ -10417,37 +10410,8 @@ DkResult DmaBlockVector::AllocatePage(uint32_t currentFrameIndex, uint32_t size,
       uint32_t newBlockSizeShift = 0;
       const uint32_t NEW_BLOCK_SIZE_SHIFT_MAX = 3;
 
-      if (!m_ExplicitBlockSize) {
-        // Allocate 1/8, 1/4, 1/2 as first blocks.
-        const uint32_t maxExistingBlockSize = CalcMaxBlockSize();
-        for (uint32_t i = 0; i < NEW_BLOCK_SIZE_SHIFT_MAX; ++i) {
-          const uint32_t smallerNewBlockSize = newBlockSize / 2;
-          if (smallerNewBlockSize > maxExistingBlockSize &&
-              smallerNewBlockSize >= size * 2) {
-            newBlockSize = smallerNewBlockSize;
-            ++newBlockSizeShift;
-          } else {
-            break;
-          }
-        }
-      }
-
       size_t newBlockIndex = 0;
       DkResult res = CreateBlock(newBlockSize, &newBlockIndex);
-      // Allocation of this size failed? Try 1/2, 1/4, 1/8 of
-      // m_PreferredBlockSize.
-      if (!m_ExplicitBlockSize) {
-        while (res < 0 && newBlockSizeShift < NEW_BLOCK_SIZE_SHIFT_MAX) {
-          const uint32_t smallerNewBlockSize = newBlockSize / 2;
-          if (smallerNewBlockSize >= size) {
-            newBlockSize = smallerNewBlockSize;
-            ++newBlockSizeShift;
-            res = CreateBlock(newBlockSize, &newBlockIndex);
-          } else {
-            break;
-          }
-        }
-      }
 
       if (res == DkResult_Success) {
         DmaDeviceMemoryBlock *const pBlock = m_Blocks[newBlockIndex];
@@ -10746,6 +10710,9 @@ DkResult DmaBlockVector::AllocateFromBlock(
 
 DkResult DmaBlockVector::CreateBlock(uint32_t blockSize,
                                      size_t *pNewBlockIndex) {
+  DMA_ASSERT(blockSize && (blockSize % DK_MEMBLOCK_ALIGNMENT == 0) &&
+             "Block size not aligned for deko.");
+
   DmaMemoryAllocateInfo allocInfo = {};
   allocInfo.memoryTypeIndex = m_MemoryTypeIndex;
   allocInfo.allocationSize = blockSize;
@@ -12589,7 +12556,6 @@ DmaAllocator_T::DmaAllocator_T(const DmaAllocatorCreateInfo *pCreateInfo)
                                       DMA_NULL_HANDLE, // hParentPool
                                       memTypeIndex, preferredBlockSize, 0,
                                       SIZE_MAX, pCreateInfo->frameInUseCount,
-                                      false,  // explicitBlockSize
                                       false); // linearAlgorithm
     // No need to call
     // m_pBlockVectors[memTypeIndex][blockVectorTypeIndex]->CreateMinBlocks
@@ -12734,6 +12700,8 @@ DkResult DmaAllocator_T::AllocateDedicatedMemory(
     bool withinBudget, bool map, bool isUserDataString, void *pUserData,
     size_t allocationCount, DmaAllocation *pAllocations) {
   DMA_ASSERT(allocationCount > 0 && pAllocations);
+
+  size = DmaAlignUp(size, uint32_t(DK_MEMBLOCK_ALIGNMENT));
 
   if (withinBudget) {
     DmaBudget heapBudget = {};

@@ -17,8 +17,8 @@
 #include "bits/common.h"
 #include "bits/source_location.h"
 
-#include "bits/vulkan.h"
 #include "bits/deko.h"
+#include "bits/vulkan.h"
 
 namespace hsh {
 struct offset2d {
@@ -116,14 +116,14 @@ struct scissor : rect2d {
 };
 } // namespace hsh
 
-#include "bits/vulkan_impl.h"
 #include "bits/deko_impl.h"
+#include "bits/vulkan_impl.h"
 
 #include "bits/select_target_traits.h"
 
 #include "bits/common_resources.h"
-#include "bits/vulkan_resources.h"
 #include "bits/deko_resources.h"
+#include "bits/vulkan_resources.h"
 
 namespace hsh {
 
@@ -579,6 +579,16 @@ inline owner<surface> create_surface(
   return create_resource<surface>(
       location, std::move(Surface), std::move(ResizeLambda),
       std::move(DeleterLambda), RequestExtent, L, R, T, B);
+}
+#endif
+
+#if HSH_ENABLE_DEKO3D
+inline owner<surface> create_surface(
+    void *Surface, std::function<void()> &&DeleterLambda = {},
+    const hsh::extent2d &RequestExtent = {},
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_resource<surface>(location, Surface, std::move(DeleterLambda),
+                                  RequestExtent);
 }
 #endif
 

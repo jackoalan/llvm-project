@@ -35,7 +35,9 @@ struct float4 {
     return float4{x / other, y / other, z / other, w / other};
   }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
-  const float &operator[](std::size_t idx) const noexcept { return (&x)[idx]; }
+  constexpr const float &operator[](std::size_t idx) const noexcept {
+    return (&x)[idx];
+  }
   constexpr float3 xyz() const noexcept;
   constexpr float2 xy() const noexcept;
   constexpr float2 xz() const noexcept;
@@ -81,7 +83,9 @@ struct float3 {
     return *this;
   }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
-  const float &operator[](std::size_t idx) const noexcept { return (&x)[idx]; }
+  constexpr const float &operator[](std::size_t idx) const noexcept {
+    return (&x)[idx];
+  }
 };
 constexpr float3 float4::xyz() const noexcept { return float3{x, y, z}; }
 struct float2 {

@@ -7,10 +7,10 @@ namespace hsh::detail {
 
 template <> struct ShaderCode<Target::DEKO3D> {
   enum Stage Stage = Stage::Vertex;
-  void *Control = nullptr;
+  const uint8_t *Control = nullptr;
   ShaderDataBlob<uint8_t> Blob;
   constexpr ShaderCode() noexcept = default;
-  constexpr ShaderCode(enum Stage Stage, void *Control,
+  constexpr ShaderCode(enum Stage Stage, const uint8_t *Control,
                        ShaderDataBlob<uint8_t> Blob) noexcept
       : Stage(Stage), Control(Control), Blob(Blob) {}
 };
@@ -428,7 +428,21 @@ template <typename Impl> struct DescriptorPoolWrites {
 template <typename Impl, typename... Args>
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Rebind(
     bool UpdateDescriptors, Args... args) noexcept {
-  Pipeline = Impl::data_DEKO3D.Pipeline.get();
+  Pipeline = &Impl::data_DEKO3D.Pipeline;
+  StageMask = Impl::cdata_DEKO3D.StageMask;
+  Primitive = Impl::cdata_DEKO3D.Primitive;
+  NumVtxBufferStates = Impl::cdata_DEKO3D.VertexBindingDescriptions.size();
+  VtxBufferStates = Impl::cdata_DEKO3D.VertexBindingDescriptions.data();
+  NumVtxAttribStates = Impl::cdata_DEKO3D.VertexAttributeDescriptions.size();
+  VtxAttribStates = Impl::cdata_DEKO3D.VertexAttributeDescriptions.data();
+  NumBlendStates = Impl::cdata_DEKO3D.TargetAttachments.size();
+  BlendStates = Impl::cdata_DEKO3D.TargetAttachments.data();
+  PatchSize = Impl::cdata_DEKO3D.PatchSize;
+  RasterizerState = &Impl::cdata_DEKO3D.RasterizationState;
+  DepthStencilState = &Impl::cdata_DEKO3D.DepthStencilState;
+  ColorState = &Impl::cdata_DEKO3D.ColorBlendState;
+  ColorWriteState = &Impl::cdata_DEKO3D.ColorWriteState;
+  PrimitiveRestart = Impl::cdata_DEKO3D.PrimitiveRestart;
   if (UpdateDescriptors) {
     constexpr uint32_t NumImages =
         ((std::is_base_of_v<hsh::texture_typeless, Args> ||
@@ -466,7 +480,7 @@ template <typename T>
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
     index_buffer<T> Ibo) noexcept {
   Index.Buffer = Ibo.Binding.get_DEKO3D().Buffer.addr;
-  Index.Type = dk::index_type<T>::indexType;
+  Index.Type = dk::IndexTypeValue<T>::value;
 }
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
     texture_typeless) noexcept {}
@@ -478,33 +492,42 @@ void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
   *TextureIt++ = dkMakeTextureHandle(Sampler.TexIdx, SamplerIdx);
 }
 
-extern const uint8_t __deko_shader;
-extern const uint8_t __deko_control;
+struct StageCode {
+  const uint8_t *Control;
+  const uint8_t *Shader;
+  void Initialize(dk::Shader &ShaderOut) const noexcept {
+    DkShaderMaker Maker{deko::Globals.ShaderMem, &__deko_control,
+                        uint32_t(Shader - &__deko_shader_begin),
+                        uint32_t((Control - &__deko_control) / 64)};
+    dkShaderInitialize(&ShaderOut, &Maker);
+  }
+};
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
           std::uint32_t NAttributes, std::uint32_t NSamplers,
           std::uint32_t NAttachments>
 struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
                        NSamplers, NAttachments> {
-  struct Sampler : dk::Sampler {
+  struct Sampler : DkSampler {
     void Initialize(dk::SamplerDescriptor &Out,
                     const dk::ImageView &ImageView) const noexcept {
-      dk::Sampler ModSampler = *this;
-      ModSampler.setLodClamp(0.f, ImageView.mipLevelCount);
+      DkSampler ModSampler = *this;
+      ModSampler.lodClampMax = ImageView.mipLevelCount;
       // TODO: Handle format-dependent border color
+      dkSamplerDescriptorInitialize(&Out, &ModSampler);
     }
   };
 
-  std::array<dk::ShaderMaker, NStages> StageCodes;
-  std::array<DkStage, NStages> Stages;
+  std::array<StageCode, NStages> StageCodes;
+  uint32_t StageMask;
   std::array<DkVtxBufferState, NBindings> VertexBindingDescriptions;
   std::array<DkVtxAttribState, NAttributes> VertexAttributeDescriptions;
-  std::array<dk::BlendState, NAttachments> TargetAttachments;
+  std::array<DkBlendState, NAttachments> TargetAttachments;
   DkPrimitive Primitive;
   uint32_t PatchSize;
-  dk::RasterizerState RasterizationState;
-  dk::DepthStencilState DepthStencilState;
-  dk::ColorState ColorBlendState;
+  DkRasterizerState RasterizationState;
+  DkDepthStencilState DepthStencilState;
+  DkColorState ColorBlendState;
   DkColorWriteState ColorWriteState;
   std::array<Sampler, NSamplers> Samplers;
   bool PrimitiveRestart;
@@ -523,77 +546,62 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
                             std::index_sequence<ASeq...>,
                             std::index_sequence<SampSeq...>,
                             std::index_sequence<AttSeq...>) noexcept
-      : StageCodes{dk::ShaderMaker{deko::Globals.ShaderMem,
-                                   std::get<SSeq>(S).Blob.Data - &__deko_shader}
-                       .setControl(&__deko_control)
-                       .setProgramId(
-                           (std::get<SSeq>(S).Blob.Control - &__deko_control) /
-                           64)...},
-        Stages{HshToVkShaderStage(std::get<SSeq>(S).Stage)...},
+      : StageCodes{StageCode{std::get<SSeq>(S).Control,
+                             std::get<SSeq>(S).Blob.Data}...},
+        StageMask{((1u << HshToDkStage(std::get<SSeq>(S).Stage)) | ...)},
         VertexBindingDescriptions{
             DkVtxBufferState{std::get<BSeq>(B).Stride,
                              HshToDkDivisor(std::get<BSeq>(B).InputRate)}...},
-        VertexAttributeDescriptions{
-            DkVtxAttribState{std::get<ASeq>(A).Binding,
-                             {},
-                             0,
-                             std::get<ASeq>(A).Offset,
-                             HshToDkVtxAttribSize(std::get<ASeq>(A).Format),
-                             HshToDkVtxAttribType(std::get<ASeq>(A).Format),
-                             {},
-                             0}...},
-        TargetAttachments{
-            dk::BlendState{}
-                .setOps(HshToDkBlendOp(std::get<AttSeq>(Atts).ColorBlendOp),
-                        HshToDkBlendOp(std::get<AttSeq>(Atts).AlphaBlendOp))
-                .setFactors(
-                    HshToDkBlendFactor(
-                        std::get<AttSeq>(Atts).SrcColorBlendFactor),
-                    HshToDkBlendFactor(
-                        std::get<AttSeq>(Atts).DstColorBlendFactor),
-                    HshToDkBlendFactor(
-                        std::get<AttSeq>(Atts).SrcAlphaBlendFactor),
-                    HshToDkBlendFactor(
-                        std::get<AttSeq>(Atts).DstAlphaBlendFactor))...},
+        VertexAttributeDescriptions{DkVtxAttribState{
+            std::get<ASeq>(A).Binding, 0, std::get<ASeq>(A).Offset,
+            HshToDkVtxAttribSize(std::get<ASeq>(A).Format),
+            HshToDkVtxAttribType(std::get<ASeq>(A).Format), 0}...},
+        TargetAttachments{DkBlendState{
+            HshToDkBlendOp(std::get<AttSeq>(Atts).ColorBlendOp),
+            HshToDkBlendFactor(std::get<AttSeq>(Atts).SrcColorBlendFactor),
+            HshToDkBlendFactor(std::get<AttSeq>(Atts).DstColorBlendFactor),
+            HshToDkBlendOp(std::get<AttSeq>(Atts).AlphaBlendOp),
+            HshToDkBlendFactor(std::get<AttSeq>(Atts).SrcAlphaBlendFactor),
+            HshToDkBlendFactor(std::get<AttSeq>(Atts).DstAlphaBlendFactor)}...},
         Primitive{HshToDkPrimitive(PipelineInfo.Topology)},
         PatchSize{PipelineInfo.PatchControlPoints},
-        RasterizationState{dk::RasterizerState{}.setCullMode(
-            HshToDkFace(PipelineInfo.CullMode))},
-        DepthStencilState{
-            dk::DepthStencilState{}
-                .setDepthTestEnable(PipelineInfo.DepthCompare != Always)
-                .setDepthWriteEnable(PipelineInfo.DepthWrite)
-                .setDepthCompareOp(HshToDkCompare(PipelineInfo.DepthCompare))},
-        ColorBlendState{
-            dk::ColorState{}
-                .setLogicOp(DkLogicOp_Clear)
-                .setBlendEnableMask(
-                    ((std::get<AttSeq>(Atts).blendEnabled() << AttSeq) | ...))},
-        ColorWriteState{((HshToDkColorComponentFlags(
-                              std::get<AttSeq>(Atts).ColorWriteComponents)
-                          << (AttSeq * 4)) |
-                         ...)},
-        Samplers{
-            dk::Sampler{}
-                .setFilter(
-                    HshToDkFilter(std::get<SampSeq>(Samps).MinFilter),
-                    HshToDkFilter(std::get<SampSeq>(Samps).MagFilter),
-                    HshToDkMipFilter(std::get<SampSeq>(Samps).MipmapMode))
-                .setWrapMode(
-                    HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeU),
-                    HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeV),
-                    HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeW))
-                .setLodBias(std::get<SampSeq>(Samps).MipLodBias)
-                .setDepthCompare(
-                    std::get<SampSeq>(Samps).CompareOp != Never,
-                    HshToDkCompare(std::get<SampSeq>(Samps).CompareOp))
-                .setBorderColor(
-                    HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
-                    HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
-                    HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
-                    HshToDkBorderAlpha(
-                        std::get<SampSeq>(Samps).BorderColor))...},
-        PrimitiveRestart(PipelineInfo.Topology == TriangleStrip) {}
+        RasterizationState{DkRasterizerState{
+            1, 0, 0, DkPolygonMode_Fill, DkPolygonMode_Fill,
+            HshToDkFace(PipelineInfo.CullMode), DkFrontFace_CCW, 0, 0}},
+        DepthStencilState{DkDepthStencilState{
+            PipelineInfo.DepthCompare != Always, PipelineInfo.DepthWrite, false,
+            HshToDkCompare(PipelineInfo.DepthCompare), DkStencilOp_Keep,
+            DkStencilOp_Replace, DkStencilOp_Keep, DkCompareOp_Always,
+            DkStencilOp_Keep, DkStencilOp_Replace, DkStencilOp_Keep,
+            DkCompareOp_Always}},
+        ColorBlendState{DkColorState{
+            ((std::get<AttSeq>(Atts).blendEnabled() << AttSeq) | ...),
+            DkLogicOp_Clear, DkCompareOp_Always}},
+        ColorWriteState{
+            DkColorWriteState{((HshToDkColorComponentFlags(
+                                    std::get<AttSeq>(Atts).ColorWriteComponents)
+                                << (AttSeq * 4)) |
+                               ...)}},
+        Samplers{DkSampler{
+            HshToDkFilter(std::get<SampSeq>(Samps).MinFilter),
+            HshToDkFilter(std::get<SampSeq>(Samps).MagFilter),
+            HshToDkMipFilter(std::get<SampSeq>(Samps).MipmapMode),
+            {HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeU),
+             HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeV),
+             HshToDkWrapMode(std::get<SampSeq>(Samps).AddressModeW)},
+            0.f,
+            1000.f,
+            std::get<SampSeq>(Samps).MipLodBias,
+            0.f,
+            std::get<SampSeq>(Samps).CompareOp != Never,
+            HshToDkCompare(std::get<SampSeq>(Samps).CompareOp),
+            {HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
+             HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
+             HshToDkBorderColor(std::get<SampSeq>(Samps).BorderColor),
+             HshToDkBorderAlpha(std::get<SampSeq>(Samps).BorderColor)},
+            1.f,
+            DkSamplerReduction_WeightedAverage}...},
+        PrimitiveRestart{PipelineInfo.Topology == TriangleStrip} {}
 
   constexpr ShaderConstData(
       std::array<ShaderCode<Target::DEKO3D>, NStages> S,
@@ -616,24 +624,25 @@ struct ShaderData<Target::DEKO3D, NStages, NSamplers> {
   using ObjectRef = std::reference_wrapper<ShaderObject<Target::DEKO3D>>;
   std::array<ObjectRef, NStages> ShaderObjects;
   using SamplerRef = std::reference_wrapper<SamplerObject<Target::DEKO3D>>;
-  std::array<const DkShader *, NStages> ShaderPointers;
+  TargetTraits<Target::DEKO3D>::Pipeline Pipeline;
   template <std::size_t... StSeq>
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps,
                        std::index_sequence<StSeq...>) noexcept
-      : ShaderObjects(S), ShaderPointers{&std::get<StSeq>(S).get().Shader...} {}
+      : ShaderObjects(S), Pipeline{NStages,
+                                   {&std::get<StSeq>(S).get().Shader...}} {}
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps) noexcept
       : ShaderData(S, Samps, std::make_index_sequence<NStages>()) {}
   template <std::size_t... StSeq>
-  void InitializeShaders(const std::array<dk::ShaderMaker, NStages> &StageCodes,
+  void InitializeShaders(const std::array<StageCode, NStages> &StageCodes,
                          std::index_sequence<StSeq...>) noexcept {
     (std::get<StSeq>(StageCodes)
-         .initialize(std::get<StSeq>(ShaderObjects).get().Shader),
+         .Initialize(std::get<StSeq>(ShaderObjects).get().Shader),
      ...);
   }
-  void InitializeShaders(
-      const std::array<dk::ShaderMaker, NStages> &StageCodes) noexcept {
+  void
+  InitializeShaders(const std::array<StageCode, NStages> &StageCodes) noexcept {
     InitializeShaders(StageCodes, std::make_index_sequence<NStages>());
   }
   void Destroy() noexcept {}
@@ -642,9 +651,7 @@ struct ShaderData<Target::DEKO3D, NStages, NSamplers> {
 template <> struct PipelineBuilder<Target::DEKO3D> {
   template <typename... B, std::size_t... BSeq>
   static void CreatePipelines(std::index_sequence<BSeq...> seq) noexcept {
-    (std::get<BSeq>(
-         B::data_DEKO3D.InitializeShaders(B::cdata_DEKO3D.StageCodes)),
-     ...);
+    (B::data_DEKO3D.InitializeShaders(B::cdata_DEKO3D.StageCodes), ...);
   }
   template <typename... B> static void CreatePipelines() noexcept {
     CreatePipelines<B...>(std::make_index_sequence<sizeof...(B)>());
@@ -1053,11 +1060,8 @@ struct TargetTraits<Target::DEKO3D>::ResourceFactory<render_texture2d> {
 
 template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<surface> {
   static auto Create(const SourceLocation &location, void *Surface,
-                     std::function<void(const hsh::extent2d &,
-                                        const hsh::extent2d &)> &&ResizeLambda,
                      std::function<void()> &&DeleterLambda,
-                     const hsh::extent2d &RequestExtent, int32_t L, int32_t R,
-                     int32_t T, int32_t B) noexcept {
+                     const hsh::extent2d &RequestExtent) noexcept {
     return TargetTraits<Target::DEKO3D>::SurfaceOwner{
         std::make_unique<deko::SurfaceAllocation>(
             std::move(Surface), std::move(DeleterLambda), RequestExtent)};
@@ -1068,37 +1072,17 @@ namespace deko {
 
 using namespace std::literals;
 
-using ErrorHandler = std::function<void(const char *Context, DkResult Result,
-                                        const char *Message)>;
-
 struct MyDeviceMaker : dk::DeviceMaker {
-  static void DebugCallback(ErrorHandler *UserData, const char *Context,
-                            DkResult Result, const char *Message) noexcept {
-    (*UserData)(Context, Result, Message);
-    if (Result != DkResult_Success)
-      std::abort();
-  }
-
-  explicit MyDeviceMaker(ErrorHandler &ErrHandler) noexcept {
-    setUserData(&ErrHandler);
-    setCbDebug(reinterpret_cast<DkDebugFunc>(DebugCallback));
+  explicit MyDeviceMaker(DkDebugFunc ErrHandler) noexcept {
+    setCbDebug(ErrHandler);
   }
 };
 
-using AddMemHandler = std::function<void(dk::CmdBuf Cmdbuf, size_t MinReqSize)>;
-
 struct MyCmdBufMaker : dk::CmdBufMaker {
-  static void AddMemCallback(AddMemHandler *UserData, DkCmdBuf Cmdbuf,
-                             size_t MinReqSize) noexcept {
-    (*UserData)(Cmdbuf, MinReqSize);
-    std::abort();
-  }
-
   explicit MyCmdBufMaker(dk::Device Device,
-                         AddMemHandler &AddMemHandler) noexcept
+                         DkCmdBufAddMemFunc AddMemHandler) noexcept
       : dk::CmdBufMaker(Device) {
-    setUserData(&AddMemHandler);
-    setCbAddMem(reinterpret_cast<DkCmdBufAddMemFunc>(AddMemCallback));
+    setCbAddMem(AddMemHandler);
   }
 };
 
@@ -1126,13 +1110,16 @@ struct MyDmaAllocatorCreateInfo : DmaAllocatorCreateInfo {
 
 namespace hsh {
 class deko_device_owner {
-  friend deko_device_owner
-  create_deko_device(detail::deko::ErrorHandler &ErrHandler,
-                     detail::deko::AddMemHandler &MemHandler) noexcept;
+  friend deko_device_owner create_deko_device(DkDebugFunc ErrHandler,
+                                              DkCmdBufAddMemFunc MemHandler,
+                                              uint32_t CmdBufSize,
+                                              uint32_t CopyCmdBufSize) noexcept;
   struct Data {
     dk::UniqueDevice Device;
-    dk::UniqueQueue Queue;
     DmaAllocator DmaAllocator = DMA_NULL_HANDLE;
+    dk::UniqueQueue Queue;
+    dk::UniqueMemBlock ShaderMem;
+    dk::UniqueMemBlock CommandBufferMem;
     std::array<dk::UniqueCmdBuf, 3> CommandBuffers;
     std::array<dk::Fence, 3> CommandFences;
     dk::Fence ImageAcquireSem;
@@ -1232,23 +1219,82 @@ public:
   void wait_idle() noexcept { Data->Queue.waitIdle(); }
 };
 
-inline deko_device_owner
-create_deko_device(detail::deko::ErrorHandler &ErrHandler,
-                   detail::deko::AddMemHandler &MemHandler) noexcept {
+inline deko_device_owner create_deko_device(DkDebugFunc ErrHandler,
+                                            DkCmdBufAddMemFunc MemHandler,
+                                            uint32_t CmdBufSize,
+                                            uint32_t CopyCmdBufSize) noexcept {
+  auto &Globals = detail::deko::Globals;
   deko_device_owner Ret{};
   Ret.Data = std::make_unique<struct deko_device_owner::Data>();
   Ret.Data->Device = detail::deko::MyDeviceMaker{ErrHandler}.create();
-  if (!Ret.Data->Device)
+  if (!Ret.Data->Device) {
+    ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
+               "unable to create device");
     return {};
-  Ret.Data->Queue = dk::QueueMaker{Ret.Data->Device}.create();
-  if (!Ret.Data->Queue)
+  }
+  Globals.Device = Ret.Data->Device;
+  if (dmaCreateAllocator(
+          detail::deko::MyDmaAllocatorCreateInfo{Ret.Data->Device},
+          &Ret.Data->DmaAllocator) != DkResult_Success) {
+    ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
+               "unable to create allocator");
     return {};
-  dmaCreateAllocator(detail::deko::MyDmaAllocatorCreateInfo{Ret.Data->Device},
-                     &Ret.Data->DmaAllocator);
+  }
+  Globals.Allocator = Ret.Data->DmaAllocator;
+  Ret.Data->Queue =
+      dk::QueueMaker{Ret.Data->Device}
+          .setFlags(DkQueueFlags_Graphics | DkQueueFlags_MediumPrio |
+                    DkQueueFlags_EnableZcull)
+          .create();
+  if (!Ret.Data->Queue) {
+    ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
+               "unable to create queue");
+    return {};
+  }
+  Globals.Queue = Ret.Data->Queue;
+  DkMemBlockMaker BlockMaker{Ret.Data->Device, __deko_shader_memblock_size,
+                             DkMemBlockFlags_CpuUncached |
+                                 DkMemBlockFlags_GpuCached |
+                                 DkMemBlockFlags_Code,
+                             (void *)&__deko_shader_begin};
+  Ret.Data->ShaderMem = dk::MemBlock(dkMemBlockCreate(&BlockMaker));
+  if (!Ret.Data->ShaderMem) {
+    ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
+               "unable to create shader memory block");
+    return {};
+  }
+  Globals.ShaderMem = Ret.Data->ShaderMem;
+  Ret.Data->CommandBufferMem =
+      dk::MemBlockMaker{Ret.Data->Device, CmdBufSize * 2 + CopyCmdBufSize}
+          .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+          .create();
+  if (!Ret.Data->CommandBufferMem) {
+    ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
+               "unable to create command buffer memory block");
+    return {};
+  }
   detail::deko::MyCmdBufMaker CmdBufMaker{Ret.Data->Device, MemHandler};
+  CmdBufMaker.setUserData((void *)"CommandBuffer0");
   Ret.Data->CommandBuffers[0] = CmdBufMaker.create();
+  Ret.Data->CommandBuffers[0].addMemory(Ret.Data->CommandBufferMem, 0,
+                                        CmdBufSize);
+  CmdBufMaker.setUserData((void *)"CommandBuffer1");
   Ret.Data->CommandBuffers[1] = CmdBufMaker.create();
+  Ret.Data->CommandBuffers[1].addMemory(Ret.Data->CommandBufferMem, CmdBufSize,
+                                        CmdBufSize);
+  CmdBufMaker.setUserData((void *)"CopyBuffer");
   Ret.Data->CommandBuffers[2] = CmdBufMaker.create();
+  Ret.Data->CommandBuffers[2].addMemory(Ret.Data->CommandBufferMem,
+                                        CmdBufSize * 2, CopyCmdBufSize);
+  Globals.CommandBuffers[0] = Ret.Data->CommandBuffers[0];
+  Globals.CommandBuffers[1] = Ret.Data->CommandBuffers[1];
+  Globals.CommandFences[0] = &Ret.Data->CommandFences[0];
+  Globals.CommandFences[1] = &Ret.Data->CommandFences[1];
+  Globals.CopyCmd = Ret.Data->CommandBuffers[2];
+  Globals.CopyFence = &Ret.Data->CommandFences[2];
+  Globals.ImageAcquireSem = &Ret.Data->ImageAcquireSem;
+  Globals.DeletedResourcesArr = &Ret.Data->DeletedResources;
+  Globals.DeletedResources = &Ret.Data->DeletedResources[0];
   return Ret;
 }
 } // namespace hsh
