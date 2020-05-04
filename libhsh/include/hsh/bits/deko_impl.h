@@ -338,7 +338,7 @@ public:
 
 struct DekoGlobals {
   dk::Device Device;
-  DmaAllocator Allocator;
+  DmaAllocator Allocator = nullptr;
   dk::Queue Queue;
   dk::MemBlock ShaderMem;
   float Anisotropy = 0.f;
@@ -353,10 +353,12 @@ struct DekoGlobals {
   uint64_t Frame = 0;
   bool AcquiredImage = false;
 
-  std::array<DeletedResources, 2> *DeletedResourcesArr;
+  std::array<DeletedResources, 2> *DeletedResourcesArr = nullptr;
   DeletedResources *DeletedResources = nullptr;
   SurfaceAllocation *SurfaceHead = nullptr;
   RenderTextureAllocation *RenderTextureHead = nullptr;
+
+  constexpr DekoGlobals() = default;
 
   void PreRender() noexcept {
     uint32_t CurBufferIdx = Frame & 1u;
