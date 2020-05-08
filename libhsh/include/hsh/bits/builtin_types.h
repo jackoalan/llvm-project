@@ -337,6 +337,17 @@ template <typename T, std::size_t N> struct aligned_array {
   T &operator[](std::size_t pos) { return data[pos].elem; }
 };
 
+template <typename T> struct aligned_array<T, 0> {
+  struct alignas(16) {
+  } data;
+
+  // Please don't actually use these
+  const T &operator[](std::size_t pos) const {
+    return reinterpret_cast<const T *>(&data)[pos];
+  }
+  T &operator[](std::size_t pos) { return reinterpret_cast<T *>(&data)[pos]; }
+};
+
 constexpr float dot(const float2 &a, const float2 &b) noexcept {
   return a.x * b.x + a.y * b.y;
 }
