@@ -1,4 +1,4 @@
-//===--- HshGenerator.cpp - Lambda scanner and codegen for hsh tool -------===//
+//===--- HshGenerator.cpp - Codegen for hshgen tool -----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -1042,6 +1042,7 @@ private:
   std::array<const CXXMethodDecl *, HBM_Max> Methods{};
   std::array<std::pair<const FieldDecl *, HshStage>, HPF_Max> PipelineFields{};
   ClassTemplateDecl *StdArrayType = nullptr;
+  ClassTemplateDecl *AlignedArrayType = nullptr;
 
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
@@ -1564,6 +1565,8 @@ public:
 
     StdArrayType =
         findClassTemplate("array"_ll, "std"_ll, StringRef{}, Context);
+    AlignedArrayType =
+        findClassTemplate("aligned_array"_ll, "hsh"_ll, StringRef{}, Context);
   }
 
   template <typename T> HshBuiltinType identifyBuiltinType(T Arg) const {
@@ -1697,8 +1700,9 @@ public:
                                  QualType Tp, bool AllowTextures) const {
     if (auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
             Tp->getAsCXXRecordDecl())) {
-      if (Spec->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>() ==
-          StdArrayType) {
+      auto *CTD =
+          Spec->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>();
+      if (CTD == StdArrayType || CTD == AlignedArrayType) {
         auto &Arg = Spec->getTemplateArgs()[0];
         return checkHshTypeCompatibility(Context, VD, Arg.getAsType(),
                                          AllowTextures);
@@ -1950,6 +1954,19 @@ public:
       return CTSD->getSpecializedTemplateOrPartial()
                  .get<ClassTemplateDecl *>() == StdArrayType;
     return false;
+  }
+
+  ClassTemplateDecl *getAlignedArrayDecl() const { return AlignedArrayType; }
+
+  bool isAlignedArrayType(const CXXRecordDecl *RD) const {
+    if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
+      return CTSD->getSpecializedTemplateOrPartial()
+                 .get<ClassTemplateDecl *>() == AlignedArrayType;
+    return false;
+  }
+
+  bool isSupportedArrayType(const CXXRecordDecl *RD) const {
+    return isStdArrayType(RD) || isAlignedArrayType(RD);
   }
 
   CXXFunctionalCastExpr *makeSamplerBinding(ASTContext &Context,
@@ -2564,15 +2581,26 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
     for (const auto *Record : NestedRecords) {
       OS << "struct __Struct" << Idx++ << " {\n";
       for (auto *FD : Record->fields()) {
-        PrintStructField(OS, Context, FD->getType(), FD->getName(), false, 1);
+        PrintStructField(OS, Context, FD->getType(), FD->getName(),
+                         ArrayWaitType::NoArray, 1);
         OS << ";\n";
       }
       OS << "};\n";
     }
   }
 
+  enum class ArrayWaitType { NoArray, StdArray, AlignedArray };
+
+  ArrayWaitType getArrayWaitType(const CXXRecordDecl *RD) const {
+    if (Builtins.isStdArrayType(RD))
+      return ArrayWaitType::StdArray;
+    if (Builtins.isAlignedArrayType(RD))
+      return ArrayWaitType::AlignedArray;
+    return ArrayWaitType::NoArray;
+  }
+
   void GatherNestedStructField(ASTContext &Context, QualType Tp,
-                               bool WaitingForArray) {
+                               ArrayWaitType WaitingForArray) {
     if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
       if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
         GatherNestedStructFields(Context, SubRecord, WaitingForArray);
@@ -2582,29 +2610,35 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
     if (const auto *AT =
             dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+      QualType ElemType = AT->getElementType();
+      if (WaitingForArray == ArrayWaitType::AlignedArray) {
+        ElemType = ElemType->getAsCXXRecordDecl()->field_begin()->getType();
+      }
 
-      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
-        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
-          GatherNestedStructFields(Context, SubRecord, false);
+      if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
+        if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
+          GatherNestedStructFields(Context, SubRecord, ArrayWaitType::NoArray);
           return;
         }
       }
 
-      GatherNestedStructField(Context, AT->getElementType(), false);
+      GatherNestedStructField(Context, ElemType, ArrayWaitType::NoArray);
       return;
     }
   }
 
   void GatherNestedStructFields(ASTContext &Context,
                                 const CXXRecordDecl *Record,
-                                bool WaitingForArray) {
-    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+                                ArrayWaitType WaitingForArray) {
+    if (WaitingForArray == ArrayWaitType::NoArray)
+      WaitingForArray = getArrayWaitType(Record);
+    if (WaitingForArray != ArrayWaitType::NoArray) {
       for (auto *FD : Record->fields()) {
-        GatherNestedStructField(Context, FD->getType(), true);
+        GatherNestedStructField(Context, FD->getType(), WaitingForArray);
       }
     } else {
       for (auto *FD : Record->fields()) {
-        GatherNestedStructField(Context, FD->getType(), false);
+        GatherNestedStructField(Context, FD->getType(), ArrayWaitType::NoArray);
       }
       if (std::find(NestedRecords.begin(), NestedRecords.end(), Record) ==
           NestedRecords.end())
@@ -2615,7 +2649,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   void GatherNestedPackoffsetFields(ASTContext &Context,
                                     const CXXRecordDecl *Record,
                                     CharUnits BaseOffset = {}) {
-    bool WaitingForArray = Builtins.isStdArrayType(Record);
+    ArrayWaitType WaitingForArray = getArrayWaitType(Record);
 
     for (auto *FD : Record->fields()) {
       GatherNestedStructField(Context, FD->getType(), WaitingForArray);
@@ -2625,7 +2659,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   static constexpr std::array<char, 4> VectorComponents{'x', 'y', 'z', 'w'};
 
   void PrintStructField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                        const Twine &FieldName, bool WaitingForArray,
+                        const Twine &FieldName, ArrayWaitType WaitingForArray,
                         unsigned Indent) {
     if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
       if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
@@ -2637,25 +2671,30 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
     if (const auto *AT =
             dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+      QualType ElemType = AT->getElementType();
+      if (WaitingForArray == ArrayWaitType::AlignedArray) {
+        ElemType = ElemType->getAsCXXRecordDecl()->field_begin()->getType();
+      }
+
       unsigned Size = AT->getSize().getZExtValue();
       Twine Tw1 = Twine('[') + Twine(Size);
       Twine Tw2 = Tw1 + Twine(']');
       Twine ArrayFieldName = FieldName + Tw2;
 
-      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
-        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
-          PrintStructFields(OS, Context, SubRecord, ArrayFieldName, false,
-                            Indent);
+      if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
+        if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
+          PrintStructFields(OS, Context, SubRecord, ArrayFieldName,
+                            ArrayWaitType::NoArray, Indent);
           return;
         }
       }
 
-      PrintStructField(OS, Context, AT->getElementType(), ArrayFieldName, false,
-                       Indent);
+      PrintStructField(OS, Context, ElemType, ArrayFieldName,
+                       ArrayWaitType::NoArray, Indent);
       return;
     }
 
-    if (!WaitingForArray) {
+    if (WaitingForArray == ArrayWaitType::NoArray) {
       OS.indent(Indent * 2);
       Tp.print(OS, *this, FieldName, Indent);
     }
@@ -2663,10 +2702,13 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
   void PrintStructFields(raw_ostream &OS, ASTContext &Context,
                          const CXXRecordDecl *Record, const Twine &FieldName,
-                         bool WaitingForArray, unsigned Indent) {
-    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+                         ArrayWaitType WaitingForArray, unsigned Indent) {
+    if (WaitingForArray == ArrayWaitType::NoArray)
+      WaitingForArray = getArrayWaitType(Record);
+    if (WaitingForArray != ArrayWaitType::NoArray) {
       for (auto *FD : Record->fields()) {
-        PrintStructField(OS, Context, FD->getType(), FieldName, true, Indent);
+        PrintStructField(OS, Context, FD->getType(), FieldName, WaitingForArray,
+                         Indent);
       }
     } else {
       auto *Search =
@@ -2678,8 +2720,8 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   }
 
   void PrintPackoffsetField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                            const Twine &FieldName, bool WaitingForArray,
-                            CharUnits Offset) {
+                            const Twine &FieldName,
+                            ArrayWaitType WaitingForArray, CharUnits Offset) {
     assert(Offset.getQuantity() % 4 == 0);
     ImplClass::PrintBeforePackoffset(OS, Offset);
     PrintStructField(OS, Context, Tp, FieldName, WaitingForArray, 1);
@@ -2690,7 +2732,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
                              const CXXRecordDecl *Record,
                              const Twine &PrefixName,
                              CharUnits BaseOffset = {}) {
-    bool WaitingForArray = Builtins.isStdArrayType(Record);
+    ArrayWaitType WaitingForArray = getArrayWaitType(Record);
 
     const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
     for (auto *FD : Record->fields()) {
@@ -2698,15 +2740,17 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
                                      RL.getFieldOffset(FD->getFieldIndex()));
       Twine Tw1 = PrefixName + Twine('_');
       PrintPackoffsetField(OS, Context, FD->getType(),
-                           WaitingForArray ? PrefixName : Tw1 + FD->getName(),
+                           WaitingForArray != ArrayWaitType::NoArray
+                               ? PrefixName
+                               : Tw1 + FD->getName(),
                            WaitingForArray, Offset);
     }
   }
 
   void PrintAttributeField(raw_ostream &OS, ASTContext &Context, QualType Tp,
-                           const Twine &FieldName, bool WaitingForArray,
-                           unsigned Indent, unsigned &Location,
-                           unsigned ArraySize) {
+                           const Twine &FieldName,
+                           ArrayWaitType WaitingForArray, unsigned Indent,
+                           unsigned &Location, unsigned ArraySize) {
     if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
       if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
         PrintAttributeFields(OS, Context, SubRecord, FieldName, WaitingForArray,
@@ -2717,25 +2761,30 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
     if (const auto *AT =
             dyn_cast_or_null<ConstantArrayType>(Tp->getAsArrayTypeUnsafe())) {
+      QualType ElemType = AT->getElementType();
+      if (WaitingForArray == ArrayWaitType::AlignedArray) {
+        ElemType = ElemType->getAsCXXRecordDecl()->field_begin()->getType();
+      }
+
       unsigned Size = AT->getSize().getZExtValue();
       Twine Tw1 = Twine('[') + Twine(Size);
       Twine Tw2 = Tw1 + Twine(']');
       Twine ArrayFieldName = FieldName + Tw2;
 
-      if (Builtins.identifyBuiltinType(AT->getElementType()) == HBT_None) {
-        if (auto *SubRecord = AT->getElementType()->getAsCXXRecordDecl()) {
-          PrintAttributeFields(OS, Context, SubRecord, ArrayFieldName, false,
-                               Indent, Location);
+      if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
+        if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
+          PrintAttributeFields(OS, Context, SubRecord, ArrayFieldName,
+                               ArrayWaitType::NoArray, Indent, Location);
           return;
         }
       }
 
-      PrintAttributeField(OS, Context, AT->getElementType(), ArrayFieldName,
-                          false, Indent, Location, Size);
+      PrintAttributeField(OS, Context, ElemType, ArrayFieldName,
+                          ArrayWaitType::NoArray, Indent, Location, Size);
       return;
     }
 
-    if (!WaitingForArray) {
+    if (WaitingForArray == ArrayWaitType::NoArray) {
       HshBuiltinType HBT = Builtins.identifyBuiltinType(Tp);
       if (HshBuiltins::isMatrixType(HBT)) {
         switch (HBT) {
@@ -2762,12 +2811,14 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
 
   void PrintAttributeFields(raw_ostream &OS, ASTContext &Context,
                             const CXXRecordDecl *Record, const Twine &FieldName,
-                            bool WaitingForArray, unsigned Indent,
+                            ArrayWaitType WaitingForArray, unsigned Indent,
                             unsigned &Location) {
-    if (WaitingForArray || Builtins.isStdArrayType(Record)) {
+    if (WaitingForArray == ArrayWaitType::NoArray)
+      WaitingForArray = getArrayWaitType(Record);
+    if (WaitingForArray != ArrayWaitType::NoArray) {
       for (auto *FD : Record->fields()) {
-        PrintAttributeField(OS, Context, FD->getType(), FieldName, true, Indent,
-                            Location, 1);
+        PrintAttributeField(OS, Context, FD->getType(), FieldName,
+                            WaitingForArray, Indent, Location, 1);
       }
     }
   }
@@ -2794,6 +2845,8 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
                                                    CXXMemberCallExpr *C) {
     switch (HBM) {
     case HBM_sample2d:
+    case HBM_render_sample2d:
+    case HBM_sample_bias2d:
       return "texture"_ll;
     default:
       return {};
@@ -2805,9 +2858,13 @@ struct GLSLPrintingPolicy : ShaderPrintingPolicy<GLSLPrintingPolicy> {
                              const std::function<void(StringRef)> &StringArg,
                              const std::function<void(Expr *)> &ExprArg) {
     switch (HBM) {
-    case HBM_sample2d: {
+    case HBM_sample2d:
+    case HBM_render_sample2d:
+    case HBM_sample_bias2d: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       ExprArg(C->getArg(0));
+      if (HBM == HBM_sample_bias2d)
+        ExprArg(C->getArg(1));
       return true;
     }
     default:
@@ -2968,8 +3025,8 @@ vec4 saturate(vec4 val) {
         for (const auto *FD : Attribute.Record->fields()) {
           QualType Tp = FD->getType().getUnqualifiedType();
           Twine Tw1 = Twine(Attribute.Name) + Twine('_');
-          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(), false, 0,
-                              Location, 1);
+          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(),
+                              ArrayWaitType::NoArray, 0, Location, 1);
         }
       }
     }
@@ -3026,11 +3083,13 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
   StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
                                   CXXMemberCallExpr *C) const {
     switch (HBM) {
-    case HBM_sample2d: {
+    case HBM_sample2d:
+    case HBM_render_sample2d:
+    case HBM_sample_bias2d: {
       CXXMethodIdentifier.clear();
       raw_string_ostream OS(CXXMethodIdentifier);
       C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
-      OS << ".Sample";
+      OS << (HBM == HBM_sample_bias2d ? ".SampleBias" : ".Sample");
       return OS.str();
     }
     default:
@@ -3044,7 +3103,9 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
                              const std::function<void(StringRef)> &StringArg,
                              const std::function<void(Expr *)> &ExprArg) const {
     switch (HBM) {
-    case HBM_sample2d: {
+    case HBM_sample2d:
+    case HBM_render_sample2d:
+    case HBM_sample_bias2d: {
       auto Search =
           std::find_if(ThisSampleCalls.begin(), ThisSampleCalls.end(),
                        [&](const auto &Other) { return C == Other.Expr; });
@@ -3054,6 +3115,8 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
       OS << Search->SamplerIndex;
       StringArg(OS.str());
       ExprArg(C->getArg(0));
+      if (HBM == HBM_sample_bias2d)
+        ExprArg(C->getArg(1));
       return true;
     }
     default:
@@ -3265,8 +3328,8 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
         for (const auto *FD : Attribute.Record->fields()) {
           QualType Tp = FD->getType().getUnqualifiedType();
           Twine Tw1 = Twine(Attribute.Name) + Twine('_');
-          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(), false, 1,
-                              Location, 1);
+          PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(),
+                              ArrayWaitType::NoArray, 1, Location, 1);
         }
       }
       OS << "};\n";
@@ -3734,6 +3797,92 @@ public:
         {}, false);
   }
 
+  class UniformFieldValidator {
+    ASTContext &Context;
+    HshBuiltins &Builtins;
+    DenseSet<const CXXRecordDecl *> Records;
+    const FieldDecl *ArrayField = nullptr;
+    bool InAlignedArray = false;
+
+  public:
+    UniformFieldValidator(ASTContext &Context, HshBuiltins &Builtins)
+        : Context(Context), Builtins(Builtins) {}
+
+    void Visit(const CXXRecordDecl *Record) {
+      if (!Records.insert(Record).second)
+        return;
+
+      auto &Diags = Context.getDiagnostics();
+
+      for (auto *Field : Record->fields()) {
+        auto HBT = Builtins.identifyBuiltinType(Field->getType());
+        if (HBT == HBT_None) {
+          if (Field->getType()->isArrayType()) {
+            auto *ArrayElemType =
+                Field->getType()->getPointeeOrArrayElementType();
+            if (!InAlignedArray &&
+                Context.getTypeSizeInChars(ArrayElemType).getQuantity() % 16) {
+              auto *ActiveField = ArrayField ? ArrayField : Field;
+              SourceRange Range = ActiveField->getSourceRange();
+              if (auto *TSI = ActiveField->getTypeSourceInfo()) {
+                if (auto TSTL =
+                        TSI->getTypeLoc()
+                            .getAsAdjusted<TemplateSpecializationTypeLoc>()) {
+                  Range = SourceRange(Range.getBegin(),
+                                      TSTL.getLAngleLoc().getLocWithOffset(-1));
+                } else if (auto TSTL = TSI->getTypeLoc()
+                                           .getAsAdjusted<TypeSpecTypeLoc>()) {
+                  Range = TSTL.getLocalSourceRange();
+                }
+              }
+              Diags.Report(Range.getBegin(),
+                           Diags.getCustomDiagID(
+                               DiagnosticsEngine::Error,
+                               "use aligned array to ensure each element "
+                               "is stored in a 16 byte register"))
+                  << Range
+                  << FixItHint::CreateReplacement(Range, "hsh::aligned_array");
+            }
+
+            if (auto *Child = ArrayElemType->getAsCXXRecordDecl()) {
+              SaveAndRestore<const FieldDecl *> SavedArrayField(ArrayField,
+                                                                nullptr);
+              SaveAndRestore<bool> SavedAlignedArrayField(InAlignedArray,
+                                                          false);
+              Visit(Child);
+            }
+          } else if (auto *Child = Field->getType()->getAsCXXRecordDecl()) {
+            if (Builtins.isStdArrayType(Child)) {
+              SaveAndRestore<const FieldDecl *> SavedArrayField(ArrayField,
+                                                                Field);
+              Visit(Child);
+            } else if (Builtins.isAlignedArrayType(Child)) {
+              SaveAndRestore<bool> SavedAlignedArrayField(InAlignedArray, true);
+              Visit(Child);
+            } else {
+              Visit(Child);
+            }
+          }
+        } else if (HshBuiltins::isMatrixType(HBT)) {
+          if (auto *AlignedType = Builtins.getAlignedAvailable(Field)) {
+            SourceRange Range = Field->getSourceRange();
+            if (auto *TSI = Field->getTypeSourceInfo())
+              Range = TSI->getTypeLoc()
+                          .getAsAdjusted<TypeSpecTypeLoc>()
+                          .getLocalSourceRange();
+            Diags.Report(Range.getBegin(),
+                         Diags.getCustomDiagID(
+                             DiagnosticsEngine::Error,
+                             "use aligned matrix to ensure each column "
+                             "is stored in a 16 byte register"))
+                << Range
+                << FixItHint::CreateReplacement(Range, AlignedType->getName());
+          }
+        }
+      }
+    }
+  };
+
   void registerUniform(StringRef Name, const CXXRecordDecl *Record,
                        unsigned Stages) {
     auto &Diags = Context.getDiagnostics();
@@ -3745,6 +3894,9 @@ public:
       return;
     }
 
+    UniformFieldValidator Validator(Context, Builtins);
+    Validator.Visit(Record);
+
     const auto &RL = Context.getASTRecordLayout(Record);
 
     CharUnits HLSLOffset, CXXOffset;
@@ -3753,24 +3905,6 @@ public:
       auto HLSLFieldSize = CXXFieldSize.alignTo(CharUnits::fromQuantity(4));
       auto CXXFieldAlign = Context.getTypeAlignInChars(Field->getType());
       auto HLSLFieldAlign = CXXFieldAlign.alignTo(CharUnits::fromQuantity(4));
-      auto HBT = Builtins.identifyBuiltinType(Field->getType());
-
-      if (HshBuiltins::isMatrixType(HBT)) {
-        if (auto *AlignedType = Builtins.getAlignedAvailable(Field)) {
-          SourceRange Range = Field->getSourceRange();
-          if (auto *TSI = Field->getTypeSourceInfo())
-            Range = TSI->getTypeLoc()
-                        .getAsAdjusted<TypeSpecTypeLoc>()
-                        .getLocalSourceRange();
-          Diags.Report(
-              Range.getBegin(),
-              Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                    "use aligned matrix to ensure each column "
-                                    "is stored in a 16 byte register"))
-              << Range
-              << FixItHint::CreateReplacement(Range, AlignedType->getName());
-        }
-      }
 
       HLSLOffset = HLSLOffset.alignTo(HLSLFieldAlign);
       CXXOffset = Context.toCharUnitsFromBits(
@@ -3811,7 +3945,7 @@ public:
         BindingDeclContext->addDecl(
             CreateEnumSizeAssert(Context, BindingDeclContext, Field));
 
-      if (!Builtins.isStdArrayType(Record))
+      if (!Builtins.isSupportedArrayType(Record))
         BindingDeclContext->addDecl(
             CreateOffsetAssert(Context, BindingDeclContext, Field, ThisOffset));
     }
@@ -4817,7 +4951,8 @@ class StageStmtPartitioner {
         return;
       } else if (isa<IntegerLiteral>(S) || isa<FloatingLiteral>(S) ||
                  isa<CXXBoolLiteralExpr>(S) || isa<BreakStmt>(S) ||
-                 isa<ContinueStmt>(S) || isa<CXXThisExpr>(S)) {
+                 isa<ContinueStmt>(S) || isa<CXXThisExpr>(S) ||
+                 isa<CXXDefaultArgExpr>(S)) {
         /* Literals, flow control leaves, and this can go right where they
          * are used
          */
@@ -4902,7 +5037,11 @@ class StageStmtPartitioner {
       }
       switch (Method) {
       case HBM_sample2d:
+      case HBM_render_sample2d:
+      case HBM_sample_bias2d:
         DoVisit(CallExpr->getArg(0), Stage);
+        if (Method == HBM_sample_bias2d)
+          DoVisit(CallExpr->getArg(1), Stage);
         break;
       default:
         break;
@@ -5092,7 +5231,8 @@ class StageStmtPartitioner {
         return Visit(S, Stage);
       } else if (isa<IntegerLiteral>(S) || isa<FloatingLiteral>(S) ||
                  isa<CXXBoolLiteralExpr>(S) || isa<BreakStmt>(S) ||
-                 isa<ContinueStmt>(S) || isa<CXXThisExpr>(S)) {
+                 isa<ContinueStmt>(S) || isa<CXXThisExpr>(S) ||
+                 isa<CXXDefaultArgExpr>(S)) {
         /* Literals, flow control leaves, and this can go right where they are
          * used
          */
@@ -5246,7 +5386,9 @@ class StageStmtPartitioner {
                                           OK_Ordinary);
       }
       switch (Method) {
-      case HBM_sample2d: {
+      case HBM_sample2d:
+      case HBM_render_sample2d:
+      case HBM_sample_bias2d: {
         ParmVarDecl *PVD = nullptr;
         if (auto *TexRef = dyn_cast<DeclRefExpr>(ObjArg))
           PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
@@ -5257,12 +5399,26 @@ class StageStmtPartitioner {
         auto *UVStmt = DoVisit(CallExpr->getArg(0), Stage);
         if (!UVStmt)
           return nullptr;
-        std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
-        auto *NMCE = CXXMemberCallExpr::Create(
-            Partitioner.Context, CallExpr->getCallee(), NewArgs,
-            CallExpr->getType(), VK_XValue, {});
-        Builder.registerSampleCall(Method, NMCE, Stage);
-        return NMCE;
+        if (Method == HBM_sample_bias2d) {
+          auto *BiasStmt = DoVisit(CallExpr->getArg(1), Stage);
+          if (!BiasStmt)
+            return nullptr;
+          std::array<Expr *, 3> NewArgs{
+              cast<Expr>(UVStmt), cast<Expr>(BiasStmt), CallExpr->getArg(2)};
+          auto *NMCE = CXXMemberCallExpr::Create(
+              Partitioner.Context, CallExpr->getCallee(), NewArgs,
+              CallExpr->getType(), VK_XValue, {});
+          Builder.registerSampleCall(Method, NMCE, Stage);
+          return NMCE;
+        } else {
+          std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt),
+                                        CallExpr->getArg(1)};
+          auto *NMCE = CXXMemberCallExpr::Create(
+              Partitioner.Context, CallExpr->getCallee(), NewArgs,
+              CallExpr->getType(), VK_XValue, {});
+          Builder.registerSampleCall(Method, NMCE, Stage);
+          return NMCE;
+        }
       }
       default:
         ReportUnsupportedFunctionCall(CallExpr, Partitioner.Context);
@@ -5681,7 +5837,7 @@ class GenerateConsumer : public ASTConsumer {
   struct HshExpansion {
     SourceRange Range;
     SmallString<32> Name;
-    CXXTemporaryObjectExpr *Construct;
+    clang::Expr *Construct;
   };
   DenseMap<SourceLocation, HshExpansion> SeenHshExpansions;
 
@@ -6261,14 +6417,19 @@ public:
       UseDecl =
           CTSD->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>();
     if (SeenDecls.find(UseDecl) == SeenDecls.end()) {
-      Diags.Report(
-          Expansion.Construct->getLocation(),
-          Diags.getCustomDiagID(
-              DiagnosticsEngine::Error,
-              "binding constructor does not construct a valid pipeline"))
-          << Expansion.Construct->getTypeSourceInfo()
-                 ->getTypeLoc()
-                 .getSourceRange();
+      auto ReportInvalid = [&](auto *Construct) {
+        Diags.Report(
+            Construct->getBeginLoc(),
+            Diags.getCustomDiagID(
+                DiagnosticsEngine::Error,
+                "binding constructor does not construct a valid pipeline"))
+            << Construct->getTypeSourceInfo()->getTypeLoc().getSourceRange();
+      };
+      if (auto *CTOE = dyn_cast<CXXTemporaryObjectExpr>(Expansion.Construct))
+        ReportInvalid(CTOE);
+      else if (auto *CUCE =
+                   dyn_cast<CXXUnresolvedConstructExpr>(Expansion.Construct))
+        ReportInvalid(CUCE);
       return;
     }
     SmallString<32> BindingName("hshbinding_"_ll);
@@ -6458,13 +6619,20 @@ public:
         NCE.getExpr()->printPretty(*OS, nullptr, HostPolicy);
       }
     }
-    for (auto *Arg : Expansion.Construct->arguments()) {
-      if (NeedsMacroComma)
-        *OS << ", ";
-      else
-        NeedsMacroComma = true;
-      Arg->printPretty(*OS, nullptr, HostPolicy);
-    }
+    auto PrintArgs = [&](auto *Construct) {
+      for (auto *Arg : Construct->arguments()) {
+        if (NeedsMacroComma)
+          *OS << ", ";
+        else
+          NeedsMacroComma = true;
+        Arg->printPretty(*OS, nullptr, HostPolicy);
+      }
+    };
+    if (auto *CTOE = dyn_cast<CXXTemporaryObjectExpr>(Expansion.Construct))
+      PrintArgs(CTOE);
+    else if (auto *CUCE =
+                 dyn_cast<CXXUnresolvedConstructExpr>(Expansion.Construct))
+      PrintArgs(CUCE);
     *OS << ")\n";
   }
 
@@ -6628,7 +6796,9 @@ public:
             << CharSourceRange(Range, false);
         return;
       }
-      auto *Construct = dyn_cast<CXXTemporaryObjectExpr>(Expr.get());
+      clang::Expr *Construct = dyn_cast<CXXTemporaryObjectExpr>(Expr.get());
+      if (!Construct)
+        Construct = dyn_cast<CXXUnresolvedConstructExpr>(Expr.get());
       if (!Construct) {
         Diags.Report(Range.getBegin(),
                      Diags.getCustomDiagID(

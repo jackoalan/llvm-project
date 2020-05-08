@@ -616,6 +616,14 @@ public:
   void draw_indexed(uint32_t start, uint32_t count) noexcept {
     Data.DrawIndexed(start, count);
   }
+  void draw_instanced(uint32_t start, uint32_t count,
+                      uint32_t instCount) noexcept {
+    Data.DrawInstanced(start, count, instCount);
+  }
+  void draw_indexed_instanced(uint32_t start, uint32_t count,
+                              uint32_t instCount) noexcept {
+    Data.DrawIndexedInstanced(start, count, instCount);
+  }
   void update_descriptors() noexcept { UpdateDescriptors = true; }
   void reset() noexcept { Data = decltype(Data){}; }
 };

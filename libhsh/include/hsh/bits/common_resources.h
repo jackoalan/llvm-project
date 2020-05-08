@@ -179,6 +179,11 @@ struct texture_typeless : base_texture {
     scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
       return {};                                                               \
     }                                                                          \
+    template <typename T>                                                      \
+    scalar_to_vector_t<T, 4> sample_bias(coordt, float bias = 0.f,             \
+                                         sampler = {}) const noexcept {        \
+      return {};                                                               \
+    }                                                                          \
   };
 #else
 #define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
@@ -189,6 +194,11 @@ struct texture_typeless : base_texture {
         : texture_typeless(std::forward<Args>(args)...) {}                     \
     template <typename T>                                                      \
     scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
+      return {};                                                               \
+    }                                                                          \
+    template <typename T>                                                      \
+    scalar_to_vector_t<T, 4> sample_bias(coordt, float bias = 0.f,             \
+                                         sampler = {}) const noexcept {        \
       return {};                                                               \
     }                                                                          \
   };
@@ -205,7 +215,10 @@ HSH_CASTABLE_TEXTURE(texturecube_array, float4)
 struct render_texture2d {
   detail::ActiveTargetTraits::RenderTextureBinding Binding;
 
-  hsh::float4 sample(hsh::float2, sampler = {}) const noexcept { return {}; }
+  template <typename T>
+  scalar_to_vector_t<T, 4> sample(float2, sampler = {}) const noexcept {
+    return {};
+  }
 };
 
 struct surface {
@@ -363,7 +376,7 @@ template <hsh::Target T> struct SamplerObject {};
 /* Associates texture with sampler object index in shader data. */
 struct SamplerBinding {
   texture_typeless Tex; /* Reference to actual texture being sampled. */
-  unsigned Idx = 0; /* Index of sampler information in const data. */
+  unsigned Idx = 0;     /* Index of sampler information in const data. */
   unsigned TexIdx =
       0; /* Index of texture being sampled (as listed in parameters). */
 };

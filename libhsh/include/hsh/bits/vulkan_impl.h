@@ -1724,6 +1724,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vulkan::UploadBufferAllocation UploadAllocation;
     std::array<vk::BufferImageCopy, MaxMipCount> Copies;
 
+    DynamicTextureOwner() noexcept = default;
     DynamicTextureOwner(vulkan::TextureAllocation AllocationIn,
                         vulkan::UploadBufferAllocation UploadAllocation,
                         std::array<vk::BufferImageCopy, MaxMipCount> Copies,
@@ -1964,6 +1965,18 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     void DrawIndexed(uint32_t start, uint32_t count) noexcept {
       Bind();
       vulkan::Globals.Cmd.drawIndexed(count, 1, start, 0, 0);
+    }
+
+    void DrawInstanced(uint32_t start, uint32_t count,
+                       uint32_t instCount) noexcept {
+      Bind();
+      vulkan::Globals.Cmd.draw(count, instCount, start, 0);
+    }
+
+    void DrawIndexedInstanced(uint32_t start, uint32_t count,
+                              uint32_t instCount) noexcept {
+      Bind();
+      vulkan::Globals.Cmd.drawIndexed(count, instCount, start, 0, 0);
     }
   };
 

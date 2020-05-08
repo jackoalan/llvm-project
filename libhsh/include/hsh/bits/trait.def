@@ -248,6 +248,22 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
       assert(false && "unhandled case");
     }
   }
+  void DrawInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.DrawInstanced(start, count, instCount); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: _##Enumeration.DrawIndexedInstanced(start, count, instCount); break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
 #endif
 };
 #undef HSH_MULTI_TRAIT
@@ -311,7 +327,9 @@ void SetMargins(int32_t L, int32_t R, int32_t T, int32_t B) noexcept { _##Enumer
 template <typename Impl, typename... Args> \
 void Rebind(bool UpdateDescriptors, Args... args) noexcept { _##Enumeration.Rebind<Impl, Args...>(UpdateDescriptors, args...); } \
 void Draw(uint32_t start, uint32_t count) noexcept { _##Enumeration.Draw(start, count); } \
-void DrawIndexed(uint32_t start, uint32_t count) noexcept { _##Enumeration.DrawIndexed(start, count); }
+void DrawIndexed(uint32_t start, uint32_t count) noexcept { _##Enumeration.DrawIndexed(start, count); } \
+void DrawInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept { _##Enumeration.DrawInstanced(start, count, instCount); } \
+void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept { _##Enumeration.DrawIndexedInstanced(start, count, instCount); }
 #include "targets.def"
 #endif
   };
@@ -360,6 +378,8 @@ template <typename Impl, typename... Args>
 void Rebind(bool UpdateDescriptors, Args... args) noexcept {}
 void Draw(uint32_t start, uint32_t count) noexcept {}
 void DrawIndexed(uint32_t start, uint32_t count) noexcept {}
+void DrawInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {}
+void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {}
 #endif
   };
 #undef HSH_NULL_TRAIT

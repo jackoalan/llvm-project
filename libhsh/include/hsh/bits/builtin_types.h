@@ -42,6 +42,7 @@ struct float4 {
   constexpr float2 xy() const noexcept;
   constexpr float2 xz() const noexcept;
   constexpr float2 xw() const noexcept;
+  constexpr float2 zw() const noexcept;
 };
 struct float3 {
   float x, y, z;
@@ -113,6 +114,7 @@ struct float2 {
 constexpr float2 float4::xy() const noexcept { return float2{x, y}; }
 constexpr float2 float4::xz() const noexcept { return float2{x, z}; }
 constexpr float2 float4::xw() const noexcept { return float2{x, w}; }
+constexpr float2 float4::zw() const noexcept { return float2{z, w}; }
 constexpr float4::float4(const hsh::float3 &other, float w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}
 constexpr float4::float4(const hsh::float2 &other, float z, float w) noexcept
@@ -321,6 +323,19 @@ template <> struct scalar_to_vector<unsigned int, 3> { using type = uint3; };
 template <> struct scalar_to_vector<unsigned int, 4> { using type = uint4; };
 template <typename T, int N>
 using scalar_to_vector_t = typename scalar_to_vector<T, N>::type;
+
+template <typename T, std::size_t N> struct aligned_array {
+  struct alignas(16) {
+    T elem;
+  } data[N];
+
+  aligned_array() = default;
+  template <typename... Args>
+  explicit aligned_array(Args &&... args) : data{{std::forward(args)}...} {}
+
+  const T &operator[](std::size_t pos) const { return data[pos].elem; }
+  T &operator[](std::size_t pos) { return data[pos].elem; }
+};
 
 constexpr float dot(const float2 &a, const float2 &b) noexcept {
   return a.x * b.x + a.y * b.y;
