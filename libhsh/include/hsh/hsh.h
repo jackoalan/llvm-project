@@ -193,9 +193,10 @@ struct dynamic_owner : dynamic_owner_base<T, dynamic_owner<T>> {
 template <>
 struct owner<uniform_buffer_typeless>
     : owner_base<uniform_buffer_typeless, owner<uniform_buffer_typeless>> {
+  using owner_base<uniform_buffer_typeless,
+                   owner<uniform_buffer_typeless>>::owner_base;
   using base =
       owner_base<uniform_buffer_typeless, owner<uniform_buffer_typeless>>;
-  using base::owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -252,9 +253,11 @@ template <>
 struct dynamic_owner<uniform_buffer_typeless>
     : dynamic_owner_base<uniform_buffer_typeless,
                          dynamic_owner<uniform_buffer_typeless>> {
+  using dynamic_owner_base<
+      uniform_buffer_typeless,
+      dynamic_owner<uniform_buffer_typeless>>::dynamic_owner_base;
   using base = dynamic_owner_base<uniform_buffer_typeless,
                                   dynamic_owner<uniform_buffer_typeless>>;
-  using base::dynamic_owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -294,9 +297,10 @@ struct dynamic_owner<uniform_buffer_typeless>
 template <>
 struct owner<vertex_buffer_typeless>
     : owner_base<vertex_buffer_typeless, owner<vertex_buffer_typeless>> {
+  using owner_base<vertex_buffer_typeless,
+                   owner<vertex_buffer_typeless>>::owner_base;
   using base =
       owner_base<vertex_buffer_typeless, owner<vertex_buffer_typeless>>;
-  using base::owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -330,9 +334,10 @@ struct owner<vertex_buffer_typeless>
 template <typename T>
 struct dynamic_owner<vertex_buffer<T>>
     : dynamic_owner_base<vertex_buffer<T>, dynamic_owner<vertex_buffer<T>>> {
+  using dynamic_owner_base<vertex_buffer<T>,
+                           dynamic_owner<vertex_buffer<T>>>::dynamic_owner_base;
   using base =
       dynamic_owner_base<vertex_buffer<T>, dynamic_owner<vertex_buffer<T>>>;
-  using base::dynamic_owner_base;
   using MappedType = typename vertex_buffer<T>::MappedType;
 
 #if HSH_ASSERT_CAST_ENABLED
@@ -356,9 +361,11 @@ template <>
 struct dynamic_owner<vertex_buffer_typeless>
     : dynamic_owner_base<vertex_buffer_typeless,
                          dynamic_owner<vertex_buffer_typeless>> {
+  using dynamic_owner_base<
+      vertex_buffer_typeless,
+      dynamic_owner<vertex_buffer_typeless>>::dynamic_owner_base;
   using base = dynamic_owner_base<vertex_buffer_typeless,
                                   dynamic_owner<vertex_buffer_typeless>>;
-  using base::dynamic_owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -398,8 +405,9 @@ struct dynamic_owner<vertex_buffer_typeless>
 template <>
 struct owner<index_buffer_typeless>
     : owner_base<index_buffer_typeless, owner<index_buffer_typeless>> {
+  using owner_base<index_buffer_typeless,
+                   owner<index_buffer_typeless>>::owner_base;
   using base = owner_base<index_buffer_typeless, owner<index_buffer_typeless>>;
-  using base::owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -433,9 +441,10 @@ struct owner<index_buffer_typeless>
 template <typename T>
 struct dynamic_owner<index_buffer<T>>
     : dynamic_owner_base<index_buffer<T>, dynamic_owner<index_buffer<T>>> {
+  using dynamic_owner_base<index_buffer<T>,
+                           dynamic_owner<index_buffer<T>>>::dynamic_owner_base;
   using base =
       dynamic_owner_base<index_buffer<T>, dynamic_owner<index_buffer<T>>>;
-  using base::dynamic_owner_base;
   using MappedType = typename index_buffer<T>::MappedType;
 
 #if HSH_ASSERT_CAST_ENABLED
@@ -459,9 +468,11 @@ template <>
 struct dynamic_owner<index_buffer_typeless>
     : dynamic_owner_base<index_buffer_typeless,
                          dynamic_owner<index_buffer_typeless>> {
+  using dynamic_owner_base<
+      index_buffer_typeless,
+      dynamic_owner<index_buffer_typeless>>::dynamic_owner_base;
   using base = dynamic_owner_base<index_buffer_typeless,
                                   dynamic_owner<index_buffer_typeless>>;
-  using base::dynamic_owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
@@ -501,8 +512,8 @@ struct dynamic_owner<index_buffer_typeless>
 template <>
 struct owner<texture_typeless>
     : owner_base<texture_typeless, owner<texture_typeless>> {
+  using owner_base<texture_typeless, owner<texture_typeless>>::owner_base;
   using base = owner_base<texture_typeless, owner<texture_typeless>>;
-  using base::owner_base;
 
 #if HSH_ASSERT_CAST_ENABLED
   std::size_t TypeId{};
