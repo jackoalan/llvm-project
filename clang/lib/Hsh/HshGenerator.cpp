@@ -281,6 +281,9 @@ enum HshFormat : uint8_t {
   RG32_SFLOAT,
   RGB32_SFLOAT,
   RGBA32_SFLOAT,
+  BC1_UNORM,
+  BC2_UNORM,
+  BC3_UNORM,
 };
 
 enum Topology {
@@ -345,19 +348,30 @@ struct StageBits {
   }
 };
 
+class CommaArgPrinter {
+  raw_ostream &OS;
+  bool NeedsComma = false;
+
+public:
+  explicit CommaArgPrinter(raw_ostream &OS) : OS(OS) {}
+  raw_ostream &addArg() {
+    if (NeedsComma)
+      OS << ", ";
+    else
+      NeedsComma = true;
+    return OS;
+  }
+};
+
 class GeneratorDumper {
 public:
 #if ENABLE_DUMP
   PrintingPolicy Policy{LangOptions{}};
   static void PrintStageBits(raw_ostream &OS, StageBits Bits) {
-    bool NeedsLeadingComma = false;
+    CommaArgPrinter ArgPrinter(OS);
     for (int i = HshVertexStage; i < HshMaxStage; ++i) {
       if ((1 << i) & Bits) {
-        if (NeedsLeadingComma)
-          OS << ", ";
-        else
-          NeedsLeadingComma = true;
-        OS << HshStageToString(HshStage(i));
+        ArgPrinter.addArg() << HshStageToString(HshStage(i));
       }
     }
   }
@@ -1943,6 +1957,46 @@ public:
     return PipelineAttributes.getPipelineDecl();
   }
 
+  bool isDerivedFromPipelineDecl(CXXRecordDecl *Decl) const {
+    CXXBasePaths Paths(/*FindAmbiguities=*/false, /*RecordPaths=*/false,
+                       /*DetectVirtual=*/false);
+    return Decl->lookupInBases(
+        [this](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
+          if (const auto *TST =
+                  Specifier->getType()->getAs<TemplateSpecializationType>()) {
+            if (auto *TD = dyn_cast_or_null<ClassTemplateDecl>(
+                    TST->getTemplateName().getAsTemplateDecl()))
+              return TD == getPipelineRecordDecl();
+          }
+          return false;
+        },
+        Paths, /*LookupInDependent=*/true);
+  }
+
+  ClassTemplateSpecializationDecl *
+  getDerivedPipelineSpecialization(CXXRecordDecl *Decl) const {
+    CXXBasePaths Paths(/*FindAmbiguities=*/false, /*RecordPaths=*/false,
+                       /*DetectVirtual=*/false);
+    ClassTemplateSpecializationDecl *Ret = nullptr;
+    Decl->lookupInBases(
+        [this, &Ret](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
+          if (const auto *TST =
+                  Specifier->getType()->getAs<TemplateSpecializationType>()) {
+            if (auto *TD = dyn_cast_or_null<ClassTemplateDecl>(
+                    TST->getTemplateName().getAsTemplateDecl())) {
+              if (TD == getPipelineRecordDecl()) {
+                Ret = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
+                    Specifier->getType()->getAsCXXRecordDecl());
+                return true;
+              }
+            }
+          }
+          return false;
+        },
+        Paths, /*LookupInDependent=*/false);
+    return Ret;
+  }
+
   const CXXRecordDecl *getSamplerRecordDecl() const {
     return SamplerRecordType;
   }
@@ -2038,13 +2092,7 @@ public:
        * Every specialization must inherit a hsh::pipeline specialization to be
        * eligible for translation.
        */
-      if (Specialization->getNumBases() != 1)
-        continue;
-      auto *BaseTemplate = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
-          Specialization->bases_begin()->getType()->getAsCXXRecordDecl());
-      if (!BaseTemplate || BaseTemplate->getSpecializedTemplateOrPartial()
-                                   .get<ClassTemplateDecl *>() !=
-                               PipelineAttributes.getPipelineDecl())
+      if (!isDerivedFromPipelineDecl(Specialization))
         continue;
 
       auto Args = Specialization->getTemplateArgs().asArray();
@@ -2085,7 +2133,7 @@ public:
                            uint32_t NumBindings, uint32_t NumAttributes,
                            uint32_t NumSamplers,
                            uint32_t NumColorAttachments) const {
-    auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
+    const auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
     assert(ECD);
 
     TemplateArgumentListInfo TemplateArgs;
@@ -2129,7 +2177,7 @@ public:
 
   VarDecl *getDataVar(ASTContext &Context, DeclContext *DC, HshTarget Target,
                       uint32_t NumStages, uint32_t NumSamplers) const {
-    auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
+    const auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target));
     assert(ECD);
 
     TemplateArgumentListInfo TemplateArgs;
@@ -2170,7 +2218,7 @@ public:
   }
 
   void printTargetEnumName(raw_ostream &Out, HshTarget Target) const {
-    if (auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target)))
+    if (const auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target)))
       ECD->printName(Out);
   }
 
@@ -2426,25 +2474,18 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   }
 
   static void PrintNZeros(raw_ostream &OS, unsigned N) {
-    bool NeedsComma = false;
+    CommaArgPrinter ArgPrinter(OS);
     for (unsigned i = 0; i < N; ++i) {
-      if (NeedsComma)
-        OS << ", ";
-      else
-        NeedsComma = true;
-      OS << '0';
+      ArgPrinter.addArg() << '0';
     }
   }
 
   static void PrintNExprs(raw_ostream &OS,
                           const std::function<void(Expr *)> &ExprArg,
                           unsigned N, Expr *E) {
-    bool NeedsComma = false;
+    CommaArgPrinter ArgPrinter(OS);
     for (unsigned i = 0; i < N; ++i) {
-      if (NeedsComma)
-        OS << ", ";
-      else
-        NeedsComma = true;
+      ArgPrinter.addArg();
       ExprArg(E);
     }
   }
@@ -2463,7 +2504,7 @@ struct ShaderPrintingPolicy : PrintingCallbacks, ShaderPrintingPolicyBase {
   }
 
   StringRef overrideTagDeclIdentifier(TagDecl *D) const override {
-    auto *Tp = D->getTypeForDecl();
+    const auto *Tp = D->getTypeForDecl();
     auto HBT = Builtins.identifyBuiltinType(Tp);
     if (HBT == HBT_None) {
       if (Tp->isSignedIntegerOrEnumerationType())
@@ -5899,35 +5940,20 @@ class GenerateConsumer : public ASTConsumer {
       : public RecursiveASTVisitor<PipelineDerivativeSearch> {
     using FuncTp = llvm::unique_function<bool(NamedDecl *)>;
     ASTContext &Context;
-    const ClassTemplateDecl *PipelineDecl;
+    HshBuiltins &Builtins;
     FuncTp Func;
-
-    bool IsDerivedFromPipelineDecl(CXXRecordDecl *Decl) const {
-      CXXBasePaths Paths(/*FindAmbiguities=*/false, /*RecordPaths=*/false,
-                         /*DetectVirtual=*/false);
-      return Decl->lookupInBases(
-          [this](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
-            if (auto *TST =
-                    Specifier->getType()->getAs<TemplateSpecializationType>())
-              if (auto *TD = dyn_cast_or_null<ClassTemplateDecl>(
-                      TST->getTemplateName().getAsTemplateDecl()))
-                return TD == PipelineDecl;
-            return false;
-          },
-          Paths, /*LookupInDependent=*/true);
-    }
 
   public:
     explicit PipelineDerivativeSearch(ASTContext &Context,
-                                      const ClassTemplateDecl *PipelineDecl)
-        : Context(Context), PipelineDecl(PipelineDecl) {}
+                                      HshBuiltins &Builtins)
+        : Context(Context), Builtins(Builtins) {}
 
     bool VisitCXXRecordDecl(CXXRecordDecl *Decl) {
       if (!Decl->isThisDeclarationADefinition() ||
           Decl->getDescribedClassTemplate() ||
           isa<ClassTemplateSpecializationDecl>(Decl))
         return true;
-      if (IsDerivedFromPipelineDecl(Decl))
+      if (Builtins.isDerivedFromPipelineDecl(Decl))
         return Func(Decl);
       return true;
     }
@@ -5935,7 +5961,7 @@ class GenerateConsumer : public ASTConsumer {
     bool VisitClassTemplateDecl(ClassTemplateDecl *Decl) {
       if (!Decl->isThisDeclarationADefinition())
         return true;
-      if (IsDerivedFromPipelineDecl(Decl->getTemplatedDecl()))
+      if (Builtins.isDerivedFromPipelineDecl(Decl->getTemplatedDecl()))
         return Func(Decl);
       return true;
     }
@@ -5964,7 +5990,7 @@ public:
     return HashStr;
   }
 
-  void handlePipelineDerivative(NamedDecl *Decl) {
+  bool handlePipelineDerivative(NamedDecl *Decl) {
     auto &Diags = Context.getDiagnostics();
     auto *CD = dyn_cast<CXXRecordDecl>(Decl);
     auto *CTD = dyn_cast<ClassTemplateDecl>(Decl);
@@ -5979,7 +6005,7 @@ public:
           Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                 "hsh::pipeline derivatives must be declared in "
                                 "file or namespace scope"));
-      return;
+      return false;
     }
 
     SmallString<32> BindingName("hshbinding_"_ll);
@@ -5997,7 +6023,7 @@ public:
     }
 
     if (Context.getDiagnostics().hasErrorOccurred())
-      return;
+      return false;
 
     auto ProcessSpecialization = [&](CXXRecordDecl *Specialization) {
       QualType T{Specialization->getTypeForDecl(), 0};
@@ -6008,11 +6034,7 @@ public:
 
       // Validate constructor of this specialization source
       if (!PipelineSource->hasUserDeclaredConstructor()) {
-        Diags.Report(
-            PipelineSource->getBeginLoc(),
-            Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                  "hsh::pipeline derivatives must have exactly "
-                                  "one user-defined constructor"));
+        // Consider lack of user-defined constructor as an abstract pipeline
         return;
       }
       CXXConstructorDecl *PrevCtor = nullptr;
@@ -6040,8 +6062,8 @@ public:
 
       // Extract template arguments for constructing color attachments and
       // logical pipeline constants
-      auto *PipelineSpec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
-          PipelineSource->bases_begin()->getType()->getAsCXXRecordDecl());
+      auto *PipelineSpec =
+          Builtins.getDerivedPipelineSpecialization(PipelineSource);
       const auto &PipelineAttributes = Builtins.getPipelineAttributes();
       bool HasDualSource = false;
       auto ColorAttachmentArgs = PipelineAttributes.getColorAttachmentArgs(
@@ -6202,7 +6224,7 @@ public:
         auto &Binaries =
             BinaryMap.insert(std::make_pair(Target, Compiler.compile(Sources)))
                 .first->second;
-        auto SourceIt = Sources.begin();
+        auto *SourceIt = Sources.begin();
         int StageIt = HshVertexStage;
 
         InitOS << "{\n    {\n";
@@ -6292,12 +6314,9 @@ public:
             std::string SamplerParams;
             raw_string_ostream SPO(SamplerParams);
             unsigned FieldIdx = 0;
-            bool NeedsComma = false;
+            CommaArgPrinter ArgPrinter(SPO);
             for (auto *Field : Builtins.getSamplerRecordDecl()->fields()) {
-              if (NeedsComma)
-                SPO << ", ";
-              else
-                NeedsComma = true;
+              ArgPrinter.addArg();
               const auto &FieldVal = Sampler.Config.getStructField(FieldIdx++);
               if (FieldVal.isInt()) {
                 TemplateArgument(Context, FieldVal.getInt(), Field->getType())
@@ -6320,12 +6339,9 @@ public:
         InitOS << "    },\n    {\n";
 
         auto PrintArguments = [&](const auto &Args) {
-          bool NeedsComma = false;
+          CommaArgPrinter ArgPrinter(InitOS);
           for (const auto &Arg : Args) {
-            if (NeedsComma)
-              InitOS << ", ";
-            else
-              NeedsComma = true;
+            ArgPrinter.addArg();
             if (Arg.getKind() == TemplateArgument::Integral &&
                 Builtins.identifyBuiltinType(Arg.getIntegralType()) ==
                     HBT_ColorComponentFlags) {
@@ -6405,6 +6421,7 @@ public:
     }
 
     AnonOS << "\n\n";
+    return true;
   }
 
   void handleHshExpansion(const HshExpansion &Expansion,
@@ -6417,26 +6434,29 @@ public:
       UseDecl =
           CTSD->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>();
     if (SeenDecls.find(UseDecl) == SeenDecls.end()) {
-      auto ReportInvalid = [&](auto *Construct) {
+      auto ReportInvalid = [&](auto *Construct, const TypeSourceInfo *TSI) {
         Diags.Report(
             Construct->getBeginLoc(),
             Diags.getCustomDiagID(
                 DiagnosticsEngine::Error,
                 "binding constructor does not construct a valid pipeline"))
-            << Construct->getTypeSourceInfo()->getTypeLoc().getSourceRange();
+            << TSI->getTypeLoc().getSourceRange();
       };
       if (auto *CTOE = dyn_cast<CXXTemporaryObjectExpr>(Expansion.Construct))
-        ReportInvalid(CTOE);
+        ReportInvalid(CTOE, CTOE->getTypeSourceInfo());
       else if (auto *CUCE =
                    dyn_cast<CXXUnresolvedConstructExpr>(Expansion.Construct))
-        ReportInvalid(CUCE);
+        ReportInvalid(CUCE, CUCE->getTypeSourceInfo());
+      else if (auto *CFCE =
+                   dyn_cast<CXXFunctionalCastExpr>(Expansion.Construct))
+        ReportInvalid(CFCE, CFCE->getTypeInfoAsWritten());
       return;
     }
     SmallString<32> BindingName("hshbinding_"_ll);
     BindingName += UseDecl->getName();
 
     /* Determine if construction expression has all constant template parms */
-    bool NeedsMacroComma = false;
+    CommaArgPrinter MacroPrinter(*OS);
     *OS << "struct " << Expansion.Name
         << " {\n"
            "template <typename... Res>\n"
@@ -6476,18 +6496,12 @@ public:
         };
         PrintFullyQualType(Decl);
         *OS << "\")\n.add(";
-        bool NeedsAddComma = false;
-        auto AddComma = [&]() {
-          if (NeedsAddComma)
-            *OS << ", ";
-          else
-            NeedsAddComma = true;
-        };
+        CommaArgPrinter ArgPrinter(*OS);
         unsigned PushCount = 0;
         TraverseNonConstExprs(
             NonConstExprs,
             [&](NonTypeTemplateParmDecl *NTTP) {
-              AddComma();
+              ArgPrinter.addArg();
               if (auto *EnumTp = NTTP->getType()->getAs<EnumType>()) {
                 *OS << "hsh::profiler::cast{\"";
                 PrintFullyQualType(EnumTp->getDecl());
@@ -6502,8 +6516,7 @@ public:
               ++PushCount;
               if (PushCount == 1)
                 return;
-              AddComma();
-              *OS << "hsh::profiler::push{\"";
+              ArgPrinter.addArg() << "hsh::profiler::push{\"";
               auto *CTD = Spec->getSpecializedTemplateOrPartial()
                               .get<ClassTemplateDecl *>();
               PrintFullyQualType(CTD->getTemplatedDecl());
@@ -6513,12 +6526,10 @@ public:
               --PushCount;
               if (PushCount == 0)
                 return;
-              AddComma();
-              *OS << "hsh::profiler::pop{}";
+              ArgPrinter.addArg() << "hsh::profiler::pop{}";
             },
             [&](const APSInt &Int, QualType IntType) {
-              AddComma();
-              *OS << '\"';
+              ArgPrinter.addArg() << '\"';
               TemplateArgument(Context, Int, IntType).print(HostPolicy, *OS);
               *OS << '\"';
             });
@@ -6547,13 +6558,9 @@ public:
                      StringRef BindingName, unsigned Indentation = 0) const {
             if (Leaf) {
               indent(OS, Indentation) << "::" << BindingName << '<';
-              bool NeedsArgComma = false;
+              CommaArgPrinter ArgPrinter(OS);
               for (auto &Arg : Leaf->getTemplateArgs().asArray()) {
-                if (NeedsArgComma)
-                  OS << ", ";
-                else
-                  NeedsArgComma = true;
-                Arg.print(Policy, OS);
+                Arg.print(Policy, ArgPrinter.addArg());
               }
               OS << ">::_rebind(__binding, Resources...); return;\n";
             } else if (!Name.empty()) {
@@ -6612,20 +6619,12 @@ public:
       for (auto &NCE : NonConstExprs) {
         if (NCE.getKind() != NonConstExpr::NonTypeParm)
           continue;
-        if (NeedsMacroComma)
-          *OS << ", ";
-        else
-          NeedsMacroComma = true;
-        NCE.getExpr()->printPretty(*OS, nullptr, HostPolicy);
+        NCE.getExpr()->printPretty(MacroPrinter.addArg(), nullptr, HostPolicy);
       }
     }
     auto PrintArgs = [&](auto *Construct) {
       for (auto *Arg : Construct->arguments()) {
-        if (NeedsMacroComma)
-          *OS << ", ";
-        else
-          NeedsMacroComma = true;
-        Arg->printPretty(*OS, nullptr, HostPolicy);
+        Arg->printPretty(MacroPrinter.addArg(), nullptr, HostPolicy);
       }
     };
     if (auto *CTOE = dyn_cast<CXXTemporaryObjectExpr>(Expansion.Construct))
@@ -6633,6 +6632,11 @@ public:
     else if (auto *CUCE =
                  dyn_cast<CXXUnresolvedConstructExpr>(Expansion.Construct))
       PrintArgs(CUCE);
+    else if (auto *CFCE =
+                 dyn_cast<CXXFunctionalCastExpr>(Expansion.Construct)) {
+      CFCE->getSubExpr()->printPretty(MacroPrinter.addArg(), nullptr,
+                                      HostPolicy);
+    }
     *OS << ")\n";
   }
 
@@ -6687,10 +6691,10 @@ public:
      * Process all hsh::pipeline derivatives
      */
     DenseSet<NamedDecl *> SeenDecls;
-    PipelineDerivativeSearch(Context, Builtins.getPipelineRecordDecl())
+    PipelineDerivativeSearch(Context, Builtins)
         .search([this, &SeenDecls](NamedDecl *Decl) {
-          handlePipelineDerivative(Decl);
-          SeenDecls.insert(Decl);
+          if (handlePipelineDerivative(Decl))
+            SeenDecls.insert(Decl);
           return true;
         });
 
@@ -6799,6 +6803,8 @@ public:
       clang::Expr *Construct = dyn_cast<CXXTemporaryObjectExpr>(Expr.get());
       if (!Construct)
         Construct = dyn_cast<CXXUnresolvedConstructExpr>(Expr.get());
+      if (!Construct)
+        Construct = dyn_cast<CXXFunctionalCastExpr>(Expr.get());
       if (!Construct) {
         Diags.Report(Range.getBegin(),
                      Diags.getCustomDiagID(
