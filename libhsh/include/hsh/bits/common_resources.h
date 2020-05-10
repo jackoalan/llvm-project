@@ -326,6 +326,9 @@ enum Format : std::uint8_t {
   RG32_SFLOAT,
   RGB32_SFLOAT,
   RGBA32_SFLOAT,
+  BC1_UNORM,
+  BC2_UNORM,
+  BC3_UNORM
 };
 
 namespace pipeline {
@@ -459,6 +462,19 @@ constexpr std::size_t HshFormatToTexelSize(Format format) noexcept {
     return 12;
   case RGBA32_SFLOAT:
     return 16;
+  case BC1_UNORM:
+  case BC2_UNORM:
+  case BC3_UNORM:
+    return 1;
+  }
+}
+
+constexpr std::size_t HshFormatToTexelSizeShift(Format format) noexcept {
+  switch (format) {
+  default:
+    return 0;
+  case BC1_UNORM:
+    return 1;
   }
 }
 
@@ -574,54 +590,64 @@ template <hsh::Target T> struct PipelineBuilder {
 
 namespace buffer_math {
 constexpr uint32_t MipSize1D(uint32_t width, uint32_t layers,
-                             uint32_t texelSize, bool NotZero) noexcept {
-  return NotZero ? (width * layers * texelSize) : 0;
+                             uint32_t texelSize, uint32_t texelShift,
+                             bool NotZero) noexcept {
+  return NotZero ? (width * layers * texelSize >> texelShift) : 0;
 }
 template <uint32_t... Idx>
 constexpr uint32_t
-MipOffset1D(uint32_t width, uint32_t layers, uint32_t texelSize, uint32_t Mip,
+MipOffset1D(uint32_t width, uint32_t layers, uint32_t texelSize,
+            uint32_t texelShift, uint32_t Mip,
             std::integer_sequence<uint32_t, Idx...>) noexcept {
-  return (MipSize1D(width >> Idx, layers, texelSize, Idx < Mip) + ...);
+  return (MipSize1D(width >> Idx, layers, texelSize, texelShift, Idx < Mip) +
+          ...);
 }
 constexpr uint32_t MipOffset1D(uint32_t width, uint32_t layers,
-                               uint32_t texelSize, uint32_t Mip) noexcept {
-  return MipOffset1D(width, layers, texelSize, Mip,
+                               uint32_t texelSize, uint32_t texelShift,
+                               uint32_t Mip) noexcept {
+  return MipOffset1D(width, layers, texelSize, texelShift, Mip,
                      std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 
 constexpr uint32_t MipSize2D(uint32_t width, uint32_t height, uint32_t layers,
-                             uint32_t texelSize, bool NotZero) noexcept {
-  return NotZero ? (width * height * layers * texelSize) : 0;
+                             uint32_t texelSize, uint32_t texelShift,
+                             bool NotZero) noexcept {
+  return NotZero ? (width * height * layers * texelSize >> texelShift) : 0;
 }
 template <uint32_t... Idx>
 constexpr uint32_t
 MipOffset2D(uint32_t width, uint32_t height, uint32_t layers,
-            uint32_t texelSize, uint32_t Mip,
+            uint32_t texelSize, uint32_t texelShift, uint32_t Mip,
             std::integer_sequence<uint32_t, Idx...>) noexcept {
-  return (MipSize2D(width >> Idx, height >> Idx, layers, texelSize, Idx < Mip) +
+  return (MipSize2D(width >> Idx, height >> Idx, layers, texelSize, texelShift,
+                    Idx < Mip) +
           ...);
 }
 constexpr uint32_t MipOffset2D(uint32_t width, uint32_t height, uint32_t layers,
-                               uint32_t texelSize, uint32_t Mip) noexcept {
-  return MipOffset2D(width, height, layers, texelSize, Mip,
+                               uint32_t texelSize, uint32_t texelShift,
+                               uint32_t Mip) noexcept {
+  return MipOffset2D(width, height, layers, texelSize, texelShift, Mip,
                      std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 
 constexpr uint32_t MipSize3D(uint32_t width, uint32_t height, uint32_t depth,
-                             uint32_t texelSize, bool NotZero) noexcept {
-  return NotZero ? (width * height * depth * texelSize) : 0;
+                             uint32_t texelSize, uint32_t texelShift,
+                             bool NotZero) noexcept {
+  return NotZero ? (width * height * depth * texelSize >> texelShift) : 0;
 }
 template <uint32_t... Idx>
 constexpr uint32_t
 MipOffset3D(uint32_t width, uint32_t height, uint32_t depth, uint32_t texelSize,
-            uint32_t Mip, std::integer_sequence<uint32_t, Idx...>) noexcept {
+            uint32_t texelShift, uint32_t Mip,
+            std::integer_sequence<uint32_t, Idx...>) noexcept {
   return (MipSize3D(width >> Idx, height >> Idx, depth >> Idx, texelSize,
-                    Idx < Mip) +
+                    texelShift, Idx < Mip) +
           ...);
 }
 constexpr uint32_t MipOffset3D(uint32_t width, uint32_t height, uint32_t depth,
-                               uint32_t texelSize, uint32_t Mip) noexcept {
-  return MipOffset3D(width, height, depth, texelSize, Mip,
+                               uint32_t texelSize, uint32_t texelShift,
+                               uint32_t Mip) noexcept {
+  return MipOffset3D(width, height, depth, texelSize, texelShift, Mip,
                      std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 } // namespace buffer_math

@@ -67,6 +67,12 @@ constexpr DkImageFormat HshToDkFormat(Format Format) noexcept {
     return DkImageFormat_RGB32_Float;
   case RGBA32_SFLOAT:
     return DkImageFormat_RGBA32_Float;
+  case BC1_UNORM:
+    return DkImageFormat_RGBA_BC1;
+  case BC2_UNORM:
+    return DkImageFormat_RGBA_BC2;
+  case BC3_UNORM:
+    return DkImageFormat_RGBA_BC3;
   }
 }
 
@@ -120,6 +126,11 @@ constexpr DkVtxAttribSize HshToDkVtxAttribSize(hsh::Format Format) {
     return DkVtxAttribSize_3x32;
   case RGBA32_SFLOAT:
     return DkVtxAttribSize_4x32;
+  /* Irrelevant: */
+  case BC1_UNORM:
+  case BC2_UNORM:
+  case BC3_UNORM:
+    return DkVtxAttribSize_4x32;
   }
 }
 constexpr DkVtxAttribType HshToDkVtxAttribType(hsh::Format Format) {
@@ -171,6 +182,11 @@ constexpr DkVtxAttribType HshToDkVtxAttribType(hsh::Format Format) {
   case RGB32_SFLOAT:
     return DkVtxAttribType_Float;
   case RGBA32_SFLOAT:
+    return DkVtxAttribType_Float;
+  /* Irrelevant: */
+  case BC1_UNORM:
+  case BC2_UNORM:
+  case BC3_UNORM:
     return DkVtxAttribType_Float;
   }
 }
@@ -666,48 +682,50 @@ using BufferImageCopy = detail::deko::BufferImageCopy;
 template <uint32_t... Idx>
 static constexpr std::array<BufferImageCopy, MaxMipCount>
 MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
+             uint32_t texelShift,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
-      MipOffset1D(width, layers, texelSize, Idx), width >> Idx, 1,
+      MipOffset1D(width, layers, texelSize, texelShift, Idx), width >> Idx, 1,
       DkImageRect{0, 0, 0, width >> Idx, 1, layers}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
-MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize) noexcept {
-  return MakeCopies1D(width, layers, texelSize,
+MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
+             uint32_t texelShift) noexcept {
+  return MakeCopies1D(width, layers, texelSize, texelShift,
                       std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 
 template <uint32_t... Idx>
 static constexpr std::array<BufferImageCopy, MaxMipCount>
 MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
-             uint32_t texelSize,
+             uint32_t texelSize, uint32_t texelShift,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
-      MipOffset2D(width, height, layers, texelSize, Idx), width >> Idx,
-      height >> Idx, DkImageRect{0, 0, 0, width >> Idx, height >> Idx, layers},
-      Idx}...};
+      MipOffset2D(width, height, layers, texelSize, texelShift, Idx),
+      width >> Idx, height >> Idx,
+      DkImageRect{0, 0, 0, width >> Idx, height >> Idx, layers}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
 MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
-             uint32_t texelSize) noexcept {
-  return MakeCopies2D(width, height, layers, texelSize,
+             uint32_t texelSize, uint32_t texelShift) noexcept {
+  return MakeCopies2D(width, height, layers, texelSize, texelShift,
                       std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 
 template <uint32_t... Idx>
 static constexpr std::array<BufferImageCopy, MaxMipCount>
 MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
-             uint32_t texelSize,
+             uint32_t texelSize, uint32_t texelShift,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
-      MipOffset3D(width, height, depth, texelSize, Idx), width >> Idx,
-      height >> Idx,
+      MipOffset3D(width, height, depth, texelSize, texelShift, Idx),
+      width >> Idx, height >> Idx,
       DkImageRect{0, 0, 0, width >> Idx, height >> Idx, depth >> Idx}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
 MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
-             uint32_t texelSize) noexcept {
-  return MakeCopies3D(width, height, depth, texelSize,
+             uint32_t texelSize, uint32_t texelShift) noexcept {
+  return MakeCopies3D(width, height, depth, texelSize, texelShift,
                       std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 } // namespace buffer_math::deko
@@ -772,12 +790,15 @@ template <> struct TextureTypeTraits<DkImageType_1D> {
   static constexpr char Name[] = "Texture1D";
   using ExtentType = uint32_t;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
-    return buffer_math::deko::MakeCopies1D(extent, layers, texelSize);
+                                   uint32_t texelSize, uint32_t texelShift) {
+    return buffer_math::deko::MakeCopies1D(extent, layers, texelSize,
+                                           texelShift);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
-    return buffer_math::MipOffset1D(extent, layers, texelSize, mips);
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
+    return buffer_math::MipOffset1D(extent, layers, texelSize, texelShift,
+                                    mips);
   }
   static constexpr uint32_t ExtentWidth(const ExtentType &Extent) noexcept {
     return Extent;
@@ -794,14 +815,15 @@ template <> struct TextureTypeTraits<DkImageType_2D> {
   static constexpr char Name[] = "Texture2D";
   using ExtentType = extent2d;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
+                                   uint32_t texelSize, uint32_t texelShift) {
     return buffer_math::deko::MakeCopies2D(extent.w, extent.h, layers,
-                                           texelSize);
+                                           texelSize, texelShift);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
     return buffer_math::MipOffset2D(extent.w, extent.h, layers, texelSize,
-                                    mips);
+                                    texelShift, mips);
   }
   static constexpr uint32_t ExtentWidth(const ExtentType &Extent) noexcept {
     return Extent.w;
@@ -818,14 +840,15 @@ template <> struct TextureTypeTraits<DkImageType_3D> {
   static constexpr char Name[] = "Texture3D";
   using ExtentType = extent3d;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
+                                   uint32_t texelSize, uint32_t texelShift) {
     return buffer_math::deko::MakeCopies3D(extent.w, extent.h, extent.d,
-                                           texelSize);
+                                           texelSize, texelShift);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
     return buffer_math::MipOffset3D(extent.w, extent.h, extent.d, texelSize,
-                                    mips);
+                                    texelShift, mips);
   }
   static constexpr uint32_t ExtentWidth(const ExtentType &Extent) noexcept {
     return Extent.w;
@@ -846,10 +869,12 @@ inline auto CreateTextureOwner(
     ColorSwizzle redSwizzle, ColorSwizzle greenSwizzle,
     ColorSwizzle blueSwizzle, ColorSwizzle alphaSwizzle) noexcept {
   auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
   auto TexelFormat = HshToDkFormat(format);
   std::array<deko::BufferImageCopy, MaxMipCount> Copies =
-      Traits::MakeCopies(extent, numLayers, TexelSize);
-  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift);
+  auto BufferSize =
+      Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
   auto UploadBuffer = deko::AllocateUploadBuffer(BufferSize);
   copyFunc(UploadBuffer.GetMappedData(), BufferSize);
 
@@ -890,8 +915,10 @@ inline auto CreateDynamicTextureOwner(DkImageType imageViewType,
                                       ColorSwizzle blueSwizzle,
                                       ColorSwizzle alphaSwizzle) noexcept {
   auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
   auto TexelFormat = HshToDkFormat(format);
-  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+  auto BufferSize =
+      Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
   auto UploadBuffer = deko::AllocateUploadBuffer(BufferSize);
 
   TargetTraits<Target::DEKO3D>::DynamicTextureOwner Ret{
@@ -905,7 +932,8 @@ inline auto CreateDynamicTextureOwner(DkImageType imageViewType,
                              Traits::ExtentDepth(extent))
               .setMipLevels(numMips),
           false),
-      std::move(UploadBuffer), Traits::MakeCopies(extent, numLayers, TexelSize),
+      std::move(UploadBuffer),
+      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift),
       dk::ImageView{Ret.Allocation.GetImage()}
           .setType(imageViewType)
           .setFormat(TexelFormat)

@@ -65,6 +65,12 @@ constexpr vk::Format HshToVkFormat(Format Format) noexcept {
     return vk::Format::eR32G32B32Sfloat;
   case RGBA32_SFLOAT:
     return vk::Format::eR32G32B32A32Sfloat;
+  case BC1_UNORM:
+    return vk::Format::eBc1RgbaUnormBlock;
+  case BC2_UNORM:
+    return vk::Format::eBc2UnormBlock;
+  case BC3_UNORM:
+    return vk::Format::eBc3UnormBlock;
   }
 }
 
@@ -685,50 +691,54 @@ namespace buffer_math::vulkan {
 template <uint32_t... Idx>
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
 MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
-             vk::ImageAspectFlagBits aspect,
+             uint32_t texelShift, vk::ImageAspectFlagBits aspect,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
-  return {vk::BufferImageCopy(MipOffset1D(width, layers, texelSize, Idx),
-                              width >> Idx, 1, {aspect, Idx, 0, layers}, {},
-                              {width >> Idx, 1, 1})...};
+  return {vk::BufferImageCopy(
+      MipOffset1D(width, layers, texelSize, texelShift, Idx), width >> Idx, 1,
+      {aspect, Idx, 0, layers}, {}, {width >> Idx, 1, 1})...};
 }
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
 MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
+             uint32_t texelShift, vk::ImageAspectFlagBits aspect) noexcept {
+  return MakeCopies1D(width, layers, texelSize, texelShift, aspect,
+                      std::make_integer_sequence<uint32_t, MaxMipCount>());
+}
+
+template <uint32_t... Idx>
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
+             uint32_t texelSize, uint32_t texelShift,
+             vk::ImageAspectFlagBits aspect,
+             std::integer_sequence<uint32_t, Idx...>) noexcept {
+  return {vk::BufferImageCopy(
+      MipOffset2D(width, height, layers, texelSize, texelShift, Idx),
+      width >> Idx, height >> Idx, {aspect, Idx, 0, layers}, {},
+      {width >> Idx, height >> Idx, 1})...};
+}
+static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
+MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
+             uint32_t texelSize, uint32_t texelShift,
              vk::ImageAspectFlagBits aspect) noexcept {
-  return MakeCopies1D(width, layers, texelSize, aspect,
-                      std::make_integer_sequence<uint32_t, MaxMipCount>());
-}
-
-template <uint32_t... Idx>
-static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
-MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
-             uint32_t texelSize, vk::ImageAspectFlagBits aspect,
-             std::integer_sequence<uint32_t, Idx...>) noexcept {
-  return {
-      vk::BufferImageCopy(MipOffset2D(width, height, layers, texelSize, Idx),
-                          width >> Idx, height >> Idx, {aspect, Idx, 0, layers},
-                          {}, {width >> Idx, height >> Idx, 1})...};
-}
-static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
-MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
-             uint32_t texelSize, vk::ImageAspectFlagBits aspect) noexcept {
-  return MakeCopies2D(width, height, layers, texelSize, aspect,
+  return MakeCopies2D(width, height, layers, texelSize, texelShift, aspect,
                       std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 
 template <uint32_t... Idx>
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
 MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
-             uint32_t texelSize, vk::ImageAspectFlagBits aspect,
+             uint32_t texelSize, uint32_t texelShift,
+             vk::ImageAspectFlagBits aspect,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
-  return {vk::BufferImageCopy(MipOffset3D(width, height, depth, texelSize, Idx),
-                              width >> Idx, height >> Idx, {aspect, Idx, 0, 1},
-                              {},
-                              {width >> Idx, height >> Idx, depth >> Idx})...};
+  return {vk::BufferImageCopy(
+      MipOffset3D(width, height, depth, texelSize, texelShift, Idx),
+      width >> Idx, height >> Idx, {aspect, Idx, 0, 1}, {},
+      {width >> Idx, height >> Idx, depth >> Idx})...};
 }
 static constexpr std::array<vk::BufferImageCopy, MaxMipCount>
 MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
-             uint32_t texelSize, vk::ImageAspectFlagBits aspect) noexcept {
-  return MakeCopies3D(width, height, depth, texelSize, aspect,
+             uint32_t texelSize, uint32_t texelShift,
+             vk::ImageAspectFlagBits aspect) noexcept {
+  return MakeCopies3D(width, height, depth, texelSize, texelShift, aspect,
                       std::make_integer_sequence<uint32_t, MaxMipCount>());
 }
 } // namespace buffer_math::vulkan
@@ -809,13 +819,15 @@ template <> struct TextureTypeTraits<vk::ImageType::e1D> {
   static constexpr char Name[] = "Texture1D";
   using ExtentType = uint32_t;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
-    return buffer_math::vulkan::MakeCopies1D(extent, layers, texelSize,
-                                             vk::ImageAspectFlagBits::eColor);
+                                   uint32_t texelSize, uint32_t texelShift) {
+    return buffer_math::vulkan::MakeCopies1D(
+        extent, layers, texelSize, texelShift, vk::ImageAspectFlagBits::eColor);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
-    return buffer_math::MipOffset1D(extent, layers, texelSize, mips);
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
+    return buffer_math::MipOffset1D(extent, layers, texelSize, texelShift,
+                                    mips);
   }
 };
 
@@ -823,14 +835,16 @@ template <> struct TextureTypeTraits<vk::ImageType::e2D> {
   static constexpr char Name[] = "Texture2D";
   using ExtentType = extent2d;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
-    return buffer_math::vulkan::MakeCopies2D(
-        extent.w, extent.h, layers, texelSize, vk::ImageAspectFlagBits::eColor);
+                                   uint32_t texelSize, uint32_t texelShift) {
+    return buffer_math::vulkan::MakeCopies2D(extent.w, extent.h, layers,
+                                             texelSize, texelShift,
+                                             vk::ImageAspectFlagBits::eColor);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
     return buffer_math::MipOffset2D(extent.w, extent.h, layers, texelSize,
-                                    mips);
+                                    texelShift, mips);
   }
 };
 
@@ -838,15 +852,16 @@ template <> struct TextureTypeTraits<vk::ImageType::e3D> {
   static constexpr char Name[] = "Texture3D";
   using ExtentType = extent3d;
   static constexpr auto MakeCopies(ExtentType extent, uint32_t layers,
-                                   uint32_t texelSize) {
+                                   uint32_t texelSize, uint32_t texelShift) {
     return buffer_math::vulkan::MakeCopies3D(extent.w, extent.h, extent.d,
-                                             texelSize,
+                                             texelSize, texelShift,
                                              vk::ImageAspectFlagBits::eColor);
   }
   static constexpr auto MipOffset(ExtentType extent, uint32_t layers,
-                                  uint32_t texelSize, uint32_t mips) {
+                                  uint32_t texelSize, uint32_t texelShift,
+                                  uint32_t mips) {
     return buffer_math::MipOffset3D(extent.w, extent.h, extent.d, texelSize,
-                                    mips);
+                                    texelShift, mips);
   }
 };
 
@@ -859,10 +874,12 @@ inline auto CreateTextureOwner(
     ColorSwizzle greenSwizzle, ColorSwizzle blueSwizzle,
     ColorSwizzle alphaSwizzle) noexcept {
   auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
   auto TexelFormat = HshToVkFormat(format);
   std::array<vk::BufferImageCopy, MaxMipCount> Copies =
-      Traits::MakeCopies(extent, numLayers, TexelSize);
-  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift);
+  auto BufferSize =
+      Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
   auto UploadBuffer = vulkan::AllocateUploadBuffer(location, BufferSize);
   copyFunc(UploadBuffer.GetMappedData(), BufferSize);
 
@@ -933,8 +950,10 @@ inline auto CreateDynamicTextureOwner(
     uint32_t numMips, ColorSwizzle redSwizzle, ColorSwizzle greenSwizzle,
     ColorSwizzle blueSwizzle, ColorSwizzle alphaSwizzle) noexcept {
   auto TexelSize = HshFormatToTexelSize(format);
+  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
   auto TexelFormat = HshToVkFormat(format);
-  auto BufferSize = Traits::MipOffset(extent, numLayers, TexelSize, numMips);
+  auto BufferSize =
+      Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
   auto UploadBuffer = vulkan::AllocateUploadBuffer(location, BufferSize);
 
   TargetTraits<Target::VULKAN_SPIRV>::DynamicTextureOwner Ret{
@@ -947,7 +966,7 @@ inline auto CreateDynamicTextureOwner(
                                   vk::ImageUsageFlagBits::eTransferDst,
                               {}, {}, {}, vk::ImageLayout::eUndefined)),
       std::move(UploadBuffer),
-      Traits::MakeCopies(extent, numLayers, TexelSize),
+      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift),
       {},
       std::uint8_t(numMips),
       HshFormatIsInteger(format)};
