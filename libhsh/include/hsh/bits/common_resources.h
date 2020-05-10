@@ -29,6 +29,7 @@ struct uniform_buffer_typeless : base_buffer {
       : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::UniformBufferBinding Binding;
+  operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> uniform_buffer<T> cast() const noexcept;
   template <typename T> operator uniform_buffer<T>() const noexcept {
     return cast<T>();
@@ -54,6 +55,7 @@ struct vertex_buffer_typeless : base_buffer {
       : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::VertexBufferBinding Binding;
+  operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> vertex_buffer<T> cast() const noexcept;
   template <typename T> operator vertex_buffer<T>() const noexcept {
     return cast<T>();
@@ -79,6 +81,7 @@ struct index_buffer_typeless : base_buffer {
       : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::IndexBufferBinding Binding;
+  operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> index_buffer<T> cast() const noexcept;
   template <typename T> operator index_buffer<T>() const noexcept {
     return cast<T>();
@@ -162,6 +165,7 @@ struct texture_typeless : base_texture {
   explicit texture_typeless(T other) noexcept : Binding(other.Binding) {}
 #endif
   detail::ActiveTargetTraits::TextureBinding Binding;
+  operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T,
             std::enable_if_t<std::is_base_of_v<texture_typeless, T>, int> = 0>
   T cast() const noexcept {
@@ -224,6 +228,7 @@ HSH_CASTABLE_TEXTURE(texturecube_array, float4)
 struct render_texture2d {
   detail::ActiveTargetTraits::RenderTextureBinding Binding;
 
+  operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T>
   scalar_to_vector_t<T, 4> sample(float2, sampler = {}) const noexcept {
     return {};
