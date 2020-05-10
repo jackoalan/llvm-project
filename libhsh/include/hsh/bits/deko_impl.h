@@ -1085,6 +1085,18 @@ template <> struct TargetTraits<Target::DEKO3D> {
       Bind();
       deko::Globals.Cmd.drawIndexed(Primitive, count, 1, start, 0, 0);
     }
+
+    void DrawInstanced(uint32_t start, uint32_t count,
+                       uint32_t instCount) noexcept {
+      Bind();
+      deko::Globals.Cmd.draw(Primitive, count, instCount, start, 0);
+    }
+
+    void DrawIndexedInstanced(uint32_t start, uint32_t count,
+                              uint32_t instCount) noexcept {
+      Bind();
+      deko::Globals.Cmd.drawIndexed(Primitive, count, instCount, start, 0, 0);
+    }
   };
 
   static void ClearAttachments(bool color, bool depth) noexcept {

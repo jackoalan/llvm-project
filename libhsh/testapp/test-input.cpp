@@ -43,9 +43,9 @@ struct DrawSomethingTemplated : pipeline<color_attachment<>> {
     }
   }
 };
-// template struct DrawSomethingTemplated<false,
-// AlphaTraits<MyNS::AlphaMode(0)>>; template struct
-// DrawSomethingTemplated<false, AlphaTraits<MyNS::AlphaMode(1)>>;
+template struct DrawSomethingTemplated<false, AlphaTraits<MyNS::AlphaMode(0)>>;
+template struct DrawSomethingTemplated<false, AlphaTraits<MyNS::AlphaMode(1)>>;
+template struct DrawSomethingTemplated<true, AlphaTraits<MyNS::AlphaMode(0)>>;
 #endif
 
 #if 1

@@ -209,6 +209,9 @@ int main(int argc, char **argv) {
   Connection.runloop([&]() {
     Device.enter_draw_context([&]() {
       if (!PipelineBind.Binding) {
+        hsh::owner<hsh::texture_typeless> tex = hsh::create_texture2d({1024, 1024}, hsh::Format::RGBA8_UNORM, 10,
+                                                                      [](void *buf, std::size_t size) { std::memset(buf, 0, size); });
+        hsh::texture2d tex2d = tex.get();
         PipelineBind = MyNS::BuildPipeline();
         PipelineTemplate1Bind =
             MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
