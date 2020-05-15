@@ -1107,6 +1107,11 @@ template <> struct TargetTraits<Target::DEKO3D> {
       deko::Globals.Cmd.clearDepthStencil(true, 0.f, 0, 0);
   }
 
+  static void SetBlendConstants(float red, float green, float blue,
+                                float alpha) noexcept {
+    deko::Globals.Cmd.setBlendConst(red, green, blue, alpha);
+  }
+
   template <typename ResTp> struct ResourceFactory {};
 };
 const dk::ImageView &

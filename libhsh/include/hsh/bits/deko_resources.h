@@ -276,6 +276,14 @@ HshToDkBlendFactor(enum BlendFactor BlendFactor) noexcept {
     return DkBlendFactor_DstAlpha;
   case InvDstAlpha:
     return DkBlendFactor_InvDstAlpha;
+  case ConstColor:
+    return DkBlendFactor_ConstColor;
+  case InvConstColor:
+    return DkBlendFactor_InvConstColor;
+  case ConstAlpha:
+    return DkBlendFactor_ConstAlpha;
+  case InvConstAlpha:
+    return DkBlendFactor_InvConstAlpha;
   case Src1Color:
     return DkBlendFactor_Src1Color;
   case InvSrc1Color:
@@ -753,6 +761,11 @@ struct TargetTraits<Target::DEKO3D>::ResourceFactory<uniform_buffer<T>> {
 
   static auto CreateDynamic(const SourceLocation &location) noexcept {
     return CreateDynamicBufferOwner(sizeof(T), DK_UNIFORM_BUF_ALIGNMENT);
+  }
+
+  static auto CreateDynamic(const SourceLocation &location,
+                            size_t size) noexcept {
+    return CreateDynamicBufferOwner(size, DK_UNIFORM_BUF_ALIGNMENT);
   }
 };
 

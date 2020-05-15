@@ -12,22 +12,14 @@ template <typename T> struct index_buffer;
 
 struct uniform_buffer_typeless : base_buffer {
   using MappedType = void;
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId;
+  detail::TypeInfo TypeInfo;
   template <typename... Args>
-  explicit uniform_buffer_typeless(std::size_t TypeId, Args &&... args) noexcept
-      : TypeId(TypeId), Binding(std::forward<Args>(args)...) {}
-  explicit uniform_buffer_typeless(std::size_t TypeId,
+  explicit uniform_buffer_typeless(detail::TypeInfo TypeInfo,
+                                   Args &&... args) noexcept
+      : TypeInfo(TypeInfo), Binding(std::forward<Args>(args)...) {}
+  explicit uniform_buffer_typeless(detail::TypeInfo TypeInfo,
                                    uniform_buffer_typeless other) noexcept
-      : TypeId(TypeId), Binding(other.Binding) {}
-#else
-  template <typename... Args>
-  explicit uniform_buffer_typeless(Args &&... args) noexcept
-      : Binding(std::forward<Args>(args)...) {}
-  template <typename T>
-  explicit uniform_buffer_typeless(uniform_buffer<T> other) noexcept
-      : Binding(other.Binding) {}
-#endif
+      : TypeInfo(TypeInfo), Binding(other.Binding) {}
   detail::ActiveTargetTraits::UniformBufferBinding Binding;
   operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> uniform_buffer<T> cast() const noexcept;
@@ -38,22 +30,14 @@ struct uniform_buffer_typeless : base_buffer {
 };
 struct vertex_buffer_typeless : base_buffer {
   using MappedType = void;
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId;
+  detail::TypeInfo TypeInfo;
   template <typename... Args>
-  explicit vertex_buffer_typeless(std::size_t TypeId, Args &&... args) noexcept
-      : TypeId(TypeId), Binding(std::forward<Args>(args)...) {}
-  explicit vertex_buffer_typeless(std::size_t TypeId,
+  explicit vertex_buffer_typeless(detail::TypeInfo TypeInfo,
+                                  Args &&... args) noexcept
+      : TypeInfo(TypeInfo), Binding(std::forward<Args>(args)...) {}
+  explicit vertex_buffer_typeless(detail::TypeInfo TypeInfo,
                                   vertex_buffer_typeless other) noexcept
-      : TypeId(TypeId), Binding(other.Binding) {}
-#else
-  template <typename... Args>
-  explicit vertex_buffer_typeless(Args &&... args) noexcept
-      : Binding(std::forward<Args>(args)...) {}
-  template <typename T>
-  explicit vertex_buffer_typeless(vertex_buffer<T> other) noexcept
-      : Binding(other.Binding) {}
-#endif
+      : TypeInfo(TypeInfo), Binding(other.Binding) {}
   detail::ActiveTargetTraits::VertexBufferBinding Binding;
   operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> vertex_buffer<T> cast() const noexcept;
@@ -64,22 +48,14 @@ struct vertex_buffer_typeless : base_buffer {
 };
 struct index_buffer_typeless : base_buffer {
   using MappedType = void;
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId;
+  detail::TypeInfo TypeInfo;
   template <typename... Args>
-  explicit index_buffer_typeless(std::size_t TypeId, Args &&... args) noexcept
-      : TypeId(TypeId), Binding(std::forward<Args>(args)...) {}
-  explicit index_buffer_typeless(std::size_t TypeId,
+  explicit index_buffer_typeless(detail::TypeInfo TypeInfo,
+                                 Args &&... args) noexcept
+      : TypeInfo(TypeInfo), Binding(std::forward<Args>(args)...) {}
+  explicit index_buffer_typeless(detail::TypeInfo TypeInfo,
                                  index_buffer_typeless other) noexcept
-      : TypeId(TypeId), Binding(other.Binding) {}
-#else
-  template <typename... Args>
-  explicit index_buffer_typeless(Args &&... args) noexcept
-      : Binding(std::forward<Args>(args)...) {}
-  template <typename T>
-  explicit index_buffer_typeless(index_buffer<T> other) noexcept
-      : Binding(other.Binding) {}
-#endif
+      : TypeInfo(TypeInfo), Binding(other.Binding) {}
   detail::ActiveTargetTraits::IndexBufferBinding Binding;
   operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T> index_buffer<T> cast() const noexcept;
@@ -89,14 +65,14 @@ struct index_buffer_typeless : base_buffer {
   void reset() noexcept { Binding = decltype(Binding){}; }
 };
 
-#if HSH_ASSERT_CAST_ENABLED
 #define HSH_CASTABLE_BUFFER(derived)                                           \
   template <typename T> struct derived : derived##_typeless {                  \
     using MappedType = T;                                                      \
     template <typename... Args>                                                \
     explicit derived(Args &&... args) noexcept                                 \
-        : derived##_typeless(typeid(*this).hash_code(),                        \
-                             std::forward<Args>(args)...) {}                   \
+        : derived                                                              \
+          ##_typeless(detail::TypeInfo::MakeTypeInfo<decltype(*this)>(),       \
+                      std::forward<Args>(args)...) {}                          \
     const T *operator->() const noexcept {                                     \
       assert(false && "Not to be used from host!");                            \
       return nullptr;                                                          \
@@ -105,24 +81,15 @@ struct index_buffer_typeless : base_buffer {
       assert(false && "Not to be used from host!");                            \
       return *reinterpret_cast<T *>(0);                                        \
     }                                                                          \
-  };
-#else
-#define HSH_CASTABLE_BUFFER(derived)                                           \
-  template <typename T> struct derived : derived##_typeless {                  \
-    using MappedType = T;                                                      \
+  };                                                                           \
+  template <> struct derived<void> : derived##_typeless {                      \
+    using MappedType = void;                                                   \
     template <typename... Args>                                                \
     explicit derived(Args &&... args) noexcept                                 \
-        : derived##_typeless(std::forward<Args>(args)...) {}                   \
-    const T *operator->() const noexcept {                                     \
-      assert(false && "Not to be used from host!");                            \
-      return nullptr;                                                          \
-    }                                                                          \
-    const T &operator*() const noexcept {                                      \
-      assert(false && "Not to be used from host!");                            \
-      return *reinterpret_cast<T *>(0);                                        \
-    }                                                                          \
+        : derived                                                              \
+          ##_typeless(detail::TypeInfo::MakeTypeInfo<decltype(*this)>(),       \
+                      std::forward<Args>(args)...) {}                          \
   };
-#endif
 HSH_CASTABLE_BUFFER(uniform_buffer)
 HSH_CASTABLE_BUFFER(vertex_buffer)
 HSH_CASTABLE_BUFFER(index_buffer)
@@ -130,7 +97,7 @@ HSH_CASTABLE_BUFFER(index_buffer)
 
 #define HSH_DEFINE_BUFFER_CAST(derived)                                        \
   template <typename T> derived<T> derived##_typeless::cast() const noexcept { \
-    HSH_ASSERT_CAST(TypeId == typeid(derived<T>).hash_code() && "bad cast");   \
+    TypeInfo.Assert<derived<T>>();                                             \
     return static_cast<derived<T>>(*this);                                     \
   }
 HSH_DEFINE_BUFFER_CAST(uniform_buffer)
@@ -149,27 +116,19 @@ struct texturecube;
 struct texturecube_array;
 
 struct texture_typeless : base_texture {
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId;
+  detail::TypeInfo TypeInfo;
   template <typename... Args>
-  explicit texture_typeless(std::size_t TypeId, Args &&... args) noexcept
-      : TypeId(TypeId), Binding(std::forward<Args>(args)...) {}
-  explicit texture_typeless(std::size_t TypeId, texture_typeless other) noexcept
-      : TypeId(TypeId), Binding(other.Binding) {}
-#else
-  template <typename... Args>
-  explicit texture_typeless(Args &&... args) noexcept
-      : Binding(std::forward<Args>(args)...) {}
-  template <typename T,
-            std::enable_if_t<std::is_base_of_v<texture_typeless, T>, int> = 0>
-  explicit texture_typeless(T other) noexcept : Binding(other.Binding) {}
-#endif
+  explicit texture_typeless(detail::TypeInfo TypeInfo, Args &&... args) noexcept
+      : TypeInfo(TypeInfo), Binding(std::forward<Args>(args)...) {}
+  explicit texture_typeless(detail::TypeInfo TypeInfo,
+                            texture_typeless other) noexcept
+      : TypeInfo(TypeInfo), Binding(other.Binding) {}
   detail::ActiveTargetTraits::TextureBinding Binding;
   operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T,
             std::enable_if_t<std::is_base_of_v<texture_typeless, T>, int> = 0>
   T cast() const noexcept {
-    HSH_ASSERT_CAST(TypeId == typeid(T).hash_code() && "bad cast");
+    TypeInfo.Assert<T>();
     return static_cast<T>(*this);
   }
   template <typename T,
@@ -180,13 +139,12 @@ struct texture_typeless : base_texture {
   void reset() noexcept { Binding = decltype(Binding){}; }
 };
 
-#if HSH_ASSERT_CAST_ENABLED
 #define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
   struct derived : texture_typeless {                                          \
     using MappedType = void;                                                   \
     template <typename... Args>                                                \
     explicit derived(Args &&... args) noexcept                                 \
-        : texture_typeless(typeid(*this).hash_code(),                          \
+        : texture_typeless(detail::TypeInfo::MakeTypeInfo<decltype(*this)>(),  \
                            std::forward<Args>(args)...) {}                     \
     template <typename T>                                                      \
     scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
@@ -198,24 +156,6 @@ struct texture_typeless : base_texture {
       return {};                                                               \
     }                                                                          \
   };
-#else
-#define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
-  struct derived : texture_typeless {                                          \
-    using MappedType = void;                                                   \
-    template <typename... Args>                                                \
-    explicit derived(Args &&... args) noexcept                                 \
-        : texture_typeless(std::forward<Args>(args)...) {}                     \
-    template <typename T>                                                      \
-    scalar_to_vector_t<T, 4> sample(coordt, sampler = {}) const noexcept {     \
-      return {};                                                               \
-    }                                                                          \
-    template <typename T>                                                      \
-    scalar_to_vector_t<T, 4> sample_bias(coordt, float bias = 0.f,             \
-                                         sampler = {}) const noexcept {        \
-      return {};                                                               \
-    }                                                                          \
-  };
-#endif
 HSH_CASTABLE_TEXTURE(texture1d, float)
 HSH_CASTABLE_TEXTURE(texture1d_array, float2)
 HSH_CASTABLE_TEXTURE(texture2d, float2)
@@ -278,6 +218,10 @@ enum BlendFactor : std::uint8_t {
   InvSrcAlpha,
   DstAlpha,
   InvDstAlpha,
+  ConstColor,
+  InvConstColor,
+  ConstAlpha,
+  InvConstAlpha,
   Src1Color,
   InvSrc1Color,
   Src1Alpha,

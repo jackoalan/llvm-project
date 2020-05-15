@@ -165,6 +165,14 @@ HshToVkBlendFactor(enum BlendFactor BlendFactor) noexcept {
     return vk::BlendFactor::eSrc1Color;
   case InvSrc1Color:
     return vk::BlendFactor::eOneMinusSrc1Color;
+  case ConstColor:
+    return vk::BlendFactor::eConstantColor;
+  case InvConstColor:
+    return vk::BlendFactor::eOneMinusConstantColor;
+  case ConstAlpha:
+    return vk::BlendFactor::eConstantAlpha;
+  case InvConstAlpha:
+    return vk::BlendFactor::eOneMinusConstantAlpha;
   case Src1Alpha:
     return vk::BlendFactor::eSrc1Alpha;
   case InvSrc1Alpha:
@@ -584,10 +592,11 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
                         std::make_index_sequence<NSamplers>(),
                         std::make_index_sequence<NAttachments>()) {}
 
-  static constexpr std::array<vk::DynamicState, 2> Dynamics{
-      vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+  static constexpr std::array<vk::DynamicState, 3> Dynamics{
+      vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+      vk::DynamicState::eBlendConstants};
   static constexpr vk::PipelineDynamicStateCreateInfo DynamicState{
-      {}, 2, Dynamics.data()};
+      {}, Dynamics.size(), Dynamics.data()};
   static constexpr vk::PipelineViewportStateCreateInfo ViewportState{
       {}, 1, {}, 1, {}};
 
@@ -778,6 +787,12 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
   static auto CreateDynamic(const SourceLocation &location) noexcept {
     return CreateDynamicBufferOwner(
         location, vk::BufferUsageFlagBits::eUniformBuffer, sizeof(T));
+  }
+
+  static auto CreateDynamic(const SourceLocation &location,
+                            size_t size) noexcept {
+    return CreateDynamicBufferOwner(
+        location, vk::BufferUsageFlagBits::eUniformBuffer, size);
   }
 };
 

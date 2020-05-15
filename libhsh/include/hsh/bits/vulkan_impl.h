@@ -2005,6 +2005,12 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     }
   }
 
+  static void SetBlendConstants(float red, float green, float blue,
+                                float alpha) noexcept {
+    const float constants[] = {red, green, blue, alpha};
+    vulkan::Globals.Cmd.setBlendConstants(constants);
+  }
+
   template <typename ResTp> struct ResourceFactory {};
 };
 inline const std::array<vk::DeviceSize, MaxVertexBuffers>

@@ -14,8 +14,7 @@ enum class ActiveTarget : std::uint8_t {
 };
 struct uniform_buffer_typeless;
 struct vertex_buffer_typeless;
-template <typename T>
-struct index_buffer;
+template <typename T> struct index_buffer;
 struct texture_typeless;
 struct render_texture2d;
 
@@ -42,13 +41,53 @@ struct ValidateBuiltTargets<std::integer_sequence<hsh::Target, Ts...>> {
 
 #if !defined(NDEBUG) && defined(__GXX_RTTI)
 #define HSH_ASSERT_CAST_ENABLED 1
-#define HSH_ASSERT_CAST(...) assert(__VA_ARGS__)
 #else
 #define HSH_ASSERT_CAST_ENABLED 0
-#define HSH_ASSERT_CAST(...)
 #endif
 
 namespace hsh::detail {
+#if HSH_ASSERT_CAST_ENABLED
+class TypeInfo {
+  const char *m_name = nullptr;
+  std::size_t m_hash = 0;
+
+public:
+  TypeInfo() noexcept = default;
+  TypeInfo(const std::type_info &ti) noexcept
+      : m_name(ti.name()), m_hash(ti.hash_code()) {}
+  bool operator==(const TypeInfo &other) const noexcept {
+    return m_hash == other.m_hash;
+  }
+  bool operator!=(const TypeInfo &other) const noexcept {
+    return m_hash != other.m_hash;
+  }
+  template <typename T> static TypeInfo MakeTypeInfo() noexcept {
+    return TypeInfo(typeid(T));
+  }
+  const char *Name() const noexcept { return m_name; }
+  std::size_t Hash() const noexcept { return m_hash; }
+  template <typename T> void Assert() const noexcept {
+    auto To = MakeTypeInfo<T>();
+    if (*this != To) {
+      std::fputs("Cannot cast ", stderr);
+      std::fputs(Name(), stderr);
+      std::fputs(" to ", stderr);
+      std::fputs(To.Name(), stderr);
+      std::fputs("\n", stderr);
+      assert(false && "Cast failure");
+    }
+  }
+};
+#else
+class TypeInfo {
+public:
+  template <typename T> static TypeInfo MakeTypeInfo() noexcept {
+    return TypeInfo();
+  }
+  template <typename T> void Assert() const noexcept {}
+};
+#endif
+
 #ifndef HSH_MAX_UNIFORMS
 #error HSH_MAX_UNIFORMS definition is mandatory!
 #endif
@@ -155,6 +194,6 @@ struct SamplerBinding;
 template <typename T> struct ClassWrapper {};
 
 template <typename T, typename U> constexpr T AlignUp(T val, U align) {
-  return (val + align - 1) &~ (align - 1);
+  return (val + align - 1) & ~(align - 1);
 }
 } // namespace hsh::detail

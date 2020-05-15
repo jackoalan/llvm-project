@@ -143,9 +143,9 @@ struct owner_base {
 
   operator bool() const noexcept { return Owner.IsValid(); }
 
-#if HSH_ASSERT_CAST_ENABLED
-  static std::size_t GetTypeId() noexcept { return typeid(T).hash_code(); }
-#endif
+  static auto GetTypeInfo() noexcept {
+    return detail::TypeInfo::MakeTypeInfo<T>();
+  }
 
   T get() const noexcept { return T(typename decltype(Owner)::Binding(Owner)); }
   operator T() const noexcept { return get(); }
@@ -198,31 +198,21 @@ struct owner<uniform_buffer_typeless>
   using base =
       owner_base<uniform_buffer_typeless, owner<uniform_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   uniform_buffer_typeless get() const noexcept {
-    return uniform_buffer_typeless(TypeId,
+    return uniform_buffer_typeless(TypeInfo,
                                    typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U>
   owner(owner<uniform_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   owner &operator=(owner<uniform_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -236,15 +226,43 @@ struct dynamic_owner<uniform_buffer<T>>
       dynamic_owner_base<uniform_buffer<T>, dynamic_owner<uniform_buffer<T>>>;
   using MappedType = typename uniform_buffer<T>::MappedType;
 
-#if HSH_ASSERT_CAST_ENABLED
-  static std::size_t GetTypeId() noexcept {
-    return typeid(uniform_buffer<T>).hash_code();
+  static auto GetTypeInfo() noexcept {
+    return detail::TypeInfo::MakeTypeInfo<uniform_buffer<T>>();
   }
-#endif
 
   void load(const MappedType &obj) noexcept {
     auto *ptr = base::map();
     std::memcpy(ptr, &obj, sizeof(MappedType));
+    base::unmap();
+  }
+};
+
+template <>
+struct dynamic_owner<uniform_buffer<void>>
+    : dynamic_owner_base<uniform_buffer<void>,
+                         dynamic_owner<uniform_buffer<void>>> {
+  using dynamic_owner_base<
+      uniform_buffer<void>,
+      dynamic_owner<uniform_buffer<void>>>::dynamic_owner_base;
+  using base = dynamic_owner_base<uniform_buffer<void>,
+                                  dynamic_owner<uniform_buffer<void>>>;
+  using MappedType = typename uniform_buffer<void>::MappedType;
+
+  static auto GetTypeInfo() noexcept {
+    return detail::TypeInfo::MakeTypeInfo<uniform_buffer<void>>();
+  }
+
+  template <typename T> uniform_buffer<T> get() const noexcept {
+    return uniform_buffer<T>(typename decltype(Owner)::Binding(Owner));
+  }
+  template <typename T> operator uniform_buffer<T>() const noexcept {
+    return get<T>();
+  }
+
+  template <typename U>
+  void load(const U &obj) noexcept {
+    auto *ptr = base::map();
+    std::memcpy(ptr, &obj, sizeof(U));
     base::unmap();
   }
 };
@@ -259,14 +277,12 @@ struct dynamic_owner<uniform_buffer_typeless>
   using base = dynamic_owner_base<uniform_buffer_typeless,
                                   dynamic_owner<uniform_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   uniform_buffer_typeless get() const noexcept {
-    return uniform_buffer_typeless(TypeId,
+    return uniform_buffer_typeless(TypeInfo,
                                    typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U> void load(const U &obj) noexcept {
     auto *ptr = base::map();
@@ -276,20 +292,12 @@ struct dynamic_owner<uniform_buffer_typeless>
 
   template <typename U>
   dynamic_owner(dynamic_owner<uniform_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   dynamic_owner &operator=(dynamic_owner<uniform_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -302,31 +310,21 @@ struct owner<vertex_buffer_typeless>
   using base =
       owner_base<vertex_buffer_typeless, owner<vertex_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   vertex_buffer_typeless get() const noexcept {
-    return vertex_buffer_typeless(TypeId,
+    return vertex_buffer_typeless(TypeInfo,
                                   typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U>
   owner(owner<vertex_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   owner &operator=(owner<vertex_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -340,11 +338,9 @@ struct dynamic_owner<vertex_buffer<T>>
       dynamic_owner_base<vertex_buffer<T>, dynamic_owner<vertex_buffer<T>>>;
   using MappedType = typename vertex_buffer<T>::MappedType;
 
-#if HSH_ASSERT_CAST_ENABLED
-  static std::size_t GetTypeId() noexcept {
-    return typeid(vertex_buffer<T>).hash_code();
+  static auto GetTypeInfo() noexcept {
+    return detail::TypeInfo::MakeTypeInfo<vertex_buffer<T>>();
   }
-#endif
 
   void load(detail::ArrayProxy<MappedType> obj) noexcept {
     auto *ptr = base::map();
@@ -367,14 +363,12 @@ struct dynamic_owner<vertex_buffer_typeless>
   using base = dynamic_owner_base<vertex_buffer_typeless,
                                   dynamic_owner<vertex_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   vertex_buffer_typeless get() const noexcept {
-    return vertex_buffer_typeless(TypeId,
+    return vertex_buffer_typeless(TypeInfo,
                                   typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U> void load(detail::ArrayProxy<U> obj) noexcept {
     auto *ptr = base::map();
@@ -384,20 +378,12 @@ struct dynamic_owner<vertex_buffer_typeless>
 
   template <typename U>
   dynamic_owner(dynamic_owner<vertex_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   dynamic_owner &operator=(dynamic_owner<vertex_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -409,31 +395,21 @@ struct owner<index_buffer_typeless>
                    owner<index_buffer_typeless>>::owner_base;
   using base = owner_base<index_buffer_typeless, owner<index_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   index_buffer_typeless get() const noexcept {
-    return index_buffer_typeless(TypeId,
+    return index_buffer_typeless(TypeInfo,
                                  typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U>
   owner(owner<index_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   owner &operator=(owner<index_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -447,11 +423,9 @@ struct dynamic_owner<index_buffer<T>>
       dynamic_owner_base<index_buffer<T>, dynamic_owner<index_buffer<T>>>;
   using MappedType = typename index_buffer<T>::MappedType;
 
-#if HSH_ASSERT_CAST_ENABLED
-  static std::size_t GetTypeId() noexcept {
-    return typeid(index_buffer<T>).hash_code();
+  static auto GetTypeInfo() noexcept {
+    return detail::TypeInfo::MakeTypeInfo<index_buffer<T>>();
   }
-#endif
 
   void load(detail::ArrayProxy<MappedType> obj) noexcept {
     auto *ptr = base::map();
@@ -474,14 +448,12 @@ struct dynamic_owner<index_buffer_typeless>
   using base = dynamic_owner_base<index_buffer_typeless,
                                   dynamic_owner<index_buffer_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   index_buffer_typeless get() const noexcept {
-    return index_buffer_typeless(TypeId,
+    return index_buffer_typeless(TypeInfo,
                                  typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U> void load(detail::ArrayProxy<U> obj) noexcept {
     auto *ptr = base::map();
@@ -491,20 +463,12 @@ struct dynamic_owner<index_buffer_typeless>
 
   template <typename U>
   dynamic_owner(dynamic_owner<index_buffer<U>> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U>
   dynamic_owner &operator=(dynamic_owner<index_buffer<U>> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -515,32 +479,22 @@ struct owner<texture_typeless>
   using owner_base<texture_typeless, owner<texture_typeless>>::owner_base;
   using base = owner_base<texture_typeless, owner<texture_typeless>>;
 
-#if HSH_ASSERT_CAST_ENABLED
-  std::size_t TypeId{};
-  std::size_t GetTypeId() const noexcept { return TypeId; }
+  detail::TypeInfo TypeInfo;
+  auto GetTypeInfo() const noexcept { return TypeInfo; }
   texture_typeless get() const noexcept {
-    return texture_typeless(TypeId, typename decltype(Owner)::Binding(Owner));
+    return texture_typeless(TypeInfo, typename decltype(Owner)::Binding(Owner));
   }
-#endif
 
   template <typename U,
             std::enable_if_t<std::is_base_of_v<texture_typeless, U>, int> = 0>
   owner(owner<U> &&other) noexcept
-      : base(std::move(other.Owner))
-#if HSH_ASSERT_CAST_ENABLED
-        ,
-        TypeId(other.GetTypeId())
-#endif
-  {
-  }
+      : base(std::move(other.Owner)), TypeInfo(other.GetTypeInfo()) {}
 
   template <typename U,
             std::enable_if_t<std::is_base_of_v<texture_typeless, U>, int> = 0>
   owner &operator=(owner<U> &&other) noexcept {
     Owner = std::move(other.Owner);
-#if HSH_ASSERT_CAST_ENABLED
-    TypeId = other.GetTypeId();
-#endif
+    TypeInfo = other.GetTypeInfo();
     return *this;
   }
 };
@@ -594,6 +548,19 @@ inline dynamic_owner<uniform_buffer<T>> create_dynamic_uniform_buffer(
   auto ret = create_dynamic_resource<uniform_buffer<T>>(location);
   ret.load(data);
   return ret;
+}
+
+inline dynamic_owner<uniform_buffer<void>> create_dynamic_uniform_buffer_weak(
+    size_t size,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_dynamic_resource<uniform_buffer<void>>(location, size);
+}
+
+template <typename... Types>
+inline dynamic_owner<uniform_buffer<void>> create_dynamic_uniform_buffer_weak(
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_dynamic_uniform_buffer_weak(
+      sizeof(std::aligned_union_t<0, Types...>), location);
 }
 
 template <typename T>
@@ -872,6 +839,11 @@ protected:
 
 inline void clear_attachments(bool color = true, bool depth = true) noexcept {
   detail::ActiveTargetTraits::ClearAttachments(color, depth);
+}
+
+inline void set_blend_constants(float red, float green, float blue,
+                                float alpha) noexcept {
+  detail::ActiveTargetTraits::SetBlendConstants(red, green, blue, alpha);
 }
 
 #if __hsh__

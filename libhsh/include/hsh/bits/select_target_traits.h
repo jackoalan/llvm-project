@@ -134,6 +134,20 @@ template <unsigned NSTs> struct SelectTargetTraits {
       assert(false && "unhandled case");
     }
   }
+
+  static void SetBlendConstants(float red, float green, float blue,
+                                float alpha) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    TargetTraits<Target::Enumeration>::SetBlendConstants(red, green, blue,     \
+                                                         alpha);               \
+    break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
 };
 
 template <> struct SelectTargetTraits<1> {
@@ -251,6 +265,13 @@ template <> struct SelectTargetTraits<1> {
   TargetTraits::ClearAttachments(color, depth);
 #include "targets.def"
   }
+
+  static void SetBlendConstants(float red, float green, float blue,
+                                float alpha) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  TargetTraits::SetBlendConstants(red, green, blue, alpha);
+#include "targets.def"
+  }
 };
 
 template <> struct SelectTargetTraits<0> {
@@ -357,6 +378,9 @@ template <> struct SelectTargetTraits<0> {
   }
 
   static void ClearAttachments(bool color, bool depth) noexcept {}
+
+  static void SetBlendConstants(float red, float green, float blue,
+                                float alpha) noexcept {}
 };
 
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
