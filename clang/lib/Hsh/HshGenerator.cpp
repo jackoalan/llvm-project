@@ -1119,17 +1119,18 @@ private:
 
   template <typename T>
   static T *LookupDecl(ASTContext &Context, DeclContext *DC, StringRef Name) {
-    T *Found = nullptr;
     auto LookupResult = DC->noload_lookup(&Context.Idents.get(Name));
-    if (!LookupResult.empty())
-      Found = dyn_cast<T>(LookupResult[0]);
-    return Found;
+    if (!LookupResult.empty()) {
+      if (T* Found = dyn_cast<T>(LookupResult[0]))
+        return Found->getCanonicalDecl();
+    }
+    return nullptr;
   }
 
   void addType(ASTContext &Context, DeclContext *DC, HshBuiltinType TypeKind,
                StringRef Name) {
     if (auto *FoundType = LookupDecl<TagDecl>(Context, DC, Name)) {
-      Types[TypeKind] = FoundType->getFirstDecl();
+      Types[TypeKind] = FoundType;
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1142,7 +1143,7 @@ private:
   void addAlignedType(ASTContext &Context, DeclContext *DC,
                       HshBuiltinType TypeKind, StringRef Name) {
     if (auto *FoundType = LookupDecl<TagDecl>(Context, DC, Name)) {
-      AlignedTypes[TypeKind] = FoundType->getFirstDecl();
+      AlignedTypes[TypeKind] = FoundType;
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1155,7 +1156,7 @@ private:
   void addEnumType(ASTContext &Context, DeclContext *DC,
                    HshBuiltinType TypeKind, StringRef Name) {
     if (auto *FoundEnum = LookupDecl<EnumDecl>(Context, DC, Name)) {
-      Types[TypeKind] = FoundEnum->getFirstDecl();
+      Types[TypeKind] = FoundEnum;
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1168,7 +1169,7 @@ private:
   void addFunction(ASTContext &Context, DeclContext *DC,
                    HshBuiltinFunction FuncKind, StringRef Name) {
     if (auto *FoundFunction = LookupDecl<FunctionDecl>(Context, DC, Name)) {
-      Functions[FuncKind] = FoundFunction->getFirstDecl();
+      Functions[FuncKind] = FoundFunction;
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1207,7 +1208,7 @@ private:
           }
           if (Match) {
             Methods[MethodKind] =
-                dyn_cast<CXXMethodDecl>(Method->getFirstDecl());
+                dyn_cast<CXXMethodDecl>(Method->getCanonicalDecl());
             return;
           }
         }
@@ -1455,7 +1456,7 @@ public:
     TagDecl *T = UT->getAsTagDecl();
     if (!T)
       return HBT_None;
-    T = T->getFirstDecl();
+    T = T->getCanonicalDecl();
     if (!T)
       return HBT_None;
     HshBuiltinType Ret = HBT_None;
@@ -1476,7 +1477,7 @@ public:
   }
 
   HshBuiltinFunction identifyBuiltinFunction(const FunctionDecl *F) const {
-    F = F->getFirstDecl();
+    F = F->getCanonicalDecl();
     if (!F)
       return HBF_None;
     HshBuiltinFunction Ret = HBF_None;
@@ -1489,11 +1490,11 @@ public:
   }
 
   HshBuiltinCXXMethod identifyBuiltinMethod(const CXXMethodDecl *M) const {
-    M = dyn_cast_or_null<CXXMethodDecl>(M->getFirstDecl());
+    M = dyn_cast_or_null<CXXMethodDecl>(M->getCanonicalDecl());
     if (!M)
       return HBM_None;
     if (FunctionDecl *FD = M->getInstantiatedFromMemberFunction())
-      M = dyn_cast<CXXMethodDecl>(FD->getFirstDecl());
+      M = dyn_cast<CXXMethodDecl>(FD->getCanonicalDecl());
     if (auto *TD = M->getPrimaryTemplate())
       if (auto TDM = dyn_cast<CXXMethodDecl>(TD->getTemplatedDecl()))
         M = TDM;
