@@ -766,8 +766,6 @@ public:
     SmallVector<ClassTemplateDecl *, 1>
         InShaderAttributes; // Just for early depth stencil
     ClassTemplateDecl *PipelineDecl = nullptr;
-    bool InHshNS = false;
-    bool InPipelineNS = false;
 
   public:
     bool VisitDecl(Decl *D) {
@@ -778,29 +776,7 @@ public:
       return true;
     }
 
-    bool VisitNamespaceDecl(NamespaceDecl *Namespace) {
-      if (InHshNS) {
-        if (InPipelineNS)
-          return true;
-        if (Namespace->getDeclName().isIdentifier() &&
-            Namespace->getName() == "pipeline") {
-          SaveAndRestore<bool> SavedInPipelineNS(InPipelineNS, true);
-          VisitDecl(Namespace);
-          return false; // Done with pipeline namespace
-        }
-        return true;
-      }
-      if (Namespace->getDeclName().isIdentifier() &&
-          Namespace->getName() == "hsh") {
-        SaveAndRestore<bool> SavedInHshNS(InHshNS, true);
-        return VisitDecl(Namespace);
-      }
-      return true;
-    }
-
     bool VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
-      if (!InPipelineNS)
-        return true;
       if (CTD->getName() == "base_attribute") {
         BaseAttributeDecl = CTD;
         return true;
@@ -838,8 +814,6 @@ public:
     }
 
     bool VisitCXXRecordDecl(CXXRecordDecl *CRD) {
-      if (!InPipelineNS)
-        return true;
       if (CRD->getName() == "dual_source")
         DualSourceDecl = CRD;
       else if (CRD->getName() == "direct_render")
@@ -873,8 +847,8 @@ public:
       }
     }
 
-    void findDecls(ASTContext &Context) {
-      Visit(Context.getTranslationUnitDecl());
+    void findDecls(ASTContext &Context, NamespaceDecl *PipelineNS) {
+      Visit(PipelineNS);
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       if (!BaseAttributeDecl) {
         Diags.Report(Diags.getCustomDiagID(
@@ -1038,6 +1012,10 @@ public:
   };
 
 private:
+  NamespaceDecl *StdNamespace = nullptr;
+  NamespaceDecl *HshNamespace = nullptr;
+  NamespaceDecl *HshDetailNamespace = nullptr;
+  NamespaceDecl *HshPipelineNamespace = nullptr;
   PipelineAttributes PipelineAttributes;
   CXXRecordDecl *BindingRecordType = nullptr;
   FunctionTemplateDecl *RebindTemplateFunc = nullptr;
@@ -1139,193 +1117,19 @@ private:
 #include "BuiltinFunctions.def"
   };
 
-  template <typename ImplClass>
-  class DeclFinder : public DeclVisitor<ImplClass, bool> {
-    using base = DeclVisitor<ImplClass, bool>;
+  template <typename T>
+  static T *LookupDecl(ASTContext &Context, DeclContext *DC, StringRef Name) {
+    T *Found = nullptr;
+    auto LookupResult = DC->noload_lookup(&Context.Idents.get(Name));
+    if (!LookupResult.empty())
+      Found = dyn_cast<T>(LookupResult[0]);
+    return Found;
+  }
 
-  protected:
-    StringRef Name;
-    StringRef MainNS;
-    StringRef SubNS;
-    Decl *Found = nullptr;
-    bool InMainNS = false;
-    bool InSubNS = false;
-
-    bool inCorrectNS() const { return !SubNS.empty() ? InSubNS : InMainNS; }
-
-  public:
-    explicit DeclFinder(StringRef MainNS, StringRef SubNS)
-        : MainNS(MainNS), SubNS(SubNS) {}
-
-    bool VisitDecl(Decl *D) {
-      if (auto *DC = dyn_cast<DeclContext>(D))
-        for (Decl *Child : DC->decls())
-          if (!base::Visit(Child))
-            return false;
-      return true;
-    }
-
-    bool VisitNamespaceDecl(NamespaceDecl *Namespace) {
-      if (InMainNS) {
-        if (SubNS.empty())
-          return true;
-        if (Namespace->getDeclName().isIdentifier() &&
-            Namespace->getName() == SubNS) {
-          SaveAndRestore<bool> SavedInSubNS(InSubNS, true);
-          return VisitDecl(Namespace);
-        }
-        return true;
-      }
-      if (Namespace->getDeclName().isIdentifier() &&
-          Namespace->getName() == MainNS) {
-        SaveAndRestore<bool> SavedInMainNS(InMainNS, true);
-        return VisitDecl(Namespace);
-      }
-      return true;
-    }
-
-    Decl *Find(StringRef N, TranslationUnitDecl *TU) {
-      Name = N;
-      Found = nullptr;
-      base::Visit(TU);
-      return Found;
-    }
-  };
-
-  class TypeFinder : public DeclFinder<TypeFinder> {
-  public:
-    bool VisitTagDecl(TagDecl *Type) {
-      if (inCorrectNS() && Type->getDeclName().isIdentifier() &&
-          Type->getName() == Name) {
-        Found = Type;
-        return false;
-      }
-      return true;
-    }
-    using DeclFinder<TypeFinder>::DeclFinder;
-  };
-
-  class FuncFinder : public DeclFinder<FuncFinder> {
-    SmallVector<StringRef, 8> Params;
-
-  public:
-    bool VisitFunctionDecl(FunctionDecl *Func) {
-      if (inCorrectNS() && Func->getDeclName().isIdentifier() &&
-          Func->getName() == Name && Func->getNumParams() == Params.size()) {
-        auto It = Params.begin();
-        for (ParmVarDecl *P : Func->parameters()) {
-          if (P->getType().getAsString() != *It++)
-            return true;
-        }
-        Found = Func;
-        return false;
-      }
-      return true;
-    }
-
-    Decl *Find(StringRef N, StringRef P, TranslationUnitDecl *TU) {
-      Name = N;
-      if (P != "void") {
-        P.split(Params, ',');
-        for (auto &ParamStr : Params)
-          ParamStr = ParamStr.trim();
-      }
-      Found = nullptr;
-      Visit(TU);
-      return Found;
-    }
-
-    using DeclFinder<FuncFinder>::DeclFinder;
-  };
-
-  class ClassTemplateFinder : public DeclFinder<ClassTemplateFinder> {
-  public:
-    bool VisitClassTemplateDecl(ClassTemplateDecl *Type) {
-      if (inCorrectNS() && Type->getDeclName().isIdentifier() &&
-          Type->getName() == Name) {
-        Found = Type;
-        return false;
-      }
-      return true;
-    }
-    using DeclFinder<ClassTemplateFinder>::DeclFinder;
-  };
-
-  class MethodFinder : public DeclFinder<MethodFinder> {
-    StringRef Record;
-    bool InRecord = false;
-    SmallVector<StringRef, 8> Params;
-
-  public:
-    bool VisitClassTemplateDecl(ClassTemplateDecl *ClassTemplate) {
-      return VisitCXXRecordDecl(ClassTemplate->getTemplatedDecl());
-    }
-
-    bool VisitFunctionTemplateDecl(FunctionTemplateDecl *FunctionTemplate) {
-      if (InRecord) {
-        if (auto *Method =
-                dyn_cast<CXXMethodDecl>(FunctionTemplate->getTemplatedDecl()))
-          return VisitCXXMethodDecl(Method);
-      }
-      return true;
-    }
-
-    bool VisitCXXRecordDecl(CXXRecordDecl *CXXRecord) {
-      if (inCorrectNS() && CXXRecord->getName() == Record) {
-        SaveAndRestore<bool> SavedInRecord(InRecord, true);
-        return VisitDecl(CXXRecord);
-      }
-      return true;
-    }
-
-    bool VisitCXXMethodDecl(CXXMethodDecl *Method) {
-      if (InRecord && Method->getDeclName().isIdentifier() &&
-          Method->getName() == Name &&
-          Method->getNumParams() == Params.size()) {
-        auto It = Params.begin();
-        for (ParmVarDecl *P : Method->parameters()) {
-          if (P->getType().getAsString() != *It++)
-            return true;
-        }
-        Found = Method;
-        return false;
-      }
-      return true;
-    }
-
-    Decl *Find(StringRef N, StringRef R, StringRef P, TranslationUnitDecl *TU) {
-      Name = N;
-      Record = R;
-      if (P != "void") {
-        P.split(Params, ',');
-        for (auto &ParamStr : Params)
-          ParamStr = ParamStr.trim();
-      }
-      Found = nullptr;
-      Visit(TU);
-      return Found;
-    }
-
-    using DeclFinder<MethodFinder>::DeclFinder;
-  };
-
-  class VarFinder : public DeclFinder<VarFinder> {
-  public:
-    bool VisitVarDecl(VarDecl *Var) {
-      if (inCorrectNS() && Var->getDeclName().isIdentifier() &&
-          Var->getName() == Name) {
-        Found = Var;
-        return false;
-      }
-      return true;
-    }
-    using DeclFinder<VarFinder>::DeclFinder;
-  };
-
-  void addType(ASTContext &Context, HshBuiltinType TypeKind, StringRef Name,
-               Decl *D) {
-    if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
-      Types[TypeKind] = T->getFirstDecl();
+  void addType(ASTContext &Context, DeclContext *DC, HshBuiltinType TypeKind,
+               StringRef Name) {
+    if (auto *FoundType = LookupDecl<TagDecl>(Context, DC, Name)) {
+      Types[TypeKind] = FoundType->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1335,10 +1139,10 @@ private:
     }
   }
 
-  void addAlignedType(ASTContext &Context, HshBuiltinType TypeKind,
-                      StringRef Name, Decl *D) {
-    if (auto *T = dyn_cast_or_null<TagDecl>(D)) {
-      AlignedTypes[TypeKind] = T->getFirstDecl();
+  void addAlignedType(ASTContext &Context, DeclContext *DC,
+                      HshBuiltinType TypeKind, StringRef Name) {
+    if (auto *FoundType = LookupDecl<TagDecl>(Context, DC, Name)) {
+      AlignedTypes[TypeKind] = FoundType->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1348,10 +1152,10 @@ private:
     }
   }
 
-  void addEnumType(ASTContext &Context, HshBuiltinType TypeKind, StringRef Name,
-                   Decl *D) {
-    if (auto *T = dyn_cast_or_null<EnumDecl>(D)) {
-      Types[TypeKind] = T->getFirstDecl();
+  void addEnumType(ASTContext &Context, DeclContext *DC,
+                   HshBuiltinType TypeKind, StringRef Name) {
+    if (auto *FoundEnum = LookupDecl<EnumDecl>(Context, DC, Name)) {
+      Types[TypeKind] = FoundEnum->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1361,10 +1165,10 @@ private:
     }
   }
 
-  void addFunction(ASTContext &Context, HshBuiltinFunction FuncKind,
-                   StringRef Name, Decl *D) {
-    if (auto *F = dyn_cast_or_null<FunctionDecl>(D)) {
-      Functions[FuncKind] = F->getFirstDecl();
+  void addFunction(ASTContext &Context, DeclContext *DC,
+                   HshBuiltinFunction FuncKind, StringRef Name) {
+    if (auto *FoundFunction = LookupDecl<FunctionDecl>(Context, DC, Name)) {
+      Functions[FuncKind] = FoundFunction->getFirstDecl();
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
@@ -1374,63 +1178,107 @@ private:
     }
   }
 
-  void addCXXMethod(ASTContext &Context, HshBuiltinCXXMethod MethodKind,
-                    StringRef Name, Decl *D) {
-    if (auto *M = dyn_cast_or_null<CXXMethodDecl>(D)) {
-      Methods[MethodKind] = dyn_cast<CXXMethodDecl>(M->getFirstDecl());
+  void addCXXMethod(ASTContext &Context, DeclContext *DC, StringRef R,
+                    StringRef Name, StringRef P,
+                    HshBuiltinCXXMethod MethodKind) {
+    if (auto *FoundRecord = LookupDecl<CXXRecordDecl>(Context, DC, R)) {
+      SmallVector<StringRef, 8> Params;
+      if (P != "void") {
+        P.split(Params, ',');
+        for (auto &ParamStr : Params)
+          ParamStr = ParamStr.trim();
+      }
+      auto LookupResults =
+          FoundRecord->noload_lookup(&Context.Idents.get(Name));
+      for (auto *Res : LookupResults) {
+        CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(Res);
+        if (!Method) {
+          if (auto *Template = dyn_cast<FunctionTemplateDecl>(Res))
+            Method = dyn_cast<CXXMethodDecl>(Template->getTemplatedDecl());
+        }
+        if (Method && Method->getNumParams() == Params.size()) {
+          auto *It = Params.begin();
+          bool Match = true;
+          for (auto *Param : Method->parameters()) {
+            if (Param->getType().getAsString() != *It++) {
+              Match = false;
+              break;
+            }
+          }
+          if (Match) {
+            Methods[MethodKind] =
+                dyn_cast<CXXMethodDecl>(Method->getFirstDecl());
+            return;
+          }
+        }
+      }
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                    "method %0::%1(%2); is hsh.h included?"))
+          << R << Name << P;
     } else {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "method %0; is hsh.h included?"))
-          << Name;
+                                    "record %0; is hsh.h included?"))
+          << R;
     }
   }
 
-  EnumDecl *findEnum(StringRef Name, StringRef SubNS,
-                     ASTContext &Context) const {
-    if (auto *Ret = dyn_cast_or_null<EnumDecl>(
-            TypeFinder("hsh"_ll, SubNS)
-                .Find(Name, Context.getTranslationUnitDecl())))
-      return Ret;
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    Diags.Report(
-        Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                              "unable to locate declaration of enum %0%1%2; "
-                              "is hsh.h included?"))
-        << SubNS << (!SubNS.empty() ? "::" : "") << Name;
-    return nullptr;
-  }
-
-  CXXRecordDecl *findCXXRecord(StringRef Name, StringRef SubNS,
+  NamespaceDecl *findNamespace(StringRef Name, DeclContext *DC,
                                ASTContext &Context) const {
-    if (auto *Ret = dyn_cast_or_null<CXXRecordDecl>(
-            TypeFinder("hsh"_ll, SubNS)
-                .Find(Name, Context.getTranslationUnitDecl())))
-      return Ret;
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    Diags.Report(
-        Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                              "unable to locate declaration of record %0%1%2; "
-                              "is hsh.h included?"))
-        << SubNS << (!SubNS.empty() ? "::" : "") << Name;
-    return nullptr;
+    auto *FoundNS = LookupDecl<NamespaceDecl>(Context, DC, Name);
+    if (!FoundNS) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "unable to locate declaration of namespace %0; "
+                                "is hsh.h included?"))
+          << Name;
+    }
+    return FoundNS;
   }
 
-  ClassTemplateDecl *findClassTemplate(StringRef Name, StringRef MainNS,
-                                       StringRef SubNS,
+  EnumDecl *findEnum(StringRef Name, DeclContext *DC,
+                     ASTContext &Context) const {
+    auto *FoundEnum = LookupDecl<EnumDecl>(Context, DC, Name);
+    if (!FoundEnum) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "unable to locate declaration of enum %0; "
+                                    "is hsh.h included?"))
+          << Name;
+    }
+    return FoundEnum;
+  }
+
+  CXXRecordDecl *findCXXRecord(StringRef Name, DeclContext *DC,
+                               ASTContext &Context) const {
+    auto *FoundRecord = LookupDecl<CXXRecordDecl>(Context, DC, Name);
+    if (!FoundRecord) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "unable to locate declaration of record %0; "
+                                "is hsh.h included?"))
+          << Name;
+    }
+    return FoundRecord;
+  }
+
+  ClassTemplateDecl *findClassTemplate(StringRef Name, DeclContext *DC,
                                        ASTContext &Context) const {
-    if (auto *Ret = dyn_cast_or_null<ClassTemplateDecl>(
-            ClassTemplateFinder(MainNS, SubNS)
-                .Find(Name, Context.getTranslationUnitDecl())))
-      return Ret;
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    Diags.Report(Diags.getCustomDiagID(
-        DiagnosticsEngine::Error,
-        "unable to locate declaration of class template %0%1%2; "
-        "is hsh.h included?"))
-        << SubNS << (!SubNS.empty() ? "::" : "") << Name;
-    return nullptr;
+    auto *FoundTemplate = LookupDecl<ClassTemplateDecl>(Context, DC, Name);
+    if (!FoundTemplate) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "unable to locate declaration of class template %0; "
+          "is hsh.h included?"))
+          << Name;
+    }
+    return FoundTemplate;
   }
 
   FunctionTemplateDecl *findMethodTemplate(CXXRecordDecl *Class, StringRef Name,
@@ -1468,43 +1316,56 @@ private:
     return findMethodTemplate(Class->getTemplatedDecl(), Name, Context);
   }
 
-  VarDecl *findVar(StringRef Name, StringRef SubNS, ASTContext &Context) const {
-    if (auto *Ret = dyn_cast_or_null<VarDecl>(
-            VarFinder("hsh"_ll, SubNS)
-                .Find(Name, Context.getTranslationUnitDecl())))
-      return Ret;
-    DiagnosticsEngine &Diags = Context.getDiagnostics();
-    Diags.Report(Diags.getCustomDiagID(
-        DiagnosticsEngine::Error,
-        "unable to locate declaration of variable %0%1%2; "
-        "is hsh.h included?"))
-        << SubNS << (!SubNS.empty() ? "::" : "") << Name;
-    return nullptr;
+  VarDecl *findVar(StringRef Name, DeclContext *DC, ASTContext &Context) const {
+    auto *FoundVar = LookupDecl<VarDecl>(Context, DC, Name);
+    if (!FoundVar) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      Diags.Report(
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "unable to locate declaration of variable %0; "
+                                "is hsh.h included?"))
+          << Name;
+    }
+    return FoundVar;
   }
 
-  APSInt findICEVar(StringRef Name, StringRef SubNS,
+  APSInt findICEVar(StringRef Name, DeclContext *DC,
                     ASTContext &Context) const {
-    if (auto *VD = findVar(Name, SubNS, Context)) {
+    if (auto *VD = findVar(Name, DC, Context)) {
       DiagnosticsEngine &Diags = Context.getDiagnostics();
       if (auto *Val = VD->evaluateValue()) {
         if (Val->isInt())
           return Val->getInt();
-        Diags.Report(
-            Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                  "variable %0%1%2 is not integer constexpr"))
-            << SubNS << (!SubNS.empty() ? "::" : "") << Name;
+        Diags.Report(Diags.getCustomDiagID(
+            DiagnosticsEngine::Error, "variable %0 is not integer constexpr"))
+            << Name;
         return APSInt{};
       }
       Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                         "variable %0%1%2 is not constexpr"))
-          << SubNS << (!SubNS.empty() ? "::" : "") << Name;
+                                         "variable %0 is not constexpr"))
+          << Name;
     }
     return APSInt{};
   }
 
 public:
   void findBuiltinDecls(ASTContext &Context) {
-    PipelineAttributes.findDecls(Context);
+    StdNamespace =
+        findNamespace("std"_ll, Context.getTranslationUnitDecl(), Context);
+    if (!StdNamespace)
+      return;
+    HshNamespace =
+        findNamespace("hsh"_ll, Context.getTranslationUnitDecl(), Context);
+    if (!HshNamespace)
+      return;
+    HshDetailNamespace = findNamespace("detail"_ll, HshNamespace, Context);
+    if (!HshDetailNamespace)
+      return;
+    HshPipelineNamespace = findNamespace("pipeline"_ll, HshNamespace, Context);
+    if (!HshPipelineNamespace)
+      return;
+
+    PipelineAttributes.findDecls(Context, HshPipelineNamespace);
     if (auto *PipelineRecordDecl = PipelineAttributes.getPipelineDecl()) {
       auto *Record = PipelineRecordDecl->getTemplatedDecl();
       for (auto *FD : Record->fields()) {
@@ -1526,65 +1387,54 @@ public:
     ReportMissingPipelineField(#Name##_ll);
 #include "ShaderInterface.def"
     }
-    BindingRecordType = findCXXRecord("binding"_ll, {}, Context);
+    BindingRecordType = findCXXRecord("binding"_ll, HshNamespace, Context);
     RebindTemplateFunc =
         findMethodTemplate(BindingRecordType, "_rebind"_ll, Context);
 
     UniformBufferType =
-        findClassTemplate("uniform_buffer"_ll, "hsh"_ll, {}, Context);
+        findClassTemplate("uniform_buffer"_ll, HshNamespace, Context);
     VertexBufferType =
-        findClassTemplate("vertex_buffer"_ll, "hsh"_ll, {}, Context);
+        findClassTemplate("vertex_buffer"_ll, HshNamespace, Context);
 
-    EnumTarget = findEnum("Target"_ll, {}, Context);
-    EnumStage = findEnum("Stage"_ll, {}, Context);
-    EnumInputRate = findEnum("InputRate"_ll, "detail"_ll, Context);
-    EnumFormat = findEnum("Format"_ll, {}, Context);
+    EnumTarget = findEnum("Target"_ll, HshNamespace, Context);
+    EnumStage = findEnum("Stage"_ll, HshNamespace, Context);
+    EnumInputRate = findEnum("InputRate"_ll, HshDetailNamespace, Context);
+    EnumFormat = findEnum("Format"_ll, HshNamespace, Context);
     ShaderConstDataTemplateType =
-        findClassTemplate("ShaderConstData"_ll, "hsh"_ll, "detail"_ll, Context);
+        findClassTemplate("ShaderConstData"_ll, HshDetailNamespace, Context);
     ShaderDataTemplateType =
-        findClassTemplate("ShaderData"_ll, "hsh"_ll, "detail"_ll, Context);
-    SamplerRecordType = findCXXRecord("sampler"_ll, {}, Context);
+        findClassTemplate("ShaderData"_ll, HshDetailNamespace, Context);
+    SamplerRecordType = findCXXRecord("sampler"_ll, HshNamespace, Context);
     SamplerBindingType =
-        findCXXRecord("SamplerBinding"_ll, "detail"_ll, Context);
+        findCXXRecord("SamplerBinding"_ll, HshDetailNamespace, Context);
 
-    MaxUniforms = findICEVar("MaxUniforms"_ll, "detail"_ll, Context);
-    MaxImages = findICEVar("MaxImages"_ll, "detail"_ll, Context);
-    MaxSamplers = findICEVar("MaxSamplers"_ll, "detail"_ll, Context);
+    MaxUniforms = findICEVar("MaxUniforms"_ll, HshDetailNamespace, Context);
+    MaxImages = findICEVar("MaxImages"_ll, HshDetailNamespace, Context);
+    MaxSamplers = findICEVar("MaxSamplers"_ll, HshDetailNamespace, Context);
 
-    TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
-  addType(Context, HBT_##Name, #Name##_ll,                                     \
-          TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
+  addType(Context, HshNamespace, HBT_##Name, #Name##_ll);
 #define BUILTIN_MATRIX_TYPE(Name, GLSL, HLSL, Metal, HasAligned)               \
-  addType(Context, HBT_##Name, #Name##_ll,                                     \
-          TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));             \
+  addType(Context, HshNamespace, HBT_##Name, #Name##_ll);                      \
   if (HasAligned)                                                              \
-    addAlignedType(Context, HBT_##Name, "aligned_" #Name##_ll,                 \
-                   TypeFinder("hsh"_ll, {}).Find("aligned_" #Name##_ll, TU));
+    addAlignedType(Context, HshNamespace, HBT_##Name, "aligned_" #Name##_ll);
 #define BUILTIN_TEXTURE_TYPE(Name, GLSLf, GLSLi, GLSLu, HLSLf, HLSLi, HLSLu,   \
                              Metalf, Metali, Metalu)                           \
-  addType(Context, HBT_##Name, #Name##_ll,                                     \
-          TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
+  addType(Context, HshNamespace, HBT_##Name, #Name##_ll);
 #define BUILTIN_ENUM_TYPE(Name)                                                \
-  addEnumType(Context, HBT_##Name, #Name##_ll,                                 \
-              TypeFinder("hsh"_ll, StringRef{}).Find(#Name##_ll, TU));
+  addEnumType(Context, HshNamespace, HBT_##Name, #Name##_ll);
 #include "BuiltinTypes.def"
 #define BUILTIN_FUNCTION(Name, Spelling, GLSL, HLSL, Metal, InterpDist, ...)   \
-  addFunction(Context, HBF_##Name, #Spelling##_ll,                             \
-              FuncFinder("hsh"_ll, StringRef{})                                \
-                  .Find(#Spelling##_ll, #__VA_ARGS__##_ll, TU));
+  addFunction(Context, HshNamespace, HBF_##Name, #Spelling##_ll);
 #include "BuiltinFunctions.def"
 #define BUILTIN_CXX_METHOD(Name, Spelling, IsSwizzle, Record, ...)             \
-  addCXXMethod(                                                                \
-      Context, HBM_##Name, #Record "::" #Spelling "(" #__VA_ARGS__ ")"_ll,     \
-      MethodFinder("hsh"_ll, StringRef{})                                      \
-          .Find(#Spelling##_ll, #Record##_ll, #__VA_ARGS__##_ll, TU));
+  addCXXMethod(Context, HshNamespace, #Record##_ll, #Spelling##_ll,            \
+               #__VA_ARGS__##_ll, HBM_##Name);
 #include "BuiltinCXXMethods.def"
 
-    StdArrayType =
-        findClassTemplate("array"_ll, "std"_ll, StringRef{}, Context);
+    StdArrayType = findClassTemplate("array"_ll, StdNamespace, Context);
     AlignedArrayType =
-        findClassTemplate("aligned_array"_ll, "hsh"_ll, StringRef{}, Context);
+        findClassTemplate("aligned_array"_ll, HshNamespace, Context);
   }
 
   template <typename T> HshBuiltinType identifyBuiltinType(T Arg) const {
@@ -2222,7 +2072,8 @@ public:
   }
 
   void printTargetEnumName(raw_ostream &Out, HshTarget Target) const {
-    if (const auto *ECD = lookupEnumConstantDecl(EnumTarget, APSInt::get(Target)))
+    if (const auto *ECD =
+            lookupEnumConstantDecl(EnumTarget, APSInt::get(Target)))
       ECD->printName(Out);
   }
 

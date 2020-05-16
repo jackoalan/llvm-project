@@ -286,7 +286,12 @@ template <BlendFactor SrcColorBlendFactor = One,
           BlendOp AlphaBlendOp = ColorBlendOp,
           ColorComponentFlags ColorWriteComponents =
               ColorComponentFlags(CC_Red | CC_Green | CC_Blue | CC_Alpha)>
-struct color_attachment : base_attribute<true> {};
+struct color_attachment : base_attribute<true> {
+  static constexpr BlendFactor SrcColorBlend = SrcColorBlendFactor;
+  static constexpr BlendFactor DstColorBlend = DstColorBlendFactor;
+  static constexpr BlendFactor SrcAlphaBlend = SrcAlphaBlendFactor;
+  static constexpr BlendFactor DstAlphaBlend = DstAlphaBlendFactor;
+};
 struct dual_source : base_attribute<true> {};
 template <Topology T = Triangles> struct topology : base_attribute<> {};
 template <unsigned P = 0> struct patch_control_points : base_attribute<> {};
@@ -297,11 +302,53 @@ struct direct_render : base_attribute<> {};
 struct high_priority : base_attribute<> {};
 template <bool E = false>
 struct early_depth_stencil : base_attribute<false, true> {};
+
+namespace detail {
+template <std::size_t TargetIdx, std::size_t CurIdx, typename... Attrs>
+struct ColorAttachmentSelectorImpl {};
+
+template <std::size_t TargetIdx, std::size_t CurIdx, typename CA,
+    typename... RemAttrs>
+struct ColorAttachmentSelectorImpl<TargetIdx, CurIdx, CA, RemAttrs...>
+    : ColorAttachmentSelectorImpl<TargetIdx, CurIdx, RemAttrs...> {};
+
+template <std::size_t TargetIdx, std::size_t CurIdx,
+    BlendFactor SrcColorBlendFactor, BlendFactor DstColorBlendFactor,
+    BlendOp ColorBlendOp, BlendFactor SrcAlphaBlendFactor,
+    BlendFactor DstAlphaBlendFactor, BlendOp AlphaBlendOp,
+    ColorComponentFlags ColorWriteComponents, typename... RemAttrs>
+struct ColorAttachmentSelectorImpl<
+    TargetIdx, CurIdx,
+    color_attachment<SrcColorBlendFactor, DstColorBlendFactor, ColorBlendOp,
+        SrcAlphaBlendFactor, DstAlphaBlendFactor, AlphaBlendOp,
+        ColorWriteComponents>,
+    RemAttrs...>
+    : std::conditional_t<
+        TargetIdx == CurIdx,
+        color_attachment<SrcColorBlendFactor, DstColorBlendFactor,
+            ColorBlendOp, SrcAlphaBlendFactor,
+            DstAlphaBlendFactor, AlphaBlendOp,
+            ColorWriteComponents>,
+        ColorAttachmentSelectorImpl<TargetIdx, CurIdx + 1, RemAttrs...>> {};
+}
+
 template <typename... Attrs> struct pipeline {
   hsh::float4 position;
   static constexpr std::size_t color_attachment_count =
       ((Attrs::is_ca ? 1 : 0) + ...);
   std::array<hsh::float4, color_attachment_count> color_out;
+  template <std::size_t Idx>
+  static constexpr BlendFactor SrcColorBlendFactor =
+      detail::ColorAttachmentSelectorImpl<Idx, 0, Attrs...>::SrcColorBlend;
+  template <std::size_t Idx>
+  static constexpr BlendFactor DstColorBlendFactor =
+      detail::ColorAttachmentSelectorImpl<Idx, 0, Attrs...>::DstColorBlend;
+  template <std::size_t Idx>
+  static constexpr BlendFactor SrcAlphaBlendFactor =
+      detail::ColorAttachmentSelectorImpl<Idx, 0, Attrs...>::SrcAlphaBlend;
+  template <std::size_t Idx>
+  static constexpr BlendFactor DstAlphaBlendFactor =
+      detail::ColorAttachmentSelectorImpl<Idx, 0, Attrs...>::DstAlphaBlend;
 };
 } // namespace pipeline
 
