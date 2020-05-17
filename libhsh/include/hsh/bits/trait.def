@@ -265,6 +265,35 @@ const TargetTraits<Target::Enumeration>::HSH_MULTI_TRAIT HSH_TRAIT_TEMPLATE_REFS
     }
   }
 #endif
+#ifdef HSH_FIFO_OWNER
+  template <typename T, typename Func>
+  UniformBufferBinding MapUniform(Func func) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.MapUniform<T, Func>(func);
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  template <typename T, typename Func>
+  VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.MapVertex<T, Func>(count, func);
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+  template <typename T, typename Func>
+  IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept {
+    switch (CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration) case Target::Enumeration: return _##Enumeration.MapIndex<T, Func>(count, func);
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+#endif
 };
 #undef HSH_MULTI_TRAIT
 #endif
@@ -332,6 +361,16 @@ void DrawInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept 
 void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept { _##Enumeration.DrawIndexedInstanced(start, count, instCount); }
 #include "targets.def"
 #endif
+#ifdef HSH_FIFO_OWNER
+#define HSH_ACTIVE_TARGET(Enumeration) \
+template <typename T, typename Func> \
+UniformBufferBinding MapUniform(Func func) noexcept { return _##Enumeration.MapUniform<T, Func>(func); } \
+template <typename T, typename Func> \
+VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept { return _##Enumeration.MapVertex<T, Func>(count, func); } \
+template <typename T, typename Func> \
+IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept { return _##Enumeration.MapIndex<T, Func>(count, func); }
+#include "targets.def"
+#endif
   };
 #undef HSH_SINGLE_TRAIT
 #endif
@@ -381,6 +420,14 @@ void DrawIndexed(uint32_t start, uint32_t count) noexcept {}
 void DrawInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {}
 void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) noexcept {}
 #endif
+#ifdef HSH_FIFO_OWNER
+template <typename T, typename Func>
+UniformBufferBinding MapUniform(Func func) noexcept { return {}; }
+template <typename T, typename Func>
+VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept { return {}; }
+template <typename T, typename Func>
+IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept { return {}; }
+#endif
   };
 #undef HSH_NULL_TRAIT
 #endif
@@ -393,3 +440,4 @@ void DrawIndexedInstanced(uint32_t start, uint32_t count, uint32_t instCount) no
 #undef HSH_RENDER_TEXTURE_OWNER
 #undef HSH_SURFACE_OWNER
 #undef HSH_PIPELINE_BINDING
+#undef HSH_FIFO_OWNER

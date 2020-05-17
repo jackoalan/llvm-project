@@ -1121,7 +1121,7 @@ private:
   static T *LookupDecl(ASTContext &Context, DeclContext *DC, StringRef Name) {
     auto LookupResult = DC->noload_lookup(&Context.Idents.get(Name));
     if (!LookupResult.empty()) {
-      if (T* Found = dyn_cast<T>(LookupResult[0]))
+      if (T *Found = dyn_cast<T>(LookupResult[0]))
         return Found->getCanonicalDecl();
     }
     return nullptr;
@@ -1167,16 +1167,40 @@ private:
   }
 
   void addFunction(ASTContext &Context, DeclContext *DC,
-                   HshBuiltinFunction FuncKind, StringRef Name) {
-    if (auto *FoundFunction = LookupDecl<FunctionDecl>(Context, DC, Name)) {
-      Functions[FuncKind] = FoundFunction;
-    } else {
-      DiagnosticsEngine &Diags = Context.getDiagnostics();
-      Diags.Report(Diags.getCustomDiagID(
-          DiagnosticsEngine::Error, "unable to locate declaration of builtin "
-                                    "function %0; is hsh.h included?"))
-          << Name;
+                   HshBuiltinFunction FuncKind, StringRef Name, StringRef P) {
+    SmallVector<StringRef, 8> Params;
+    if (P != "void") {
+      P.split(Params, ',');
+      for (auto &ParamStr : Params)
+        ParamStr = ParamStr.trim();
     }
+    auto LookupResults = DC->noload_lookup(&Context.Idents.get(Name));
+    for (auto *Res : LookupResults) {
+      FunctionDecl *Function = dyn_cast<FunctionDecl>(Res);
+      if (!Function) {
+        if (auto *Template = dyn_cast<FunctionTemplateDecl>(Res))
+          Function = dyn_cast<FunctionDecl>(Template->getTemplatedDecl());
+      }
+      if (Function && Function->getNumParams() == Params.size()) {
+        auto *It = Params.begin();
+        bool Match = true;
+        for (auto *Param : Function->parameters()) {
+          if (Param->getType().getAsString() != *It++) {
+            Match = false;
+            break;
+          }
+        }
+        if (Match) {
+          Functions[FuncKind] = Function->getCanonicalDecl();
+          return;
+        }
+      }
+    }
+    DiagnosticsEngine &Diags = Context.getDiagnostics();
+    Diags.Report(Diags.getCustomDiagID(
+        DiagnosticsEngine::Error, "unable to locate declaration of builtin "
+                                  "function %1(%2); is hsh.h included?"))
+        << Name << P;
   }
 
   void addCXXMethod(ASTContext &Context, DeclContext *DC, StringRef R,
@@ -1426,7 +1450,8 @@ public:
   addEnumType(Context, HshNamespace, HBT_##Name, #Name##_ll);
 #include "BuiltinTypes.def"
 #define BUILTIN_FUNCTION(Name, Spelling, GLSL, HLSL, Metal, InterpDist, ...)   \
-  addFunction(Context, HshNamespace, HBF_##Name, #Spelling##_ll);
+  addFunction(Context, HshNamespace, HBF_##Name, #Spelling##_ll,               \
+              #__VA_ARGS__##_ll);
 #include "BuiltinFunctions.def"
 #define BUILTIN_CXX_METHOD(Name, Spelling, IsSwizzle, Record, ...)             \
   addCXXMethod(Context, HshNamespace, #Record##_ll, #Spelling##_ll,            \
@@ -5256,8 +5281,10 @@ class StageStmtPartitioner {
             auto Arguments = DoVisitExprRange(CallExpr->arguments(), Stage);
             if (!Arguments)
               return nullptr;
-            if (Func == HBF_None)
+            if (Func == HBF_None) {
+              Partitioner.Builtins.identifyBuiltinFunction(FD);
               Builder.registerFunctionDecl(FD, Stage);
+            }
             return CallExpr::Create(Partitioner.Context, CallExpr->getCallee(),
                                     *Arguments, CallExpr->getType(), VK_XValue,
                                     {});

@@ -107,6 +107,28 @@ public:
   inline void Unmap() noexcept;
 };
 
+class FifoBufferAllocation : public BufferAllocation {
+  FifoBufferAllocation *Prev = nullptr, *Next = nullptr;
+  void *MappedData;
+  uint32_t Size;
+  uint32_t Offset = 0;
+  uint32_t StartOffset = 0;
+  friend std::unique_ptr<FifoBufferAllocation>
+  AllocateFifoBuffer(const SourceLocation &location, vk::DeviceSize size,
+                     vk::BufferUsageFlags usage) noexcept;
+  inline FifoBufferAllocation(vk::Buffer BufferIn, VmaAllocation AllocationIn,
+                              vk::DeviceSize Size, void *MappedData) noexcept;
+
+public:
+  inline ~FifoBufferAllocation() noexcept;
+  template <typename T, typename Func>
+  inline uint32_t MapUniform(Func func) noexcept;
+  template <typename T, typename Func>
+  inline uint32_t MapVertexIndex(std::size_t count, Func func) noexcept;
+  inline void PostRender() noexcept;
+  FifoBufferAllocation *GetNext() const noexcept { return Next; }
+};
+
 struct TextureAllocation {
   friend class DeletedTextureAllocation;
   friend TextureAllocation
@@ -511,6 +533,7 @@ struct VulkanGlobals {
   vk::Fence CmdFence;
   vk::CommandBuffer CopyCmd;
   vk::Fence CopyFence;
+  vk::DeviceSize UniformOffsetAlignment = 0;
   vk::Pipeline BoundPipeline;
   vk::DescriptorSet BoundDescriptorSet;
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
@@ -521,6 +544,7 @@ struct VulkanGlobals {
   DeletedResources *DeletedResources = nullptr;
   SurfaceAllocation *SurfaceHead = nullptr;
   RenderTextureAllocation *RenderTextureHead = nullptr;
+  FifoBufferAllocation *FifoBufferHead = nullptr;
 
   void PreRender() noexcept {
     uint32_t CurBufferIdx = Frame & 1u;
@@ -550,6 +574,9 @@ struct VulkanGlobals {
     BoundDescriptorSet = vk::DescriptorSet{};
     CopyCmd.end();
     Cmd.end();
+
+    for (auto *Fifo = FifoBufferHead; Fifo; Fifo = Fifo->GetNext())
+      Fifo->PostRender();
 
     vk::PipelineStageFlags pipeStageFlags =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
@@ -1024,6 +1051,61 @@ void DynamicBufferAllocation::Unmap() noexcept {
   Globals.CopyCmd.copyBuffer(UploadBuffer.GetBuffer(), GetBuffer(),
                              vk::BufferCopy{0, 0, Size});
 }
+
+FifoBufferAllocation::FifoBufferAllocation(vk::Buffer BufferIn,
+                                           VmaAllocation AllocationIn,
+                                           vk::DeviceSize Size,
+                                           void *MappedData) noexcept
+    : BufferAllocation(BufferIn, AllocationIn), Next(Globals.FifoBufferHead),
+      MappedData(MappedData), Size(Size) {
+  Globals.FifoBufferHead = this;
+  if (Next)
+    Next->Prev = this;
+}
+
+FifoBufferAllocation::~FifoBufferAllocation() noexcept {
+  if (Prev)
+    Prev->Next = Next;
+  else
+    Globals.FifoBufferHead = Next;
+  if (Next)
+    Next->Prev = Prev;
+}
+
+template <typename T, typename Func>
+uint32_t FifoBufferAllocation::MapUniform(Func func) noexcept {
+  Offset = AlignUp(Offset, std::max(uint32_t(alignof(T)),
+                                    uint32_t(Globals.UniformOffsetAlignment)));
+  uint32_t MapOffset = Offset;
+  assert(MapOffset + sizeof(T) <= Size && "Fifo buffer must be larger");
+  func(*reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
+                              MapOffset));
+  Offset += sizeof(T);
+  return MapOffset;
+}
+
+template <typename T, typename Func>
+uint32_t FifoBufferAllocation::MapVertexIndex(std::size_t count,
+                                              Func func) noexcept {
+  Offset = AlignUp(Offset, uint32_t(alignof(T)));
+  uint32_t MapOffset = Offset;
+  assert(MapOffset + sizeof(T) * count <= Size && "Fifo buffer must be larger");
+  func(reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
+                             MapOffset));
+  Offset += sizeof(T) * count;
+  return MapOffset;
+}
+
+void FifoBufferAllocation::PostRender() noexcept {
+  vmaFlushAllocation(Globals.Allocator, Allocation, StartOffset,
+                     Offset - StartOffset);
+  if (StartOffset) {
+    Offset = 0;
+    StartOffset = 0;
+  } else {
+    StartOffset = Offset;
+  }
+}
 } // namespace hsh::detail::vulkan
 
 namespace VULKAN_HPP_NAMESPACE {
@@ -1355,6 +1437,34 @@ AllocateDynamicBuffer(const SourceLocation &location, vk::DeviceSize size,
                                  AllocateUploadBuffer(location, size));
 }
 
+inline std::unique_ptr<FifoBufferAllocation>
+AllocateFifoBuffer(const SourceLocation &location, vk::DeviceSize size,
+                   vk::BufferUsageFlags usage) noexcept {
+  struct FifoBufferAllocationCreateInfo : VmaAllocationCreateInfo {
+    constexpr FifoBufferAllocationCreateInfo() noexcept
+        : VmaAllocationCreateInfo{VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                  VMA_MEMORY_USAGE_CPU_TO_GPU,
+                                  0,
+                                  VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+                                  0,
+                                  VK_NULL_HANDLE,
+                                  nullptr} {}
+  };
+
+  VkBuffer Buffer;
+  VmaAllocation Allocation;
+  VmaAllocationInfo AllocInfo;
+  FifoBufferAllocationCreateInfo CreateInfo;
+  VmaLocationStrSetter LocationStr(CreateInfo, location);
+  auto Result = vmaCreateBuffer(vk::BufferCreateInfo({}, size, usage),
+                                CreateInfo, &Buffer, &Allocation, &AllocInfo);
+  HSH_ASSERT_VK_SUCCESS(vk::Result(Result));
+  Globals.SetDebugObjectName(LocationStr, vk::Buffer(Buffer));
+
+  return std::unique_ptr<FifoBufferAllocation>{new FifoBufferAllocation(
+      Buffer, Allocation, size, AllocInfo.pMappedData)};
+}
+
 inline TextureAllocation AllocateTexture(const SourceLocation &location,
                                          const vk::ImageCreateInfo &CreateInfo,
                                          bool Dedicated = false) noexcept {
@@ -1675,9 +1785,12 @@ namespace hsh::detail {
 template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   struct BufferWrapper {
     vk::Buffer Buffer;
+    uint32_t Offset;
     BufferWrapper() noexcept = default;
+    BufferWrapper(vk::Buffer Buffer, uint32_t Offset = 0) noexcept
+        : Buffer(Buffer), Offset(Offset) {}
     BufferWrapper(const vulkan::BufferAllocation &Alloc) noexcept
-        : Buffer(Alloc.GetBuffer()) {}
+        : BufferWrapper(Alloc.GetBuffer()) {}
     bool IsValid() const noexcept { return Buffer.operator bool(); }
     operator vk::Buffer() const noexcept { return Buffer; }
   };
@@ -1690,6 +1803,31 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
   using IndexBufferOwner = vulkan::BufferAllocation;
   using IndexBufferBinding = BufferWrapper;
   using DynamicIndexBufferOwner = vulkan::DynamicBufferAllocation;
+  struct FifoOwner {
+    std::unique_ptr<vulkan::FifoBufferAllocation> Allocation;
+    FifoOwner() noexcept = default;
+    FifoOwner(const FifoOwner &other) = delete;
+    FifoOwner &operator=(const FifoOwner &other) = delete;
+    FifoOwner(FifoOwner &&other) noexcept = default;
+    FifoOwner &operator=(FifoOwner &&other) noexcept = default;
+    explicit FifoOwner(std::unique_ptr<vulkan::FifoBufferAllocation> Allocation)
+        : Allocation(std::move(Allocation)) {}
+    template <typename T, typename Func>
+    UniformBufferBinding MapUniform(Func func) noexcept {
+      return {Allocation->GetBuffer(), Allocation->MapUniform<T, Func>(func)};
+    }
+    template <typename T, typename Func>
+    VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept {
+      return {Allocation->GetBuffer(),
+              Allocation->MapVertexIndex<T, Func>(count, func)};
+    }
+    template <typename T, typename Func>
+    IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept {
+      return {Allocation->GetBuffer(),
+              Allocation->MapVertexIndex<T, Func>(count, func)};
+    }
+    bool IsValid() const noexcept { return Allocation.operator bool(); }
+  };
   struct TextureBinding {
     vk::ImageView ImageView;
     std::uint8_t NumMips : 7;
@@ -1872,10 +2010,12 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vk::Pipeline Pipeline;
     vulkan::UniqueDescriptorSet DescriptorSet;
     uint32_t NumVertexBuffers = 0;
+    std::array<uint32_t, MaxUniforms> UniformOffsets{};
     std::array<vk::Buffer, MaxVertexBuffers> VertexBuffers{};
-    static const std::array<vk::DeviceSize, MaxVertexBuffers> VertexOffsets;
+    std::array<vk::DeviceSize, MaxVertexBuffers> VertexOffsets{};
     struct BoundIndex {
       vk::Buffer Buffer{};
+      vk::DeviceSize Offset{};
       vk::IndexType Type{};
     } Index;
     struct BoundRenderTexture {
@@ -1894,6 +2034,22 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
           : VertexBufferBegin(Binding.VertexBuffers.begin()),
             VertexBufferIt(Binding.VertexBuffers.begin()), Index(Binding.Index),
             RenderTextureIt(Binding.RenderTextures.begin()) {}
+
+      inline void Add(uniform_buffer_typeless uniform) noexcept;
+      inline void Add(vertex_buffer_typeless uniform) noexcept;
+      template <typename T> inline void Add(index_buffer<T> uniform) noexcept;
+      inline void Add(texture_typeless texture) noexcept;
+      inline void Add(render_texture2d texture) noexcept;
+      static inline void Add(SamplerBinding sampler) noexcept;
+    };
+    struct OffsetIterators {
+      decltype(UniformOffsets)::iterator UniformOffsetsIt;
+      decltype(VertexOffsets)::iterator VertexOffsetsIt;
+      BoundIndex &Index;
+      constexpr explicit OffsetIterators(PipelineBinding &Binding) noexcept
+          : UniformOffsetsIt(Binding.UniformOffsets.begin()),
+            VertexOffsetsIt(Binding.VertexOffsets.begin()),
+            Index(Binding.Index) {}
 
       inline void Add(uniform_buffer_typeless uniform) noexcept;
       inline void Add(vertex_buffer_typeless uniform) noexcept;
@@ -1947,13 +2103,15 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
       }
       if (vulkan::Globals.BoundDescriptorSet != DescriptorSet.Set) {
         vulkan::Globals.BoundDescriptorSet = DescriptorSet.Set;
-        vulkan::Globals.Cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                               vulkan::Globals.PipelineLayout,
-                                               0, DescriptorSet.Set, {});
+        vulkan::Globals.Cmd.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics, vulkan::Globals.PipelineLayout, 0,
+            DescriptorSet.Set, UniformOffsets);
         vulkan::Globals.Cmd.bindVertexBuffers(
-            0, NumVertexBuffers, VertexBuffers.data(), VertexOffsets.data());
+            0, NumVertexBuffers, VertexBuffers.data(),
+            (const vk::DeviceSize *)VertexOffsets.data());
         if (Index.Buffer)
-          vulkan::Globals.Cmd.bindIndexBuffer(Index.Buffer, 0, Index.Type);
+          vulkan::Globals.Cmd.bindIndexBuffer(Index.Buffer, Index.Offset,
+                                              Index.Type);
       }
     }
 
@@ -2013,8 +2171,6 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
 
   template <typename ResTp> struct ResourceFactory {};
 };
-inline const std::array<vk::DeviceSize, MaxVertexBuffers>
-    TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::VertexOffsets{};
 } // namespace hsh::detail
 
 #endif

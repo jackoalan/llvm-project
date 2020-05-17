@@ -519,6 +519,12 @@ inline owner<T> create_resource(Args &&... args) noexcept {
       SourceLocation::current(), std::forward<Args>(args)...));
 }
 
+template <typename T>
+inline T create_fifo(const SourceLocation &location,
+                     std::size_t size) noexcept {
+  return T(detail::ActiveTargetTraits::CreateFifo<T>(location, size));
+}
+
 template <typename T, typename CopyFunc>
 inline owner<uniform_buffer<T>> create_uniform_buffer(
     CopyFunc copyFunc,
@@ -645,6 +651,65 @@ inline dynamic_owner<index_buffer<T>> create_dynamic_index_buffer(
   auto ret = create_dynamic_resource<index_buffer<T>>(location, N);
   ret.load(Arr);
   return ret;
+}
+
+struct fifo_base {
+  detail::ActiveTargetTraits::FifoOwner Owner;
+
+  fifo_base() noexcept = default;
+  explicit fifo_base(decltype(Owner) Owner) noexcept
+      : Owner(std::move(Owner)) {}
+
+  fifo_base(const fifo_base &other) = delete;
+  fifo_base &operator=(const fifo_base &other) = delete;
+  fifo_base(fifo_base &&other) noexcept = default;
+  fifo_base &operator=(fifo_base &&other) noexcept = default;
+
+  operator bool() const noexcept { return Owner.IsValid(); }
+
+  void reset() noexcept { Owner = decltype(Owner){}; }
+};
+
+struct uniform_fifo : fifo_base {
+  using fifo_base::fifo_base;
+  template <typename T, typename Func>
+  uniform_buffer<T> map(Func func) noexcept {
+    return uniform_buffer<T>{Owner.MapUniform<T, Func>(func)};
+  }
+};
+
+struct vertex_fifo : fifo_base {
+  using fifo_base::fifo_base;
+  template <typename T, typename Func>
+  vertex_buffer<T> map(std::size_t count, Func func) noexcept {
+    return vertex_buffer<T>{Owner.MapVertex<T, Func>(count, func)};
+  }
+};
+
+struct index_fifo : fifo_base {
+  using fifo_base::fifo_base;
+  template <typename T, typename Func>
+  index_buffer<T> map(std::size_t count, Func func) noexcept {
+    return index_buffer<T>{Owner.MapIndex<T, Func>(count, func)};
+  }
+};
+
+inline uniform_fifo create_uniform_fifo(
+    std::size_t size,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_fifo<uniform_fifo>(location, size);
+}
+
+inline vertex_fifo create_vertex_fifo(
+    std::size_t size,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_fifo<vertex_fifo>(location, size);
+}
+
+inline index_fifo create_index_fifo(
+    std::size_t size,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_fifo<index_fifo>(location, size);
 }
 
 template <typename CopyFunc>

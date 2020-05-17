@@ -12,6 +12,7 @@ enum class PostMode {
 struct MyFormat {
   hsh::float3 position;
   hsh::float3 normal;
+  hsh::float4 color;
 };
 
 struct UniformData {
@@ -20,6 +21,7 @@ struct UniformData {
   float afloat;
   hsh::aligned_float3x3 dynColor;
   float bfloat;
+  alignas(16) hsh::float4 color;
 };
 
 enum AlphaMode {
@@ -32,11 +34,9 @@ struct AlphaTraits {
 };
 
 struct Binding {
-  hsh::dynamic_owner<hsh::uniform_buffer<UniformData>> Uniform;
-  hsh::owner<hsh::vertex_buffer<MyFormat>> VBO;
   hsh::owner<hsh::texture2d> Tex;
   hsh::binding Binding;
 };
-Binding BuildPipeline();
-Binding BuildPipelineTemplated(bool Something, MyNS::AlphaMode AM);
+hsh::binding& BindPipeline(Binding& b, hsh::uniform_buffer_typeless u, hsh::vertex_buffer_typeless v);
+hsh::binding& BindPipelineTemplated(Binding& b, hsh::uniform_buffer_typeless u, hsh::vertex_buffer_typeless v, bool Something, MyNS::AlphaMode AM);
 }

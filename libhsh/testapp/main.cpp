@@ -201,42 +201,52 @@ int main(int argc, char **argv) {
   MyNS::Binding PipelineTemplate2Bind{};
   MyNS::Binding PipelineTemplate3Bind{};
 
-  ModelInfo ModInfo{};
-  MaterialInfo MatInfo{};
   ModelResources ModRes{};
   hsh::binding ModelBinding;
+  hsh::uniform_fifo UFifo;
+  hsh::vertex_fifo VFifo;
+
+  std::size_t CurColor = 0;
+  constexpr std::array<hsh::float4, 7> Rainbow{{{1.f, 0.f, 0.f, 1.f},
+                                                {1.f, 0.5f, 0.f, 1.f},
+                                                {1.f, 1.f, 0.f, 1.f},
+                                                {0.f, 1.f, 0.f, 1.f},
+                                                {0.f, 1.f, 1.f, 1.f},
+                                                {0.f, 0.f, 1.f, 1.f},
+                                                {0.5f, 0.f, 1.f, 1.f}}};
 
   Connection.runloop([&]() {
     Device.enter_draw_context([&]() {
-      if (!PipelineBind.Binding) {
-        hsh::owner<hsh::texture_typeless> tex = hsh::create_texture2d({1024, 1024}, hsh::Format::RGBA8_UNORM, 10,
-                                                                      [](void *buf, std::size_t size) { std::memset(buf, 0, size); });
-        hsh::texture2d tex2d = tex.get();
-        PipelineBind = MyNS::BuildPipeline();
-        PipelineTemplate1Bind =
-            MyNS::BuildPipelineTemplated(false, MyNS::AM_NoAlpha);
-        PipelineTemplate2Bind =
-            MyNS::BuildPipelineTemplated(false, MyNS::AM_Alpha);
-        PipelineTemplate3Bind =
-            MyNS::BuildPipelineTemplated(true, MyNS::AM_NoAlpha);
-        ModInfo = CreateModelInfo();
-        MatInfo = CreateMaterialInfo();
-        ModRes = CreateModelResources();
-        // ModelBinding = BindDrawModel(ModInfo, MatInfo, PT_Normal, ModRes);
+      if (!UFifo)
+        UFifo = hsh::create_uniform_fifo(256 + sizeof(MyNS::UniformData)); // Maximum alignment by vulkan spec is 256
+      if (!VFifo)
+        VFifo = hsh::create_vertex_fifo(sizeof(MyNS::MyFormat) * 3 * 2);
+
+      if (Surface.acquire_next_image()) {
+        RenderTexture.attach();
+        hsh::clear_attachments();
+
+        auto UFifoBinding =
+            UFifo.map<MyNS::UniformData>([&](MyNS::UniformData &UniData) {
+              UniData = MyNS::UniformData{};
+              UniData.xf[0][0] = 1.f;
+              UniData.xf[1][1] = 1.f;
+              UniData.xf[2][2] = 1.f;
+              UniData.xf[3][3] = 1.f;
+              //UniData.color = Rainbow[CurColor];
+              UniData.color = hsh::float4(1.f, 1.f, 1.f, 1.f);
+            });
+        auto VFifoBinding =
+            VFifo.map<MyNS::MyFormat>(3, [&](MyNS::MyFormat *VertData) {
+              VertData[0] = MyNS::MyFormat{hsh::float3{-1.f, -1.f, 0.f}, {}, Rainbow[CurColor]};
+              VertData[1] = MyNS::MyFormat{hsh::float3{ 1.f, -1.f, 0.f}, {}, Rainbow[(CurColor + 1) % Rainbow.size()]};
+              VertData[2] = MyNS::MyFormat{hsh::float3{ 1.f,  1.f, 0.f}, {}, Rainbow[(CurColor + 2) % Rainbow.size()]};
+            });
+        //CurColor = (CurColor + 1) % Rainbow.size();
+        MyNS::BindPipeline(PipelineBind, UFifoBinding, VFifoBinding).draw(0, 3);
+
+        RenderTexture.resolve_surface(Surface.get());
       }
-
-      MyNS::UniformData UniData{};
-      UniData.xf[0][0] = 1.f;
-      UniData.xf[1][1] = 1.f;
-      UniData.xf[2][2] = 1.f;
-      UniData.xf[3][3] = 1.f;
-      PipelineBind.Uniform.load(UniData);
-
-      Surface.acquire_next_image();
-      RenderTexture.attach();
-      hsh::clear_attachments();
-      PipelineBind.Binding.draw(0, 3);
-      RenderTexture.resolve_surface(Surface.get());
     });
     return true;
   });

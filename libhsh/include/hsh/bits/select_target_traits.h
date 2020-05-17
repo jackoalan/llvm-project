@@ -88,6 +88,10 @@ template <unsigned NSTs> struct SelectTargetTraits {
 #define HSH_MULTI_TRAIT PipelineBinding
 #include "trait.def"
 
+#define HSH_FIFO_OWNER
+#define HSH_MULTI_TRAIT FifoOwner
+#include "trait.def"
+
 #define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
 #define HSH_TRAIT_TEMPLATE_REFS <ResTp>
 #define HSH_MULTI_TRAIT ResourceFactory
@@ -115,6 +119,21 @@ template <unsigned NSTs> struct SelectTargetTraits {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   case Target::Enumeration:                                                    \
     return decltype(ResourceFactory<T>::_##Enumeration)::CreateDynamic(        \
+        location, std::forward<Args>(args)...);
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+    return {};
+  }
+
+  template <typename T, typename... Args>
+  static FifoOwner CreateFifo(const SourceLocation &location,
+                              Args &&... args) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    return decltype(ResourceFactory<T>::_##Enumeration)::Create(               \
         location, std::forward<Args>(args)...);
 #include "targets.def"
     default:
@@ -237,6 +256,10 @@ template <> struct SelectTargetTraits<1> {
 #define HSH_SINGLE_TRAIT PipelineBinding
 #include "trait.def"
 
+#define HSH_FIFO_OWNER
+#define HSH_SINGLE_TRAIT FifoOwner
+#include "trait.def"
+
 #define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
 #define HSH_TRAIT_TEMPLATE_REFS <ResTp>
 #define HSH_SINGLE_TRAIT ResourceFactory
@@ -244,7 +267,7 @@ template <> struct SelectTargetTraits<1> {
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::Owner
-  CreateResource(const SourceLocation &location, Args &&... args) {
+  CreateResource(const SourceLocation &location, Args &&... args) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   return decltype(ResourceFactory<T>::_##Enumeration)::Create(                 \
       location, std::forward<Args>(args)...);
@@ -253,9 +276,19 @@ template <> struct SelectTargetTraits<1> {
 
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::DynamicOwner
-  CreateDynamicResource(const SourceLocation &location, Args &&... args) {
+  CreateDynamicResource(const SourceLocation &location,
+                        Args &&... args) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   return decltype(ResourceFactory<T>::_##Enumeration)::CreateDynamic(          \
+      location, std::forward<Args>(args)...);
+#include "targets.def"
+  }
+
+  template <typename T, typename... Args>
+  static FifoOwner CreateFifo(const SourceLocation &location,
+                              Args &&... args) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  return decltype(ResourceFactory<T>::_##Enumeration)::Create(                 \
       location, std::forward<Args>(args)...);
 #include "targets.def"
   }
@@ -360,6 +393,10 @@ template <> struct SelectTargetTraits<0> {
 #define HSH_NULL_TRAIT PipelineBinding
 #include "trait.def"
 
+#define HSH_FIFO_OWNER
+#define HSH_NULL_TRAIT FifoOwner
+#include "trait.def"
+
 #define HSH_TRAIT_TEMPLATE_PARMS template <typename ResTp>
 #define HSH_TRAIT_TEMPLATE_REFS <ResTp>
 #define HSH_NULL_TRAIT ResourceFactory
@@ -374,6 +411,12 @@ template <> struct SelectTargetTraits<0> {
   template <typename T, typename... Args>
   static typename decltype(T::Binding)::DynamicOwner
   CreateDynamicResource(const SourceLocation &location, Args &&... args) {
+    return {};
+  }
+
+  template <typename T, typename... Args>
+  static FifoOwner CreateFifo(const SourceLocation &location,
+                              Args &&... args) noexcept {
     return {};
   }
 

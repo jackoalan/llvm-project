@@ -379,12 +379,13 @@ template <typename Impl> struct DescriptorPoolWrites {
     void Add(uniform_buffer_typeless uniform) noexcept {
       auto UniformIdx = UniformIt - UniformBegin;
       auto &Uniform = *UniformIt++;
-      Uniform = vk::DescriptorBufferInfo(uniform.Binding.get_VULKAN_SPIRV(), 0,
-                                         VK_WHOLE_SIZE);
+      const auto &Binding = uniform.Binding.get_VULKAN_SPIRV();
+      Uniform =
+          vk::DescriptorBufferInfo(Binding, Binding.Offset, VK_WHOLE_SIZE);
       auto &Write = *WriteIt++;
       Write = vk::WriteDescriptorSet(
-          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBuffer, {},
-          reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
+          DstSet, UniformIdx, 0, 1, vk::DescriptorType::eUniformBufferDynamic,
+          {}, reinterpret_cast<vk::DescriptorBufferInfo *>(&Uniform));
     }
     static void Add(vertex_buffer_typeless) noexcept {}
     static void Add(index_buffer_typeless) noexcept {}
@@ -446,6 +447,8 @@ void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Rebind(
     (Its.Add(args), ...);
     NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
   }
+  OffsetIterators OffIts(*this);
+  (OffIts.Add(args), ...);
 }
 
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
@@ -472,6 +475,29 @@ void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
   RT.DescriptorBindingIdx = MaxUniforms + TextureIdx++;
 }
 void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Iterators::Add(
+    SamplerBinding) noexcept {}
+
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
+    uniform_buffer_typeless ubo) noexcept {
+  const auto &Uniform = ubo.Binding.get_VULKAN_SPIRV();
+  *UniformOffsetsIt++ = Uniform.Offset;
+}
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
+    vertex_buffer_typeless vbo) noexcept {
+  const auto &Vertex = vbo.Binding.get_VULKAN_SPIRV();
+  *VertexOffsetsIt++ = Vertex.Offset;
+}
+template <typename T>
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
+    index_buffer<T> ibo) noexcept {
+  const auto &Idx = ibo.Binding.get_VULKAN_SPIRV();
+  Index.Offset = Idx.Offset;
+}
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
+    texture_typeless) noexcept {}
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
+    render_texture2d) noexcept {}
+void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::OffsetIterators::Add(
     SamplerBinding) noexcept {}
 
 template <std::uint32_t NStages, std::uint32_t NBindings,
@@ -775,6 +801,12 @@ inline auto CreateDynamicBufferOwner(const SourceLocation &location,
       location, size, bufferType | vk::BufferUsageFlagBits::eTransferDst);
 }
 
+inline auto CreateFifoOwner(const SourceLocation &location,
+                            vk::BufferUsageFlagBits bufferType,
+                            std::size_t size) noexcept {
+  return vulkan::AllocateFifoBuffer(location, size, bufferType);
+}
+
 template <typename T>
 struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_buffer<T>> {
   template <typename CopyFunc>
@@ -825,6 +857,33 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<index_buffer<T>> {
                             std::size_t Count) noexcept {
     return CreateDynamicBufferOwner(
         location, vk::BufferUsageFlagBits::eIndexBuffer, sizeof(T) * Count);
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<uniform_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::VULKAN_SPIRV>::FifoOwner{CreateFifoOwner(
+        location, vk::BufferUsageFlagBits::eUniformBuffer, Size)};
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<vertex_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::VULKAN_SPIRV>::FifoOwner{CreateFifoOwner(
+        location, vk::BufferUsageFlagBits::eVertexBuffer, Size)};
+  }
+};
+
+template <>
+struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<index_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::VULKAN_SPIRV>::FifoOwner{
+        CreateFifoOwner(location, vk::BufferUsageFlagBits::eIndexBuffer, Size)};
   }
 };
 
@@ -1400,7 +1459,7 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
 #pragma GCC diagnostic ignored "-Wuninitialized"
       : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
         Bindings{vk::DescriptorSetLayoutBinding(
-                     USeq, vk::DescriptorType::eUniformBuffer, 1,
+                     USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
                      vk::ShaderStageFlagBits::eAllGraphics)...,
                  vk::DescriptorSetLayoutBinding(
                      hsh::detail::MaxUniforms + ISeq,
@@ -1820,6 +1879,9 @@ public:
       detail::vulkan::Globals.ImageAcquireSem = Data.ImageAcquireSem.get();
       Data.RenderCompleteSem = Data.Device->createSemaphoreUnique({}).value;
       detail::vulkan::Globals.RenderCompleteSem = Data.RenderCompleteSem.get();
+
+      detail::vulkan::Globals.UniformOffsetAlignment =
+          Properties.limits.minUniformBufferOffsetAlignment;
 
       return Ret;
     }

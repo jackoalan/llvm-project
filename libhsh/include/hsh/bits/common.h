@@ -37,6 +37,10 @@ struct ValidateBuiltTargets<std::integer_sequence<hsh::Target, Ts...>> {
 #include "targets.def"
 };
 } // namespace detail
+
+template <typename T> constexpr T AlignUp(T val, T align) {
+  return (val + align - 1) & ~(align - 1);
+}
 } // namespace hsh
 
 #if !defined(NDEBUG) && defined(__GXX_RTTI)
@@ -192,8 +196,4 @@ template <Target T> struct TargetTraits {
 template <hsh::Target T> struct SamplerObject;
 struct SamplerBinding;
 template <typename T> struct ClassWrapper {};
-
-template <typename T, typename U> constexpr T AlignUp(T val, U align) {
-  return (val + align - 1) & ~(align - 1);
-}
 } // namespace hsh::detail

@@ -9,10 +9,14 @@ struct base_buffer {};
 template <typename T> struct uniform_buffer;
 template <typename T> struct vertex_buffer;
 template <typename T> struct index_buffer;
+struct uniform_fifo;
+struct vertex_fifo;
+struct index_fifo;
 
 struct uniform_buffer_typeless : base_buffer {
   using MappedType = void;
   detail::TypeInfo TypeInfo;
+  uniform_buffer_typeless() noexcept = default;
   template <typename... Args>
   explicit uniform_buffer_typeless(detail::TypeInfo TypeInfo,
                                    Args &&... args) noexcept
@@ -31,6 +35,7 @@ struct uniform_buffer_typeless : base_buffer {
 struct vertex_buffer_typeless : base_buffer {
   using MappedType = void;
   detail::TypeInfo TypeInfo;
+  vertex_buffer_typeless() noexcept = default;
   template <typename... Args>
   explicit vertex_buffer_typeless(detail::TypeInfo TypeInfo,
                                   Args &&... args) noexcept
@@ -49,6 +54,7 @@ struct vertex_buffer_typeless : base_buffer {
 struct index_buffer_typeless : base_buffer {
   using MappedType = void;
   detail::TypeInfo TypeInfo;
+  index_buffer_typeless() noexcept = default;
   template <typename... Args>
   explicit index_buffer_typeless(detail::TypeInfo TypeInfo,
                                  Args &&... args) noexcept
