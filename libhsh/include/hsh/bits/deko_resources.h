@@ -484,12 +484,12 @@ void TargetTraits<Target::DEKO3D>::PipelineBinding::Rebind(
           deko::AllocateDescriptorSet<dk::SamplerDescriptor>(NumSamplers);
     deko::DescriptorPoolWrites<Impl>(ImageDescriptors, SamplerDescriptors,
                                      args...);
-    Iterators Its(*this);
-    (Its.Add(args), ...);
-    NumUniformBuffers = Its.UniformBufferIt - Its.UniformBufferBegin;
-    NumTextures = Its.TextureIt - Its.TextureBegin;
-    NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
   }
+  Iterators Its(*this);
+  (Its.Add(args), ...);
+  NumUniformBuffers = Its.UniformBufferIt - Its.UniformBufferBegin;
+  NumTextures = Its.TextureIt - Its.TextureBegin;
+  NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
 }
 
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
@@ -751,6 +751,10 @@ inline auto CreateDynamicBufferOwner(uint32_t size,
   return deko::AllocateDynamicBuffer(size, alignment);
 }
 
+inline auto CreateFifoOwner(uint32_t size, uint32_t alignment) noexcept {
+  return deko::AllocateFifoBuffer(size, alignment);
+}
+
 template <typename T>
 struct TargetTraits<Target::DEKO3D>::ResourceFactory<uniform_buffer<T>> {
   template <typename CopyFunc>
@@ -794,6 +798,28 @@ struct TargetTraits<Target::DEKO3D>::ResourceFactory<index_buffer<T>> {
   static auto CreateDynamic(const SourceLocation &location,
                             std::size_t Count) noexcept {
     return CreateDynamicBufferOwner(sizeof(T) * Count, 4);
+  }
+};
+
+template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<uniform_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::DEKO3D>::FifoOwner{
+        CreateFifoOwner(Size, DK_UNIFORM_BUF_ALIGNMENT)};
+  }
+};
+
+template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<vertex_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::DEKO3D>::FifoOwner{CreateFifoOwner(Size, 4)};
+  }
+};
+
+template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<index_fifo> {
+  static auto Create(const SourceLocation &location,
+                     std::size_t Size) noexcept {
+    return TargetTraits<Target::DEKO3D>::FifoOwner{CreateFifoOwner(Size, 4)};
   }
 };
 

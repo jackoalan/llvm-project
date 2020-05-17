@@ -75,6 +75,27 @@ public:
   inline void Unmap() noexcept;
 };
 
+class FifoBufferAllocation : public BufferAllocation {
+  FifoBufferAllocation *Prev = nullptr, *Next = nullptr;
+  void *MappedData;
+  uint32_t Size;
+  uint32_t Offset = 0;
+  uint32_t StartOffset = 0;
+  friend std::unique_ptr<FifoBufferAllocation>
+  AllocateFifoBuffer(uint32_t size, uint32_t alignment) noexcept;
+  inline FifoBufferAllocation(DkBufExtents BufferIn, DmaAllocation AllocationIn,
+                              uint32_t Size, void *MappedData) noexcept;
+
+public:
+  inline ~FifoBufferAllocation() noexcept;
+  template <typename T, typename Func>
+  inline uint32_t MapUniform(Func func) noexcept;
+  template <typename T, typename Func>
+  inline uint32_t MapVertexIndex(std::size_t count, Func func) noexcept;
+  inline void PostRender() noexcept;
+  FifoBufferAllocation *GetNext() const noexcept { return Next; }
+};
+
 template <typename T>
 class DescriptorSetAllocation : public UploadBufferAllocation {
   template <typename U>
@@ -357,6 +378,7 @@ struct DekoGlobals {
   DeletedResources *DeletedResources = nullptr;
   SurfaceAllocation *SurfaceHead = nullptr;
   RenderTextureAllocation *RenderTextureHead = nullptr;
+  FifoBufferAllocation *FifoBufferHead = nullptr;
 
   void PreRender() noexcept {
     uint32_t CurBufferIdx = Frame & 1u;
@@ -373,6 +395,8 @@ struct DekoGlobals {
     AttachedRenderTexture = nullptr;
     DkCmdList CopyList = CopyCmd.finishList();
     DkCmdList CmdList = Cmd.finishList();
+    for (auto *Fifo = FifoBufferHead; Fifo; Fifo = Fifo->GetNext())
+      Fifo->PostRender();
     Queue.submitCommands(CopyList);
     Queue.signalFence(*CopyFence, true);
     Queue.submitCommands(CmdList);
@@ -454,7 +478,7 @@ SurfaceAllocation::SurfaceAllocation(void *Surface,
   LayoutMaker.initialize(Layout);
 
   auto ImageAlign = Layout.getAlignment();
-  auto ImageSize = AlignUp(Layout.getSize(), ImageAlign);
+  auto ImageSize = AlignUp(uint32_t(Layout.getSize()), ImageAlign);
 
   dk::MemBlockMaker MemMaker(Globals.Device, ImageSize * NumSwapchainImages);
   MemMaker.setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image);
@@ -516,6 +540,61 @@ void DynamicBufferAllocation::Unmap() noexcept {
   UploadBuffer.Flush();
   Globals.CopyCmd.copyBuffer(UploadBuffer.GetBuffer().addr, GetBuffer().addr,
                              UploadBuffer.GetSize());
+}
+
+FifoBufferAllocation::FifoBufferAllocation(DkBufExtents BufferIn,
+                                           DmaAllocation AllocationIn,
+                                           uint32_t Size,
+                                           void *MappedData) noexcept
+    : BufferAllocation(BufferIn, AllocationIn), Next(Globals.FifoBufferHead),
+      MappedData(MappedData), Size(Size) {
+  Globals.FifoBufferHead = this;
+  if (Next)
+    Next->Prev = this;
+}
+
+FifoBufferAllocation::~FifoBufferAllocation() noexcept {
+  if (Prev)
+    Prev->Next = Next;
+  else
+    Globals.FifoBufferHead = Next;
+  if (Next)
+    Next->Prev = Prev;
+}
+
+template <typename T, typename Func>
+uint32_t FifoBufferAllocation::MapUniform(Func func) noexcept {
+  Offset = AlignUp(Offset, std::max(uint32_t(alignof(T)),
+                                    uint32_t(DK_UNIFORM_BUF_ALIGNMENT)));
+  uint32_t MapOffset = Offset;
+  assert(MapOffset + sizeof(T) <= Size && "Fifo buffer must be larger");
+  func(*reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
+                              MapOffset));
+  Offset += sizeof(T);
+  return MapOffset;
+}
+
+template <typename T, typename Func>
+uint32_t FifoBufferAllocation::MapVertexIndex(std::size_t count,
+                                              Func func) noexcept {
+  Offset = AlignUp(Offset, uint32_t(alignof(T)));
+  uint32_t MapOffset = Offset;
+  assert(MapOffset + sizeof(T) * count <= Size && "Fifo buffer must be larger");
+  func(reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
+                             MapOffset));
+  Offset += sizeof(T) * count;
+  return MapOffset;
+}
+
+void FifoBufferAllocation::PostRender() noexcept {
+  dmaFlushAllocation(Globals.Allocator, Allocation, StartOffset,
+                     Offset - StartOffset);
+  if (StartOffset) {
+    Offset = 0;
+    StartOffset = 0;
+  } else {
+    StartOffset = Offset;
+  }
 }
 
 template <typename T> inline void DescriptorSetAllocation<T>::Bind() noexcept {
@@ -608,6 +687,21 @@ AllocateDynamicBuffer(uint32_t size, uint32_t alignment) noexcept {
                        AllocInfo.offset,
                    size},
       Allocation, AllocateUploadBuffer(size));
+}
+
+inline std::unique_ptr<FifoBufferAllocation>
+AllocateFifoBuffer(uint32_t size, uint32_t alignment) noexcept {
+  DmaAllocation Allocation;
+  DmaAllocationInfo AllocInfo;
+  auto Result = dmaAllocateMemory(
+      DmaMemoryRequirements{size, alignment, DmaMT_GenericCpu},
+      AllocationCreateInfoMapped{}, &Allocation, &AllocInfo);
+  assert(Result == DkResult_Success);
+  return std::unique_ptr<FifoBufferAllocation>{new FifoBufferAllocation(
+      DkBufExtents{dkMemBlockGetGpuAddr(AllocInfo.deviceMemory) +
+                       AllocInfo.offset,
+                   size},
+      Allocation, size, AllocInfo.pMappedData)};
 }
 
 template <typename T> struct DescriptorSetAlignment {};
@@ -802,6 +896,10 @@ template <> struct TargetTraits<Target::DEKO3D> {
   struct BufferWrapper {
     DkBufExtents Buffer{DK_GPU_ADDR_INVALID, 0};
     BufferWrapper() noexcept = default;
+    BufferWrapper(DkBufExtents Buffer, uint32_t Offset = 0) noexcept
+        : Buffer(Buffer) {
+      Buffer.addr += Offset;
+    }
     BufferWrapper(const deko::BufferAllocation &Alloc) noexcept
         : Buffer(Alloc.GetBuffer()) {}
     bool IsValid() const noexcept { return Buffer.addr != DK_GPU_ADDR_INVALID; }
@@ -816,6 +914,31 @@ template <> struct TargetTraits<Target::DEKO3D> {
   using IndexBufferOwner = deko::BufferAllocation;
   using IndexBufferBinding = BufferWrapper;
   using DynamicIndexBufferOwner = deko::DynamicBufferAllocation;
+  struct FifoOwner {
+    std::unique_ptr<deko::FifoBufferAllocation> Allocation;
+    FifoOwner() noexcept = default;
+    FifoOwner(const FifoOwner &other) = delete;
+    FifoOwner &operator=(const FifoOwner &other) = delete;
+    FifoOwner(FifoOwner &&other) noexcept = default;
+    FifoOwner &operator=(FifoOwner &&other) noexcept = default;
+    explicit FifoOwner(std::unique_ptr<deko::FifoBufferAllocation> Allocation)
+        : Allocation(std::move(Allocation)) {}
+    template <typename T, typename Func>
+    UniformBufferBinding MapUniform(Func func) noexcept {
+      return {Allocation->GetBuffer(), Allocation->MapUniform<T, Func>(func)};
+    }
+    template <typename T, typename Func>
+    VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept {
+      return {Allocation->GetBuffer(),
+              Allocation->MapVertexIndex<T, Func>(count, func)};
+    }
+    template <typename T, typename Func>
+    IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept {
+      return {Allocation->GetBuffer(),
+              Allocation->MapVertexIndex<T, Func>(count, func)};
+    }
+    bool IsValid() const noexcept { return Allocation.operator bool(); }
+  };
   struct TextureOwner;
   struct TextureBinding {
     const TextureOwner *Owner = nullptr;
