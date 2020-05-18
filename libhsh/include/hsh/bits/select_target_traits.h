@@ -170,7 +170,7 @@ template <unsigned NSTs> struct SelectTargetTraits {
 };
 
 template <> struct SelectTargetTraits<1> {
-  using TargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
+  using SingleTargetTraits = TargetTraits<FirstStaticallyActiveTarget()>;
   struct SurfaceBinding;
 #define HSH_SURFACE_OWNER
 #define HSH_TRAIT_BINDING SurfaceBinding
@@ -295,14 +295,14 @@ template <> struct SelectTargetTraits<1> {
 
   static void ClearAttachments(bool color, bool depth) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  TargetTraits::ClearAttachments(color, depth);
+  SingleTargetTraits::ClearAttachments(color, depth);
 #include "targets.def"
   }
 
   static void SetBlendConstants(float red, float green, float blue,
                                 float alpha) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
-  TargetTraits::SetBlendConstants(red, green, blue, alpha);
+  SingleTargetTraits::SetBlendConstants(red, green, blue, alpha);
 #include "targets.def"
   }
 };

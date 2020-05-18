@@ -20,6 +20,7 @@ template <> struct ShaderCode<Target::DEKO3D> {
 constexpr DkImageFormat HshToDkFormat(Format Format) noexcept {
   switch (Format) {
   case R8_UNORM:
+  default:
     return DkImageFormat_R8_Unorm;
   case RG8_UNORM:
     return DkImageFormat_RG8_Unorm;
@@ -390,6 +391,7 @@ constexpr DkImageSwizzle HshToDkImageSwizzle(enum ColorSwizzle swizzle,
                                              DkImageSwizzle ident) noexcept {
   switch (swizzle) {
   case CS_Identity:
+  default:
     return ident;
   case CS_Red:
     return DkImageSwizzle_Red;
@@ -452,7 +454,7 @@ template <typename Impl> struct DescriptorPoolWrites {
 template <typename Impl, typename... Args>
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Rebind(
     bool UpdateDescriptors, Args... args) noexcept {
-  Pipeline = &Impl::data_DEKO3D.Pipeline;
+  PipelineObj = &Impl::data_DEKO3D.Pipeline;
   StageMask = Impl::cdata_DEKO3D.StageMask;
   Primitive = Impl::cdata_DEKO3D.Primitive;
   NumVtxBufferStates = Impl::cdata_DEKO3D.VertexBindingDescriptions.size();
@@ -494,11 +496,15 @@ void TargetTraits<Target::DEKO3D>::PipelineBinding::Rebind(
 
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
     uniform_buffer_typeless Ubo) noexcept {
-  *UniformBufferIt++ = Ubo.Binding.get_DEKO3D().Buffer;
+  // Optimized GCC builds fail unless this is locally bound
+  auto Tmp = Ubo.Binding.get_DEKO3D().Buffer;
+  *UniformBufferIt++ = Tmp;
 }
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
     vertex_buffer_typeless Vbo) noexcept {
-  *VertexBufferIt++ = Vbo.Binding.get_DEKO3D().Buffer;
+  // Optimized GCC builds fail unless this is locally bound
+  auto Tmp = Vbo.Binding.get_DEKO3D().Buffer;
+  *VertexBufferIt++ = Tmp;
 }
 template <typename T>
 void TargetTraits<Target::DEKO3D>::PipelineBinding::Iterators::Add(
@@ -599,7 +605,7 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
             DkStencilOp_Keep, DkStencilOp_Replace, DkStencilOp_Keep,
             DkCompareOp_Always}},
         ColorBlendState{DkColorState{
-            ((std::get<AttSeq>(Atts).blendEnabled() << AttSeq) | ...),
+            ((uint32_t(std::get<AttSeq>(Atts).blendEnabled() ? 1 : 0) << AttSeq) | ...),
             DkLogicOp_Clear, DkCompareOp_Always}},
         ColorWriteState{
             DkColorWriteState{((HshToDkColorComponentFlags(
@@ -1183,7 +1189,7 @@ class deko_device_owner {
                                               uint32_t CopyCmdBufSize) noexcept;
   struct Data {
     dk::UniqueDevice Device;
-    DmaAllocator DmaAllocator = DMA_NULL_HANDLE;
+    DmaAllocator DmaAllocatorObj = DMA_NULL_HANDLE;
     dk::UniqueQueue Queue;
     dk::UniqueMemBlock ShaderMem;
     dk::UniqueMemBlock CommandBufferMem;
@@ -1201,7 +1207,7 @@ class deko_device_owner {
       }
       DeletedResources[0].Purge();
       DeletedResources[1].Purge();
-      dmaDestroyAllocator(DmaAllocator);
+      dmaDestroyAllocator(DmaAllocatorObj);
     }
   };
   std::unique_ptr<Data> Data;
@@ -1302,12 +1308,12 @@ inline deko_device_owner create_deko_device(DkDebugFunc ErrHandler,
   Globals.Device = Ret.Data->Device;
   if (dmaCreateAllocator(
           detail::deko::MyDmaAllocatorCreateInfo{Ret.Data->Device},
-          &Ret.Data->DmaAllocator) != DkResult_Success) {
+          &Ret.Data->DmaAllocatorObj) != DkResult_Success) {
     ErrHandler(nullptr, "create_deko_device", DkResult_Fail,
                "unable to create allocator");
     return {};
   }
-  Globals.Allocator = Ret.Data->DmaAllocator;
+  Globals.Allocator = Ret.Data->DmaAllocatorObj;
   Ret.Data->Queue =
       dk::QueueMaker{Ret.Data->Device}
           .setFlags(DkQueueFlags_Graphics | DkQueueFlags_MediumPrio |
@@ -1361,7 +1367,7 @@ inline deko_device_owner create_deko_device(DkDebugFunc ErrHandler,
   Globals.CopyFence = &Ret.Data->CommandFences[2];
   Globals.ImageAcquireSem = &Ret.Data->ImageAcquireSem;
   Globals.DeletedResourcesArr = &Ret.Data->DeletedResources;
-  Globals.DeletedResources = &Ret.Data->DeletedResources[0];
+  Globals.DeletedResourcesObj = &Ret.Data->DeletedResources[0];
   return Ret;
 }
 } // namespace hsh

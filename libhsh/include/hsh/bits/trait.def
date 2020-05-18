@@ -315,13 +315,13 @@ struct HSH_SINGLE_TRAIT {
   }
 #endif
 #define HSH_ACTIVE_TARGET(Enumeration) \
-TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS _##Enumeration; \
+SingleTargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS _##Enumeration; \
 template <typename... Parms> \
 HSH_SINGLE_TRAIT(Parms&&... p) noexcept : _##Enumeration(std::forward<Parms>(p)...) {} \
-operator TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { return _##Enumeration; } \
-TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { return _##Enumeration; } \
-operator const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { return _##Enumeration; } \
-const TargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { return _##Enumeration; } \
+operator SingleTargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() noexcept { return _##Enumeration; } \
+SingleTargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() noexcept { return _##Enumeration; } \
+operator const SingleTargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &() const noexcept { return _##Enumeration; } \
+const SingleTargetTraits::HSH_SINGLE_TRAIT HSH_TRAIT_TEMPLATE_REFS &get_##Enumeration() const noexcept { return _##Enumeration; } \
 bool IsValid() const noexcept { return _##Enumeration.IsValid(); }
 #include "targets.def"
 #ifdef HSH_DYNAMIC_OWNER

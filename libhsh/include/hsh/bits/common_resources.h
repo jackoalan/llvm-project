@@ -462,6 +462,7 @@ constexpr std::size_t HshFormatToTexelSize(Format format) noexcept {
   case BC1_UNORM:
   case BC2_UNORM:
   case BC3_UNORM:
+  default:
     return 1;
   }
 }

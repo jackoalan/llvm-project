@@ -73,7 +73,7 @@ constexpr uint32_t DmaMemTypePreferredBlockSize[] = {
 
 #define DMA_DEFINE_HANDLE(object) typedef struct object##_T *object;
 #define DMA_NULL_HANDLE nullptr
-#define DMA_WHOLE_SIZE (~0UL)
+#define DMA_WHOLE_SIZE (UINT32_MAX)
 
 typedef void *(*PFN_dmaAllocationFunction)(void *pUserData, size_t size,
                                            size_t alignment);
@@ -3402,7 +3402,7 @@ void *aligned_alloc(size_t alignment, size_t size) {
 // Normal assert to check for programmer's errors, especially in Debug
 // configuration.
 #ifndef DMA_ASSERT
-#ifdef _DEBUG
+#ifndef NDEBUG
 #define DMA_ASSERT(expr) assert(expr)
 #else
 #define DMA_ASSERT(expr)
@@ -3412,7 +3412,7 @@ void *aligned_alloc(size_t alignment, size_t size) {
 // Assert that will be called very often, like inside data structures e.g.
 // operator[]. Making it non-empty can make program slow.
 #ifndef DMA_HEAVY_ASSERT
-#ifdef _DEBUG
+#ifndef NDEBUG
 #define DMA_HEAVY_ASSERT(expr) // DMA_ASSERT(expr)
 #else
 #define DMA_HEAVY_ASSERT(expr)
@@ -5038,7 +5038,7 @@ public:
     outInfo.usedBytes = m_Size;
     outInfo.unusedBytes = 0;
     outInfo.allocationSizeMin = outInfo.allocationSizeMax = m_Size;
-    outInfo.unusedRangeSizeMin = UINT64_MAX;
+    outInfo.unusedRangeSizeMin = UINT32_MAX;
     outInfo.unusedRangeSizeMax = 0;
   }
 
@@ -7438,9 +7438,9 @@ void DmaBlockMetadata_Generic::CalcAllocationStatInfo(
   outInfo.unusedBytes = m_SumFreeSize;
   outInfo.usedBytes = GetSize() - outInfo.unusedBytes;
 
-  outInfo.allocationSizeMin = UINT64_MAX;
+  outInfo.allocationSizeMin = UINT32_MAX;
   outInfo.allocationSizeMax = 0;
-  outInfo.unusedRangeSizeMin = UINT64_MAX;
+  outInfo.unusedRangeSizeMin = UINT32_MAX;
   outInfo.unusedRangeSizeMax = 0;
 
   for (DmaSuballocationList::const_iterator suballocItem =
@@ -8240,9 +8240,9 @@ void DmaBlockMetadata_Linear::CalcAllocationStatInfo(
   outInfo.allocationCount = (uint32_t)GetAllocationCount();
   outInfo.unusedRangeCount = 0;
   outInfo.usedBytes = 0;
-  outInfo.allocationSizeMin = UINT64_MAX;
+  outInfo.allocationSizeMin = UINT32_MAX;
   outInfo.allocationSizeMax = 0;
-  outInfo.unusedRangeSizeMin = UINT64_MAX;
+  outInfo.unusedRangeSizeMin = UINT32_MAX;
   outInfo.unusedRangeSizeMax = 0;
 
   uint32_t lastOffset = 0;
@@ -9563,7 +9563,7 @@ void DmaBlockMetadata_Buddy::CalcAllocationStatInfo(
   outInfo.usedBytes = outInfo.unusedBytes = 0;
 
   outInfo.allocationSizeMax = outInfo.unusedRangeSizeMax = 0;
-  outInfo.allocationSizeMin = outInfo.unusedRangeSizeMin = UINT64_MAX;
+  outInfo.allocationSizeMin = outInfo.unusedRangeSizeMin = UINT32_MAX;
   outInfo.allocationSizeAvg = outInfo.unusedRangeSizeAvg = 0; // Unused.
 
   CalcAllocationStatInfoNode(outInfo, m_Root, LevelToNodeSize(0));
@@ -10120,8 +10120,8 @@ DkResult DmaDeviceMemoryBlock::ValidateMagicValueAroundAllocation(
 
 static void InitStatInfo(DmaStatInfo &outInfo) {
   memset(&outInfo, 0, sizeof(outInfo));
-  outInfo.allocationSizeMin = UINT64_MAX;
-  outInfo.unusedRangeSizeMin = UINT64_MAX;
+  outInfo.allocationSizeMin = UINT32_MAX;
+  outInfo.unusedRangeSizeMin = UINT32_MAX;
 }
 
 // Adds statistics srcInfo into inoutInfo, like: inoutInfo += srcInfo.

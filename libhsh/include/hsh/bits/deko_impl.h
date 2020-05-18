@@ -103,7 +103,7 @@ class DescriptorSetAllocation : public UploadBufferAllocation {
   using UploadBufferAllocation::UploadBufferAllocation;
 
 public:
-  T *Map() noexcept { return GetMappedData(); }
+  T *Map() noexcept { return reinterpret_cast<T*>(GetMappedData()); }
   void Unmap() noexcept { Flush(); }
   inline void Bind() noexcept;
 };
@@ -375,7 +375,7 @@ struct DekoGlobals {
   bool AcquiredImage = false;
 
   std::array<DeletedResources, 2> *DeletedResourcesArr;
-  DeletedResources *DeletedResources = nullptr;
+  DeletedResources *DeletedResourcesObj = nullptr;
   SurfaceAllocation *SurfaceHead = nullptr;
   RenderTextureAllocation *RenderTextureHead = nullptr;
   FifoBufferAllocation *FifoBufferHead = nullptr;
@@ -385,8 +385,8 @@ struct DekoGlobals {
     Cmd = CommandBuffers[CurBufferIdx];
     CmdFence = CommandFences[CurBufferIdx];
     CmdFence->wait();
-    DeletedResources = &(*DeletedResourcesArr)[CurBufferIdx];
-    DeletedResources->Purge();
+    DeletedResourcesObj = &(*DeletedResourcesArr)[CurBufferIdx];
+    DeletedResourcesObj->Purge();
     CopyCmd.clear();
     Cmd.clear();
   }
@@ -433,7 +433,7 @@ void SurfaceAllocation::PostRender() noexcept {
 
 BufferAllocation::~BufferAllocation() noexcept {
   if (Allocation)
-    Globals.DeletedResources->DeleteLater(std::move(*this));
+    Globals.DeletedResourcesObj->DeleteLater(std::move(*this));
 }
 
 DeletedAllocation::~DeletedAllocation() noexcept {
@@ -442,7 +442,7 @@ DeletedAllocation::~DeletedAllocation() noexcept {
 
 TextureAllocation::~TextureAllocation() noexcept {
   if (Allocation)
-    Globals.DeletedResources->DeleteLater(std::move(*this));
+    Globals.DeletedResourcesObj->DeleteLater(std::move(*this));
 }
 
 SurfaceAllocation::~SurfaceAllocation() noexcept {
@@ -453,7 +453,7 @@ SurfaceAllocation::~SurfaceAllocation() noexcept {
   }
   if (Next)
     Next->Prev = Prev;
-  Globals.DeletedResources->DeleteLater(std::move(*this));
+  Globals.DeletedResourcesObj->DeleteLater(std::move(*this));
 }
 
 constexpr DkImageFormat FBColorFormat = DkImageFormat_RGBA8_Unorm;
@@ -501,7 +501,7 @@ RenderTextureAllocation::~RenderTextureAllocation() noexcept {
     Globals.RenderTextureHead = Next;
   if (Next)
     Next->Prev = Prev;
-  Globals.DeletedResources->DeleteLater(std::move(*this));
+  Globals.DeletedResourcesObj->DeleteLater(std::move(*this));
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
@@ -533,7 +533,8 @@ RenderTextureAllocation::RenderTextureAllocation(
 }
 
 void UploadBufferAllocation::Flush() noexcept {
-  dmaFlushAllocation(Globals.Allocator, Allocation, 0, Buffer.size);
+  if (Allocation)
+    dmaFlushAllocation(Globals.Allocator, Allocation, 0, Buffer.size);
 }
 
 void DynamicBufferAllocation::Unmap() noexcept {
@@ -718,7 +719,7 @@ AllocateDescriptorSet(uint32_t Count) noexcept {
   DmaAllocation Allocation;
   DmaAllocationInfo AllocInfo;
   auto Result = dmaAllocateMemory(
-      DmaMemoryRequirements{Count * sizeof(T),
+      DmaMemoryRequirements{uint32_t(Count * sizeof(T)),
                             DescriptorSetAlignment<T>::Alignment,
                             DmaMT_GenericCpu},
       AllocationCreateInfoMapped{}, &Allocation, &AllocInfo);
@@ -726,7 +727,7 @@ AllocateDescriptorSet(uint32_t Count) noexcept {
   return DescriptorSetAllocation<T>(
       DkBufExtents{dkMemBlockGetGpuAddr(AllocInfo.deviceMemory) +
                        AllocInfo.offset,
-                   Count * sizeof(T)},
+                   uint32_t(Count * sizeof(T))},
       Allocation, AllocInfo.pMappedData);
 }
 
@@ -897,9 +898,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
     DkBufExtents Buffer{DK_GPU_ADDR_INVALID, 0};
     BufferWrapper() noexcept = default;
     BufferWrapper(DkBufExtents Buffer, uint32_t Offset = 0) noexcept
-        : Buffer(Buffer) {
-      Buffer.addr += Offset;
-    }
+        : Buffer(Buffer) { Buffer.addr += Offset; }
     BufferWrapper(const deko::BufferAllocation &Alloc) noexcept
         : Buffer(Alloc.GetBuffer()) {}
     bool IsValid() const noexcept { return Buffer.addr != DK_GPU_ADDR_INVALID; }
@@ -1109,7 +1108,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
     }
   };
   struct PipelineBinding {
-    const Pipeline *Pipeline = nullptr;
+    const Pipeline *PipelineObj = nullptr;
     uint32_t StageMask = 0;
     DkPrimitive Primitive{};
     uint32_t NumVtxBufferStates = 0;
@@ -1162,7 +1161,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
       inline void Add(SamplerBinding sampler) noexcept;
     };
 
-    bool IsValid() const noexcept { return Pipeline != nullptr; }
+    bool IsValid() const noexcept { return PipelineObj != nullptr; }
 
     PipelineBinding() noexcept = default;
 
@@ -1170,7 +1169,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
     void Rebind(bool UpdateDescriptors, Args... args) noexcept;
 
     void Bind() noexcept {
-      Pipeline->Bind(StageMask);
+      PipelineObj->Bind(StageMask);
       ImageDescriptors.Bind();
       SamplerDescriptors.Bind();
       for (DkStage s = DkStage_Vertex; s <= DkStage_Fragment;
