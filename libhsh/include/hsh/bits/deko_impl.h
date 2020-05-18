@@ -897,8 +897,6 @@ template <> struct TargetTraits<Target::DEKO3D> {
   struct BufferWrapper {
     DkBufExtents Buffer{DK_GPU_ADDR_INVALID, 0};
     BufferWrapper() noexcept = default;
-    BufferWrapper(DkBufExtents Buffer, uint32_t Offset = 0) noexcept
-        : Buffer(Buffer) { Buffer.addr += Offset; }
     BufferWrapper(const deko::BufferAllocation &Alloc) noexcept
         : Buffer(Alloc.GetBuffer()) {}
     bool IsValid() const noexcept { return Buffer.addr != DK_GPU_ADDR_INVALID; }
@@ -924,17 +922,24 @@ template <> struct TargetTraits<Target::DEKO3D> {
         : Allocation(std::move(Allocation)) {}
     template <typename T, typename Func>
     UniformBufferBinding MapUniform(Func func) noexcept {
-      return {Allocation->GetBuffer(), Allocation->MapUniform<T, Func>(func)};
+      UniformBufferBinding Ret{*Allocation};
+      uint32_t Offset = Allocation->MapUniform<T, Func>(func);
+      Ret.Buffer.addr += Offset;
+      return Ret;
     }
     template <typename T, typename Func>
     VertexBufferBinding MapVertex(std::size_t count, Func func) noexcept {
-      return {Allocation->GetBuffer(),
-              Allocation->MapVertexIndex<T, Func>(count, func)};
+      VertexBufferBinding Ret{*Allocation};
+      uint32_t Offset = Allocation->MapVertexIndex<T, Func>(count, func);
+      Ret.Buffer.addr += Offset;
+      return Ret;
     }
     template <typename T, typename Func>
     IndexBufferBinding MapIndex(std::size_t count, Func func) noexcept {
-      return {Allocation->GetBuffer(),
-              Allocation->MapVertexIndex<T, Func>(count, func)};
+      IndexBufferBinding Ret{*Allocation};
+      uint32_t Offset = Allocation->MapVertexIndex<T, Func>(count, func);
+      Ret.Buffer.addr += Offset;
+      return Ret;
     }
     bool IsValid() const noexcept { return Allocation.operator bool(); }
   };

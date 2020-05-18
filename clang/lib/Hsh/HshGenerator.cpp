@@ -2920,8 +2920,8 @@ vec4 saturate(vec4 val) {
     }
 
     if (FromRecord && !FromRecord->fields().empty()) {
-      OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
-         << " {\n";
+      OS << "layout(location = 0) in " << HshStageToString(From) << "_to_"
+         << HshStageToString(Stage) << " {\n";
       for (auto *FD : FromRecord->fields()) {
         OS << "  ";
         FD->print(OS, *this, 1);
@@ -2931,8 +2931,8 @@ vec4 saturate(vec4 val) {
     }
 
     if (ToRecord && !ToRecord->fields().empty()) {
-      OS << "out " << HshStageToString(Stage) << "_to_" << HshStageToString(To)
-         << " {\n";
+      OS << "layout(location = 0) out " << HshStageToString(Stage) << "_to_"
+         << HshStageToString(To) << " {\n";
       for (auto *FD : ToRecord->fields()) {
         OS << "  ";
         FD->print(OS, *this, 1);
