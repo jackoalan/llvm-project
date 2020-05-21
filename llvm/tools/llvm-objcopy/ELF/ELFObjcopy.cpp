@@ -592,6 +592,15 @@ static Error replaceAndRemoveSections(const CopyConfig &Config, Object &Obj) {
   return Obj.removeSections(Config.AllowBrokenLinks, RemovePred);
 }
 
+static Error hshModRelocations(SectionBase &RefSec, Object &Obj) {
+  for (auto &Sec : Obj.sections()) {
+    if (auto *RelSec = dyn_cast<RelocationSection>(&Sec)) {
+      RelSec->makeSectionRelative(&RefSec);
+    }
+  }
+  return Error::success();
+}
+
 // This function handles the high level operations of GNU objcopy including
 // handling command line options. It's important to outline certain properties
 // we expect to hold of the command line operations. Any operation that "keeps"
@@ -610,6 +619,34 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
   if (Config.OutputArch) {
     Obj.Machine = Config.OutputArch.getValue().EMachine;
     Obj.OSABI = Config.OutputArch.getValue().OSABI;
+  }
+
+  // hsh-objcopy performs section dumps first; modifying address references from
+  // other sections to contain the dumped file offset.
+  if (Config.HshObjcopy) {
+    for (const auto &Flag : Config.DumpSection) {
+      std::pair<StringRef, StringRef> SecPair = Flag.split("=");
+      StringRef SecName = SecPair.first;
+      StringRef File = SecPair.second;
+
+      bool IsEmpty = false;
+      for (auto &Sec : Obj.sections()) {
+        if (Sec.Name == SecName) {
+          if (!Sec.OriginalData.empty()) {
+            if (Error E = hshModRelocations(Sec, Obj))
+              return E;
+          } else {
+            IsEmpty = true;
+          }
+          break;
+        }
+      }
+      if (IsEmpty)
+        continue;
+
+      if (Error E = dumpSectionToFile(SecName, File, Obj))
+        return E;
+    }
   }
 
   // It is important to remove the sections first. For example, we want to
@@ -720,12 +757,14 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
       NewSection.Type = SHT_NOTE;
   }
 
-  for (const auto &Flag : Config.DumpSection) {
-    std::pair<StringRef, StringRef> SecPair = Flag.split("=");
-    StringRef SecName = SecPair.first;
-    StringRef File = SecPair.second;
-    if (Error E = dumpSectionToFile(SecName, File, Obj))
-      return E;
+  if (!Config.HshObjcopy) {
+    for (const auto &Flag : Config.DumpSection) {
+      std::pair<StringRef, StringRef> SecPair = Flag.split("=");
+      StringRef SecName = SecPair.first;
+      StringRef File = SecPair.second;
+      if (Error E = dumpSectionToFile(SecName, File, Obj))
+        return E;
+    }
   }
 
   if (!Config.AddGnuDebugLink.empty())

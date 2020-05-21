@@ -408,7 +408,8 @@ static void printHelp(const opt::OptTable &OptTable, raw_ostream &OS,
 // exit.
 Expected<DriverConfig>
 parseObjcopyOptions(ArrayRef<const char *> ArgsArr,
-                    llvm::function_ref<Error(Error)> ErrorCallback) {
+                    llvm::function_ref<Error(Error)> ErrorCallback,
+                    bool HshObjcopy) {
   DriverConfig DC;
   ObjcopyOptTable T;
   unsigned MissingArgumentIndex, MissingArgumentCount;
@@ -448,6 +449,7 @@ parseObjcopyOptions(ArrayRef<const char *> ArgsArr,
                              "too many positional arguments");
 
   CopyConfig Config;
+  Config.HshObjcopy = HshObjcopy;
   Config.InputFilename = Positional[0];
   Config.OutputFilename = Positional[Positional.size() == 1 ? 0 : 1];
   if (InputArgs.hasArg(OBJCOPY_target) &&

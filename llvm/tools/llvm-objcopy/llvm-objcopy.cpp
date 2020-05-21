@@ -345,6 +345,8 @@ int main(int argc, char **argv) {
     Tool = ToolType::Strip;
   else if (Is("install-name-tool") || Is("install_name_tool"))
     Tool = ToolType::InstallNameTool;
+  //const bool HshObjcopy = Is("hsh-objcopy");
+  const bool HshObjcopy = true;
 
   // Expand response files.
   // TODO: Move these lines, which are copied from lib/Support/CommandLine.cpp,
@@ -361,10 +363,11 @@ int main(int argc, char **argv) {
 
   auto Args = makeArrayRef(NewArgv).drop_front();
   Expected<DriverConfig> DriverConfig =
-      (Tool == ToolType::Strip) ? parseStripOptions(Args, reportWarning)
-                                : ((Tool == ToolType::InstallNameTool)
-                                       ? parseInstallNameToolOptions(Args)
-                                       : parseObjcopyOptions(Args, reportWarning));
+      (Tool == ToolType::Strip)
+          ? parseStripOptions(Args, reportWarning)
+          : ((Tool == ToolType::InstallNameTool)
+                 ? parseInstallNameToolOptions(Args)
+                 : parseObjcopyOptions(Args, reportWarning, HshObjcopy));
   if (!DriverConfig) {
     logAllUnhandledErrors(DriverConfig.takeError(),
                           WithColor::error(errs(), ToolName));

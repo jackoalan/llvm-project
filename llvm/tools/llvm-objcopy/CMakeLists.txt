@@ -42,6 +42,8 @@ add_llvm_tool(llvm-objcopy
   InstallNameToolOptsTableGen
   StripOptsTableGen
   )
+target_include_directories(llvm-objcopy PRIVATE "${LLVM_EXTERNAL_LLD_SOURCE_DIR}/include")
+target_link_libraries(llvm-objcopy PRIVATE lldELF)
 
 add_llvm_tool_symlink(llvm-install-name-tool llvm-objcopy)
 add_llvm_tool_symlink(llvm-strip llvm-objcopy)

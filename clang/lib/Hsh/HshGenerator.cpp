@@ -4082,6 +4082,7 @@ protected:
                           L"-spirv",
                           L"-fspv-target-env=vulkan1.1",
                           L"-fvk-use-dx-layout",
+                          HStage == HshVertexStage ? L"-fvk-invert-y" : L"",
                           L"-fvk-t-shift",
                           TShiftArg,
                           L"0",

@@ -453,6 +453,7 @@ public:
   uint64_t OriginalOffset = 0;
   Segment *ParentSegment = nullptr;
   ArrayRef<uint8_t> Contents;
+  std::vector<uint8_t> OwnedContents;
   std::set<const SectionBase *, SectionCompare> Sections;
 
   explicit Segment(ArrayRef<uint8_t> Data) : Contents(Data) {}
@@ -474,6 +475,7 @@ class Section : public SectionBase {
   MAKE_SEC_WRITER_FRIEND
 
   ArrayRef<uint8_t> Contents;
+  std::vector<uint8_t> OwnedContents;
   SectionBase *LinkSection = nullptr;
 
 public:
@@ -485,6 +487,11 @@ public:
       function_ref<bool(const SectionBase *)> ToRemove) override;
   void initialize(SectionTableRef SecTable) override;
   void finalize() override;
+  uint8_t *mutableData();
+
+  static bool classof(const SectionBase *S) {
+    return S->OriginalType == ELF::SHT_PROGBITS;
+  }
 };
 
 class OwnedDataSection : public SectionBase {
@@ -766,6 +773,9 @@ public:
   void markSymbols() override;
   void replaceSectionReferences(
       const DenseMap<SectionBase *, SectionBase *> &FromTo) override;
+
+  // Used by hsh-objcopy
+  void makeSectionRelative(SectionBase *RefSec);
 
   static bool classof(const SectionBase *S) {
     if (S->OriginalFlags & ELF::SHF_ALLOC)

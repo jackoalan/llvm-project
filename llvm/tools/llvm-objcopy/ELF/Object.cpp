@@ -21,6 +21,10 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/Path.h"
+#include "lld/../../ELF/InputSection.h"
+#include "lld/../../ELF/OutputSections.h"
+#include "lld/../../ELF/Symbols.h"
+#include "lld/../../ELF/Target.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -916,6 +920,56 @@ void RelocationSection::replaceSectionReferences(
     SecToApplyRel = To;
 }
 
+void RelocationSection::makeSectionRelative(SectionBase *RefSec) {
+  static lld::elf::Configuration LldConfig{};
+  LldConfig.wordsize = 8;
+  lld::elf::config = &LldConfig;
+  lld::elf::target = lld::elf::getX86_64TargetInfo();
+
+  if (auto *ApplySec = dyn_cast<Section>(SecToApplyRel)) {
+    lld::elf::InputSection LldSection{nullptr,
+                                      ApplySec->Flags,
+                                      uint32_t(ApplySec->Type),
+                                      uint32_t(ApplySec->Align),
+                                      ApplySec->OriginalData,
+                                      ApplySec->Name};
+    lld::elf::OutputSection LldOut{ApplySec->Name, uint32_t(ApplySec->Type),
+                                   ApplySec->Flags};
+    LldOut.addr = ApplySec->Addr;
+    LldSection.parent = &LldOut;
+
+    std::size_t NumRelocs = 0;
+    for (const Relocation &R : Relocations) {
+      if (!R.RelocSymbol || !R.RelocSymbol->DefinedIn ||
+          R.RelocSymbol->DefinedIn != RefSec)
+        continue;
+      ++NumRelocs;
+    }
+    if (NumRelocs == 0)
+      return;
+
+    uint8_t *SecData = ApplySec->mutableData();
+    LldSection.relocations.reserve(NumRelocs);
+    std::vector<lld::elf::Defined> Symbols;
+    Symbols.reserve(NumRelocs);
+    for (const Relocation &R : Relocations) {
+      if (!R.RelocSymbol || !R.RelocSymbol->DefinedIn ||
+          R.RelocSymbol->DefinedIn != RefSec)
+        continue;
+      uint64_t Offset = R.Offset - ApplySec->Offset;
+      uint8_t *Data = SecData + Offset;
+      lld::elf::Symbol &LldSymbol = Symbols.emplace_back(
+          nullptr, "", 0, 0, 0, R.RelocSymbol->Value - RefSec->Addr,
+          R.RelocSymbol->Size, nullptr);
+      LldSection.relocations.push_back(lld::elf::Relocation{
+          lld::elf::target->getRelExpr(R.Type, LldSymbol, Data), R.Type, Offset,
+          int64_t(R.Addend), &LldSymbol});
+    }
+
+    LldSection.relocateAlloc(SecData, SecData + ApplySec->Size);
+  }
+}
+
 void SectionWriter::visit(const DynamicRelocationSection &Sec) {
   llvm::copy(Sec.Contents, Out.getBufferStart() + Sec.Offset);
 }
@@ -999,6 +1053,25 @@ void Section::initialize(SectionTableRef SecTable) {
 }
 
 void Section::finalize() { this->Link = LinkSection ? LinkSection->Index : 0; }
+
+uint8_t *Section::mutableData() {
+  if (ParentSegment) {
+    if (ParentSegment->OwnedContents.empty() &&
+        !ParentSegment->Contents.empty()) {
+      ParentSegment->OwnedContents.assign(ParentSegment->Contents.begin(),
+                                          ParentSegment->Contents.end());
+      ParentSegment->Contents = ParentSegment->OwnedContents;
+    }
+    return ParentSegment->OwnedContents.data() +
+           (Offset - ParentSegment->Offset);
+  }
+
+  if (OwnedContents.empty() && !Contents.empty()) {
+    OwnedContents.assign(Contents.begin(), Contents.end());
+    Contents = OwnedContents;
+  }
+  return OwnedContents.data();
+}
 
 void GnuDebugLinkSection::init(StringRef File) {
   FileName = sys::path::filename(File);

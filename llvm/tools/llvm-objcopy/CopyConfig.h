@@ -222,6 +222,7 @@ struct CopyConfig {
   bool StripUnneeded = false;
   bool Weaken = false;
   bool DecompressDebugSections = false;
+  bool HshObjcopy = false;
   DebugCompressionType CompressionType = DebugCompressionType::None;
 
   // parseELFConfig performs ELF-specific command-line parsing. Fills `ELF` on
@@ -251,7 +252,8 @@ struct DriverConfig {
 // by the callback aborts the parsing and is then returned by this function.
 Expected<DriverConfig>
 parseObjcopyOptions(ArrayRef<const char *> ArgsArr,
-                    llvm::function_ref<Error(Error)> ErrorCallback);
+                    llvm::function_ref<Error(Error)> ErrorCallback,
+                    bool HshObjcopy = false);
 
 // ParseInstallNameToolOptions returns the config and sets the input arguments.
 // If a help flag is set then ParseInstallNameToolOptions will print the help
