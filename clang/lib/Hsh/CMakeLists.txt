@@ -61,11 +61,11 @@ ExternalProject_Add(
 # building clangHsh until after DXC is built.
 set(dxc_header "${CLANG_BINARY_DIR}/include/dxc/dxcapi.h")
 add_custom_command(OUTPUT "${dxc_header}"
-                   COMMAND "${CMAKE_COMMAND}" ARGS
-                   --build . --target DirectXShaderCompiler
-                   DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
-                   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-                   COMMENT "Fetching and building DirectXShaderCompiler")
+        COMMAND "${CMAKE_COMMAND}" ARGS
+        --build . --target DirectXShaderCompiler
+        DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        COMMENT "Fetching and building DirectXShaderCompiler")
 
 # UAM library
 find_program(MESON meson)
@@ -112,14 +112,24 @@ include_directories(
 add_clang_library(clangHsh
         "${dxc_header}"
         "${uam_library}"
-        HshGenerator.cpp
+        Builtins/Builtins.cpp
+        Builtins/NonConstExpr.cpp
+        Compilers/DxcStageCompiler.cpp
+        Compilers/UamStageCompiler.cpp
+        Compilers/StageCompiler.cpp
+        PrintingPolicies/GLSLPrintingPolicy.cpp
+        PrintingPolicies/HLSLPrintingPolicy.cpp
+        PrintingPolicies/ShaderPrintingPolicy.cpp
+        Consumer.cpp
+        Partitioner.cpp
+        Builder.cpp
         LINK_LIBS
         clangTooling)
 target_link_libraries(clangHsh PRIVATE "${uam_library}")
 
 # Enable -fms-extensions for clang to use MS uuid extensions for COM.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  set_source_files_properties(HshGenerator.cpp PROPERTIES
+  set_source_files_properties(Compilers/DxcStageCompiler.cpp PROPERTIES
           COMPILE_FLAGS "-fms-extensions -Wno-language-extension-token")
 endif()
 
