@@ -36,15 +36,16 @@ using namespace llvm::object;
 using namespace llvm::support;
 using namespace llvm::support::endian;
 using namespace llvm::sys;
+using namespace lld;
+using namespace lld::elf;
 
-namespace lld {
+std::vector<InputSectionBase *> elf::inputSections;
+DenseSet<std::pair<const Symbol *, uint64_t>> elf::ppc64noTocRelax;
+
 // Returns a string to construct an error message.
-std::string toString(const elf::InputSectionBase *sec) {
+std::string lld::toString(const InputSectionBase *sec) {
   return (toString(sec->file) + ":(" + sec->name + ")").str();
 }
-
-namespace elf {
-std::vector<InputSectionBase *> inputSections;
 
 template <class ELFT>
 static ArrayRef<uint8_t> getSectionContents(ObjFile<ELFT> &file,
@@ -555,6 +556,7 @@ static uint64_t getAArch64UndefinedRelativeWeakVA(uint64_t type, uint64_t a,
   case R_AARCH64_PREL64:
   case R_AARCH64_ADR_PREL_LO21:
   case R_AARCH64_LD_PREL_LO19:
+  case R_AARCH64_PLT32:
     return p + a;
   }
   llvm_unreachable("AArch64 pc-relative relocation expected\n");
@@ -807,7 +809,7 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
     // --noinhibit-exec, even a non-weak undefined reference may reach here.
     // Just return A, which matches R_ABS, and the behavior of some dynamic
     // loaders.
-    if (sym.isUndefined())
+    if (sym.isUndefined() || sym.isLazy())
       return a;
     return getTlsTpOffset(sym) + a;
   case R_RELAX_TLS_GD_TO_LE_NEG:
@@ -851,6 +853,9 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
 template <class ELFT, class RelTy>
 void InputSection::relocateNonAlloc(uint8_t *buf, ArrayRef<RelTy> rels) {
   const unsigned bits = sizeof(typename ELFT::uint) * 8;
+  const bool isDebug = isDebugSection(*this);
+  const bool isDebugLocOrRanges =
+      isDebug && (name == ".debug_loc" || name == ".debug_ranges");
 
   for (const RelTy &rel : rels) {
     RelType type = rel.getType(config->isMips64EL);
@@ -901,11 +906,38 @@ void InputSection::relocateNonAlloc(uint8_t *buf, ArrayRef<RelTy> rels) {
       continue;
     }
 
-    if (sym.isTls() && !Out::tlsPhdr)
+    if (sym.isTls() && !Out::tlsPhdr) {
       target->relocateNoSym(bufLoc, type, 0);
-    else
-      target->relocateNoSym(bufLoc, type,
-                            SignExtend64<bits>(sym.getVA(addend)));
+      continue;
+    }
+
+    if (isDebug && type == target->symbolicRel) {
+      // Resolve relocations in .debug_* referencing (discarded symbols or ICF
+      // folded section symbols) to a tombstone value. Resolving to addend is
+      // unsatisfactory because the result address range may collide with a
+      // valid range of low address, or leave multiple CUs claiming ownership of
+      // the same range of code, which may confuse consumers.
+      //
+      // To address the problems, we use -1 as a tombstone value for most
+      // .debug_* sections. We have to ignore the addend because we don't want
+      // to resolve an address attribute (which may have a non-zero addend) to
+      // -1+addend (wrap around to a low address).
+      //
+      // If the referenced symbol is discarded (made Undefined), or the
+      // section defining the referenced symbol is garbage collected,
+      // sym.getOutputSection() is nullptr. `ds->section->repl != ds->section`
+      // catches the ICF folded case.
+      //
+      // For pre-DWARF-v5 .debug_loc and .debug_ranges, -1 is a reserved value
+      // (base address selection entry), so -2 is used.
+      auto *ds = dyn_cast<Defined>(&sym);
+      if (!sym.getOutputSection() || (ds && ds->section->repl != ds->section)) {
+        target->relocateNoSym(bufLoc, type,
+                              isDebugLocOrRanges ? UINT64_MAX - 1 : UINT64_MAX);
+        continue;
+      }
+    }
+    target->relocateNoSym(bufLoc, type, SignExtend64<bits>(sym.getVA(addend)));
   }
 }
 
@@ -970,7 +1002,13 @@ void InputSectionBase::relocateAlloc(uint8_t *buf, uint8_t *bufEnd) {
       target->relaxGot(bufLoc, rel, targetVA);
       break;
     case R_PPC64_RELAX_TOC:
-      if (!tryRelaxPPC64TocIndirection(rel, bufLoc))
+      // rel.sym refers to the STT_SECTION symbol associated to the .toc input
+      // section. If an R_PPC64_TOC16_LO (.toc + addend) references the TOC
+      // entry, there may be R_PPC64_TOC16_HA not paired with
+      // R_PPC64_TOC16_LO_DS. Don't relax. This loses some relaxation
+      // opportunities but is safe.
+      if (ppc64noTocRelax.count({rel.sym, rel.addend}) ||
+          !tryRelaxPPC64TocIndirection(rel, bufLoc))
         target->relocate(bufLoc, rel, targetVA);
       break;
     case R_RELAX_TLS_IE_TO_LE:
@@ -1130,7 +1168,7 @@ void InputSectionBase::adjustSplitStackFunctionPrologues(uint8_t *buf,
                                                    end, f->stOther))
         continue;
       if (!getFile<ELFT>()->someNoSplitStack)
-        error(toString(this) + ": " + f->getName() +
+        error(lld::toString(this) + ": " + f->getName() +
               " (with -fsplit-stack) calls " + rel.sym->getName() +
               " (without -fsplit-stack), but couldn't adjust its prologue");
     }
@@ -1393,6 +1431,3 @@ template void EhInputSection::split<ELF32LE>();
 template void EhInputSection::split<ELF32BE>();
 template void EhInputSection::split<ELF64LE>();
 template void EhInputSection::split<ELF64BE>();
-
-} // namespace elf
-} // namespace lld

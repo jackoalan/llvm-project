@@ -37,7 +37,12 @@
 #include <lwp.h> // For _lwp_self()
 #endif
 
+#if defined(__OpenBSD__)
+#include <unistd.h> // For getthrid()
+#endif
+
 #if defined(__linux__)
+#include <sched.h>       // For sched_getaffinity
 #include <sys/syscall.h> // For syscall codes
 #include <unistd.h>      // For syscall()
 #endif
@@ -104,6 +109,8 @@ uint64_t llvm::get_threadid() {
   return uint64_t(pthread_getthreadid_np());
 #elif defined(__NetBSD__)
   return uint64_t(_lwp_self());
+#elif defined(__OpenBSD__)
+  return uint64_t(getthrid());
 #elif defined(__ANDROID__)
   return uint64_t(gettid());
 #elif defined(__linux__)
@@ -271,7 +278,7 @@ SetThreadPriorityResult llvm::set_thread_priority(ThreadPriority Priority) {
 #include <thread>
 
 int computeHostNumHardwareThreads() {
-#if defined(HAVE_SCHED_GETAFFINITY) && defined(HAVE_CPU_COUNT)
+#ifdef __linux__
   cpu_set_t Set;
   if (sched_getaffinity(0, sizeof(Set), &Set) == 0)
     return CPU_COUNT(&Set);

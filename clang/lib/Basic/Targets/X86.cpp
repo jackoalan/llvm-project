@@ -17,7 +17,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/Support/TargetParser.h"
+#include "llvm/Support/X86TargetParser.h"
 
 namespace clang {
 namespace targets {
@@ -109,7 +109,8 @@ bool X86TargetInfo::initFeatureMap(
   if (getTriple().getArch() == llvm::Triple::x86_64)
     setFeatureEnabledImpl(Features, "sse2", true);
 
-  const CPUKind Kind = getCPUKind(CPU);
+  using namespace llvm::X86;
+  const enum CPUKind Kind = parseArchX86(CPU);
 
   // Enable X87 for all X86 processors but Lakemont.
   if (Kind != CK_Lakemont)
@@ -117,11 +118,11 @@ bool X86TargetInfo::initFeatureMap(
 
   // Enable cmpxchg8 for i586 and greater CPUs. Include generic for backwards
   // compatibility.
-  if (Kind >= CK_i586 || Kind == CK_Generic)
+  if (Kind >= CK_i586 || Kind == CK_None)
     setFeatureEnabledImpl(Features, "cx8", true);
 
   switch (Kind) {
-  case CK_Generic:
+  case CK_None:
   case CK_i386:
   case CK_i486:
   case CK_i586:
@@ -257,11 +258,8 @@ SkylakeCommon:
     break;
 
   case CK_Tremont:
-    setFeatureEnabledImpl(Features, "cldemote", true);
-    setFeatureEnabledImpl(Features, "movdiri", true);
-    setFeatureEnabledImpl(Features, "movdir64b", true);
+    setFeatureEnabledImpl(Features, "clwb", true);
     setFeatureEnabledImpl(Features, "gfni", true);
-    setFeatureEnabledImpl(Features, "waitpkg", true);
     LLVM_FALLTHROUGH;
   case CK_GoldmontPlus:
     setFeatureEnabledImpl(Features, "ptwrite", true);
@@ -337,6 +335,8 @@ SkylakeCommon:
     setFeatureEnabledImpl(Features, "lzcnt", true);
     setFeatureEnabledImpl(Features, "popcnt", true);
     setFeatureEnabledImpl(Features, "sahf", true);
+    setFeatureEnabledImpl(Features, "prfchw", true);
+    setFeatureEnabledImpl(Features, "cx16", true);
     LLVM_FALLTHROUGH;
   case CK_K8SSE3:
     setFeatureEnabledImpl(Features, "sse3", true);
@@ -360,6 +360,7 @@ SkylakeCommon:
     setFeatureEnabledImpl(Features, "bmi", true);
     setFeatureEnabledImpl(Features, "f16c", true);
     setFeatureEnabledImpl(Features, "xsaveopt", true);
+    setFeatureEnabledImpl(Features, "xsave", true);
     setFeatureEnabledImpl(Features, "movbe", true);
     LLVM_FALLTHROUGH;
   case CK_BTVER1:
@@ -413,6 +414,8 @@ SkylakeCommon:
   case CK_BDVER4:
     setFeatureEnabledImpl(Features, "avx2", true);
     setFeatureEnabledImpl(Features, "bmi2", true);
+    setFeatureEnabledImpl(Features, "movbe", true);
+    setFeatureEnabledImpl(Features, "rdrnd", true);
     setFeatureEnabledImpl(Features, "mwaitx", true);
     LLVM_FALLTHROUGH;
   case CK_BDVER3:
@@ -452,18 +455,18 @@ SkylakeCommon:
       llvm::find(FeaturesVec, "-popcnt") == FeaturesVec.end())
     Features["popcnt"] = true;
 
-  // Enable prfchw if 3DNow! is enabled and prfchw is not explicitly disabled.
-  I = Features.find("3dnow");
-  if (I != Features.end() && I->getValue() &&
-      llvm::find(FeaturesVec, "-prfchw") == FeaturesVec.end())
-    Features["prfchw"] = true;
-
   // Additionally, if SSE is enabled and mmx is not explicitly disabled,
   // then enable MMX.
   I = Features.find("sse");
   if (I != Features.end() && I->getValue() &&
       llvm::find(FeaturesVec, "-mmx") == FeaturesVec.end())
     Features["mmx"] = true;
+
+  // Enable xsave if avx is enabled and xsave is not explicitly disabled.
+  I = Features.find("avx");
+  if (I != Features.end() && I->getValue() &&
+      llvm::find(FeaturesVec, "-xsave") == FeaturesVec.end())
+    Features["xsave"] = true;
 
   return true;
 }
@@ -482,7 +485,6 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
       LLVM_FALLTHROUGH;
     case AVX:
       Features["avx"] = true;
-      Features["xsave"] = true;
       LLVM_FALLTHROUGH;
     case SSE42:
       Features["sse4.2"] = true;
@@ -532,8 +534,7 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
     LLVM_FALLTHROUGH;
   case AVX:
     Features["fma"] = Features["avx"] = Features["f16c"] = false;
-    Features["xsave"] = Features["xsaveopt"] = Features["vaes"] = false;
-    Features["vpclmulqdq"] = false;
+    Features["vaes"] = Features["vpclmulqdq"] = false;
     setXOPLevel(Features, FMA4, false);
     LLVM_FALLTHROUGH;
   case AVX2:
@@ -718,7 +719,7 @@ void X86TargetInfo::setFeatureEnabledImpl(llvm::StringMap<bool> &Features,
       setSSELevel(Features, SSE41, Enabled);
   } else if (Name == "xsave") {
     if (!Enabled)
-      Features["xsaveopt"] = false;
+      Features["xsaveopt"] = Features["xsavec"] = Features["xsaves"] = false;
   } else if (Name == "xsaveopt" || Name == "xsavec" || Name == "xsaves") {
     if (Enabled)
       Features["xsave"] = true;
@@ -939,8 +940,9 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   // Subtarget options.
   // FIXME: We are hard-coding the tune parameters based on the CPU, but they
   // truly should be based on -mtune options.
+  using namespace llvm::X86;
   switch (CPU) {
-  case CK_Generic:
+  case CK_None:
     break;
   case CK_i386:
     // The rest are coming from the i386 define above.
@@ -1327,7 +1329,7 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     break;
   }
 
-  if (CPU >= CK_i486 || CPU == CK_Generic) {
+  if (CPU >= CK_i486 || CPU == CK_None) {
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
@@ -1519,14 +1521,14 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
 // X86TargetInfo::hasFeature for a somewhat comprehensive list).
 bool X86TargetInfo::validateCpuSupports(StringRef FeatureStr) const {
   return llvm::StringSwitch<bool>(FeatureStr)
-#define X86_FEATURE_COMPAT(VAL, ENUM, STR) .Case(STR, true)
+#define X86_FEATURE_COMPAT(ENUM, STR) .Case(STR, true)
 #include "llvm/Support/X86TargetParser.def"
       .Default(false);
 }
 
 static llvm::X86::ProcessorFeatures getFeature(StringRef Name) {
   return llvm::StringSwitch<llvm::X86::ProcessorFeatures>(Name)
-#define X86_FEATURE_COMPAT(VAL, ENUM, STR) .Case(STR, llvm::X86::ENUM)
+#define X86_FEATURE_COMPAT(ENUM, STR) .Case(STR, llvm::X86::ENUM)
 #include "llvm/Support/X86TargetParser.def"
       ;
   // Note, this function should only be used after ensuring the value is
@@ -1551,17 +1553,11 @@ static unsigned getFeaturePriority(llvm::X86::ProcessorFeatures Feat) {
 unsigned X86TargetInfo::multiVersionSortPriority(StringRef Name) const {
   // Valid CPUs have a 'key feature' that compares just better than its key
   // feature.
-  CPUKind Kind = getCPUKind(Name);
-  if (Kind != CK_Generic) {
-    switch (Kind) {
-    default:
-      llvm_unreachable(
-          "CPU Type without a key feature used in 'target' attribute");
-#define PROC_WITH_FEAT(ENUM, STR, IS64, KEY_FEAT)                              \
-  case CK_##ENUM:                                                              \
-    return (getFeaturePriority(llvm::X86::KEY_FEAT) << 1) + 1;
-#include "clang/Basic/X86Target.def"
-    }
+  using namespace llvm::X86;
+  CPUKind Kind = parseArchX86(Name);
+  if (Kind != CK_None) {
+    ProcessorFeatures KeyFeature = getKeyFeature(Kind);
+    return (getFeaturePriority(KeyFeature) << 1) + 1;
   }
 
   // Now we know we have a feature, so get its priority and shift it a few so
@@ -1608,8 +1604,7 @@ void X86TargetInfo::getCPUSpecificCPUDispatchFeatures(
 bool X86TargetInfo::validateCpuIs(StringRef FeatureStr) const {
   return llvm::StringSwitch<bool>(FeatureStr)
 #define X86_VENDOR(ENUM, STRING) .Case(STRING, true)
-#define X86_CPU_TYPE_COMPAT_WITH_ALIAS(ARCHNAME, ENUM, STR, ALIAS)             \
-  .Cases(STR, ALIAS, true)
+#define X86_CPU_TYPE_COMPAT_ALIAS(ENUM, ALIAS) .Case(ALIAS, true)
 #define X86_CPU_TYPE_COMPAT(ARCHNAME, ENUM, STR) .Case(STR, true)
 #define X86_CPU_SUBTYPE_COMPAT(ARCHNAME, ENUM, STR) .Case(STR, true)
 #include "llvm/Support/X86TargetParser.def"
@@ -1691,8 +1686,7 @@ bool X86TargetInfo::validateAsmConstraint(
     switch (*Name) {
     default:
       return false;
-    case 'z':
-    case '0': // First SSE register.
+    case 'z': // First SSE register.
     case '2':
     case 't': // Any SSE register, when SSE2 is enabled.
     case 'i': // Any SSE register, when SSE2 and inter-unit moves enabled.
@@ -1766,6 +1760,7 @@ bool X86TargetInfo::validateAsmConstraint(
 // | Knights Mill                       |                      64 | https://software.intel.com/sites/default/files/managed/9e/bc/64-ia-32-architectures-optimization-manual.pdf?countrylabel=Colombia "2.5.5.2 L1 DCache "       |
 // +------------------------------------+-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
 Optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
+  using namespace llvm::X86;
   switch (CPU) {
     // i386
     case CK_i386:
@@ -1851,7 +1846,7 @@ Optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
 
     // The following currently have unknown cache line sizes (but they are probably all 64):
     // Core
-    case CK_Generic:
+    case CK_None:
       return None;
   }
   llvm_unreachable("Unknown CPU kind");
@@ -1897,9 +1892,14 @@ bool X86TargetInfo::validateOperandSize(const llvm::StringMap<bool> &FeatureMap,
     case 'k':
       return Size <= 64;
     case 'z':
-    case '0':
-      // XMM0
-      if (FeatureMap.lookup("sse"))
+      // XMM0/YMM/ZMM0
+      if (FeatureMap.lookup("avx512f"))
+        // ZMM0 can be used if target supports AVX512F.
+        return Size <= 512U;
+      else if (FeatureMap.lookup("avx"))
+        // YMM0 can be used if target supports AVX.
+        return Size <= 256U;
+      else if (FeatureMap.lookup("sse"))
         return Size <= 128U;
       return false;
     case 'i':
@@ -1910,7 +1910,7 @@ bool X86TargetInfo::validateOperandSize(const llvm::StringMap<bool> &FeatureMap,
         return false;
       break;
     }
-    LLVM_FALLTHROUGH;
+    break;
   case 'v':
   case 'x':
     if (FeatureMap.lookup("avx512f"))
@@ -1965,7 +1965,6 @@ std::string X86TargetInfo::convertConstraint(const char *&Constraint) const {
     case 'i':
     case 't':
     case 'z':
-    case '0':
     case '2':
       // "^" hints llvm that this is a 2 letter constraint.
       // "Constraint++" is used to promote the string iterator
@@ -1978,38 +1977,9 @@ std::string X86TargetInfo::convertConstraint(const char *&Constraint) const {
   }
 }
 
-bool X86TargetInfo::checkCPUKind(CPUKind Kind) const {
-  // Perform any per-CPU checks necessary to determine if this CPU is
-  // acceptable.
-  switch (Kind) {
-  case CK_Generic:
-    // No processor selected!
-    return false;
-#define PROC(ENUM, STRING, IS64BIT)                                            \
-  case CK_##ENUM:                                                              \
-    return IS64BIT || getTriple().getArch() == llvm::Triple::x86;
-#include "clang/Basic/X86Target.def"
-  }
-  llvm_unreachable("Unhandled CPU kind");
-}
-
 void X86TargetInfo::fillValidCPUList(SmallVectorImpl<StringRef> &Values) const {
-#define PROC(ENUM, STRING, IS64BIT)                                            \
-  if (IS64BIT || getTriple().getArch() == llvm::Triple::x86)                   \
-    Values.emplace_back(STRING);
-  // For aliases we need to lookup the CPUKind to check get the 64-bit ness.
-#define PROC_ALIAS(ENUM, ALIAS)                                                \
-  if (checkCPUKind(CK_##ENUM))                                                      \
-    Values.emplace_back(ALIAS);
-#include "clang/Basic/X86Target.def"
-}
-
-X86TargetInfo::CPUKind X86TargetInfo::getCPUKind(StringRef CPU) const {
-  return llvm::StringSwitch<CPUKind>(CPU)
-#define PROC(ENUM, STRING, IS64BIT) .Case(STRING, CK_##ENUM)
-#define PROC_ALIAS(ENUM, ALIAS) .Case(ALIAS, CK_##ENUM)
-#include "clang/Basic/X86Target.def"
-      .Default(CK_Generic);
+  bool Only64Bit = getTriple().getArch() != llvm::Triple::x86;
+  llvm::X86::fillValidCPUArchList(Values, Only64Bit);
 }
 
 ArrayRef<const char *> X86TargetInfo::getGCCRegNames() const {

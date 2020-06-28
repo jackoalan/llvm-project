@@ -46,6 +46,7 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
@@ -152,7 +153,7 @@ static bool isSafeToExecuteUnconditionally(Instruction &Inst,
                                            const Instruction *CtxI = nullptr);
 static bool pointerInvalidatedByLoop(MemoryLocation MemLoc,
                                      AliasSetTracker *CurAST, Loop *CurLoop,
-                                     AliasAnalysis *AA);
+                                     AAResults *AA);
 static bool pointerInvalidatedByLoopWithMSSA(MemorySSA *MSSA, MemoryUse *MU,
                                              Loop *CurLoop,
                                              SinkAndHoistLICMFlags &Flags);
@@ -169,7 +170,7 @@ static void moveInstructionBefore(Instruction &I, Instruction &Dest,
 
 namespace {
 struct LoopInvariantCodeMotion {
-  bool runOnLoop(Loop *L, AliasAnalysis *AA, LoopInfo *LI, DominatorTree *DT,
+  bool runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI, DominatorTree *DT,
                  TargetLibraryInfo *TLI, TargetTransformInfo *TTI,
                  ScalarEvolution *SE, MemorySSA *MSSA,
                  OptimizationRemarkEmitter *ORE);
@@ -184,9 +185,9 @@ private:
   unsigned LicmMssaNoAccForPromotionCap;
 
   std::unique_ptr<AliasSetTracker>
-  collectAliasInfoForLoop(Loop *L, LoopInfo *LI, AliasAnalysis *AA);
+  collectAliasInfoForLoop(Loop *L, LoopInfo *LI, AAResults *AA);
   std::unique_ptr<AliasSetTracker>
-  collectAliasInfoForLoopWithMSSA(Loop *L, AliasAnalysis *AA,
+  collectAliasInfoForLoopWithMSSA(Loop *L, AAResults *AA,
                                   MemorySSAUpdater *MSSAU);
 };
 
@@ -284,7 +285,7 @@ Pass *llvm::createLICMPass(unsigned LicmMssaOptCap,
 /// loop is not preserved so it is not a good idea to run LICM multiple
 /// times on one loop.
 bool LoopInvariantCodeMotion::runOnLoop(
-    Loop *L, AliasAnalysis *AA, LoopInfo *LI, DominatorTree *DT,
+    Loop *L, AAResults *AA, LoopInfo *LI, DominatorTree *DT,
     TargetLibraryInfo *TLI, TargetTransformInfo *TTI, ScalarEvolution *SE,
     MemorySSA *MSSA, OptimizationRemarkEmitter *ORE) {
   bool Changed = false;
@@ -330,7 +331,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
   BasicBlock *Preheader = L->getLoopPreheader();
 
   // Compute loop safety information.
-  ICFLoopSafetyInfo SafetyInfo(DT);
+  ICFLoopSafetyInfo SafetyInfo;
   SafetyInfo.computeLoopSafetyInfo(L);
 
   // We want to visit all of the instructions in this loop... that are not parts
@@ -447,7 +448,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
 /// first order w.r.t the DominatorTree.  This allows us to visit uses before
 /// definitions, allowing us to sink a loop body in one pass without iteration.
 ///
-bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
+bool llvm::sinkRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
                       DominatorTree *DT, TargetLibraryInfo *TLI,
                       TargetTransformInfo *TTI, Loop *CurLoop,
                       AliasSetTracker *CurAST, MemorySSAUpdater *MSSAU,
@@ -496,14 +497,14 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
       // operands of the instruction are loop invariant.
       //
       bool FreeInLoop = false;
-      if (isNotUsedOrFreeInLoop(I, CurLoop, SafetyInfo, TTI, FreeInLoop) &&
+      if (!I.mayHaveSideEffects() &&
+          isNotUsedOrFreeInLoop(I, CurLoop, SafetyInfo, TTI, FreeInLoop) &&
           canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, MSSAU, true, &Flags,
-                             ORE) &&
-          !I.mayHaveSideEffects()) {
+                             ORE)) {
         if (sink(I, LI, DT, CurLoop, SafetyInfo, MSSAU, ORE)) {
           if (!FreeInLoop) {
             ++II;
-            salvageDebugInfoOrMarkUndef(I);
+            salvageDebugInfo(I);
             eraseInstruction(I, *SafetyInfo, CurAST, MSSAU);
           }
           Changed = true;
@@ -750,7 +751,7 @@ public:
 /// order w.r.t the DominatorTree.  This allows us to visit definitions before
 /// uses, allowing us to hoist a loop body in one pass without iteration.
 ///
-bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
+bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
                        DominatorTree *DT, TargetLibraryInfo *TLI, Loop *CurLoop,
                        AliasSetTracker *CurAST, MemorySSAUpdater *MSSAU,
                        ScalarEvolution *SE, ICFLoopSafetyInfo *SafetyInfo,
@@ -1107,11 +1108,11 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
     FunctionModRefBehavior Behavior = AA->getModRefBehavior(CI);
     if (Behavior == FMRB_DoesNotAccessMemory)
       return true;
-    if (AliasAnalysis::onlyReadsMemory(Behavior)) {
+    if (AAResults::onlyReadsMemory(Behavior)) {
       // A readonly argmemonly function only reads from memory pointed to by
       // it's arguments with arbitrary offsets.  If we can prove there are no
       // writes to this memory in the loop, we can hoist or sink.
-      if (AliasAnalysis::onlyAccessesArgPointees(Behavior)) {
+      if (AAResults::onlyAccessesArgPointees(Behavior)) {
         // TODO: expand to writeable arguments
         for (Value *Op : CI->arg_operands())
           if (Op->getType()->isPointerTy()) {
@@ -1260,7 +1261,8 @@ static bool isFreeInLoop(const Instruction &I, const Loop *CurLoop,
                          const TargetTransformInfo *TTI) {
 
   if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-    if (TTI->getUserCost(GEP) != TargetTransformInfo::TCC_Free)
+    if (TTI->getUserCost(GEP, TargetTransformInfo::TCK_SizeAndLatency) !=
+        TargetTransformInfo::TCC_Free)
       return false;
     // For a GEP, we cannot simply use getUserCost because currently it
     // optimistically assume that a GEP will fold into addressing mode
@@ -1275,7 +1277,8 @@ static bool isFreeInLoop(const Instruction &I, const Loop *CurLoop,
     }
     return true;
   } else
-    return TTI->getUserCost(&I) == TargetTransformInfo::TCC_Free;
+    return TTI->getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency) ==
+           TargetTransformInfo::TCC_Free;
 }
 
 /// Return true if the only users of this instruction are outside of
@@ -2086,7 +2089,7 @@ bool llvm::promoteLoopAccessesToScalars(
   if (SawUnorderedAtomic)
     PreheaderLoad->setOrdering(AtomicOrdering::Unordered);
   PreheaderLoad->setAlignment(Align(Alignment));
-  PreheaderLoad->setDebugLoc(DL);
+  PreheaderLoad->setDebugLoc(DebugLoc());
   if (AATags)
     PreheaderLoad->setAAMetadata(AATags);
   SSA.AddAvailableValue(Preheader, PreheaderLoad);
@@ -2117,7 +2120,7 @@ bool llvm::promoteLoopAccessesToScalars(
 /// from L and all subloops of L.
 std::unique_ptr<AliasSetTracker>
 LoopInvariantCodeMotion::collectAliasInfoForLoop(Loop *L, LoopInfo *LI,
-                                                 AliasAnalysis *AA) {
+                                                 AAResults *AA) {
   auto CurAST = std::make_unique<AliasSetTracker>(*AA);
 
   // Add everything from all the sub loops.
@@ -2135,7 +2138,7 @@ LoopInvariantCodeMotion::collectAliasInfoForLoop(Loop *L, LoopInfo *LI,
 
 std::unique_ptr<AliasSetTracker>
 LoopInvariantCodeMotion::collectAliasInfoForLoopWithMSSA(
-    Loop *L, AliasAnalysis *AA, MemorySSAUpdater *MSSAU) {
+    Loop *L, AAResults *AA, MemorySSAUpdater *MSSAU) {
   auto *MSSA = MSSAU->getMemorySSA();
   auto CurAST = std::make_unique<AliasSetTracker>(*AA, MSSA, L);
   CurAST->addAllInstructionsInLoopUsingMSSA();
@@ -2144,7 +2147,7 @@ LoopInvariantCodeMotion::collectAliasInfoForLoopWithMSSA(
 
 static bool pointerInvalidatedByLoop(MemoryLocation MemLoc,
                                      AliasSetTracker *CurAST, Loop *CurLoop,
-                                     AliasAnalysis *AA) {
+                                     AAResults *AA) {
   // First check to see if any of the basic blocks in CurLoop invalidate *V.
   bool isInvalidatedAccordingToAST = CurAST->getAliasSetFor(MemLoc).isMod();
 

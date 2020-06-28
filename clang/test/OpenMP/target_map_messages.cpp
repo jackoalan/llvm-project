@@ -1,10 +1,10 @@
-// RUN: %clang_cc1 -verify=expected,le45 -fopenmp -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
+// RUN: %clang_cc1 -verify=expected,le50 -fopenmp -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le45 -fopenmp -fopenmp-version=40 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le45 -fopenmp -fopenmp-version=45 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le50 -fopenmp -fopenmp-version=50 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -DCCODE -verify -fopenmp -ferror-limit 200 -x c %s -Wno-openmp -Wuninitialized
 
-// RUN: %clang_cc1 -verify=expected,le45 -fopenmp-simd -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
+// RUN: %clang_cc1 -verify=expected,le50 -fopenmp-simd -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le45 -fopenmp-simd -fopenmp-version=40 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le45 -fopenmp-simd -fopenmp-version=45 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
 // RUN: %clang_cc1 -verify=expected,le50 -fopenmp-simd -fopenmp-version=50 -ferror-limit 200 %s -Wno-openmp-target -Wuninitialized
@@ -598,7 +598,7 @@ int main(int argc, char **argv) {
   const int (&l)[5] = da;
   SC1 s;
   SC1 *p;
-#pragma omp target data map // expected-error {{expected '(' after 'map'}} expected-error {{expected at least one 'map' or 'use_device_ptr' clause for '#pragma omp target data'}}
+#pragma omp target data map // expected-error {{expected '(' after 'map'}} le45-error {{expected at least one 'map' or 'use_device_ptr' clause for '#pragma omp target data'}} le50-error {{expected at least one 'map', 'use_device_ptr', or 'use_device_addr' clause for '#pragma omp target data'}}
 #pragma omp target data map( // expected-error {{expected ')'}} expected-note {{to match this '('}} expected-error {{expected expression}}
 #pragma omp target data map() // expected-error {{expected expression}}
 #pragma omp target data map(alloc) // expected-error {{use of undeclared identifier 'alloc'}}

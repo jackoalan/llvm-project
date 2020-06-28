@@ -39,7 +39,7 @@ namespace llvm {
 ///
 /// The template parameter specifies the type which should be used to hold the
 /// Size and Capacity of the SmallVector, so it can be adjusted.
-/// Using 32 bit size is desirable to shink the size of the SmallVector.
+/// Using 32 bit size is desirable to shrink the size of the SmallVector.
 /// Using 64 bit size is desirable for cases like SmallVector<char>, where a
 /// 32 bit size would limit the vector to ~4GB. SmallVectors are used for
 /// buffering bitcode output - which can exceed 4GB.
@@ -60,38 +60,7 @@ protected:
   /// This is an implementation of the grow() method which only works
   /// on POD-like data types and is out of line to reduce code duplication.
   /// This function will report a fatal error if it cannot increase capacity.
-  void grow_pod(void *FirstEl, size_t MinCapacity, size_t TSize) {
-    // Ensure we can fit the new capacity.
-    // This is only going to be applicable if the when the capacity is 32 bit.
-    if (MinCapacity > SizeTypeMax())
-      report_bad_alloc_error("SmallVector capacity overflow during allocation");
-
-    // Ensure we can meet the guarantee of space for at least one more element.
-    // The above check alone will not catch the case where grow is called with a
-    // default MinCapacity of 0, but the current capacity cannot be increased.
-    // This is only going to be applicable if the when the capacity is 32 bit.
-    if (capacity() == SizeTypeMax())
-      report_bad_alloc_error("SmallVector capacity unable to grow");
-
-    // In theory 2*capacity can overflow if the capacity is 64 bit, but the
-    // original capacity would never be large enough for this to be a problem.
-    size_t NewCapacity = 2 * capacity() + 1; // Always grow.
-    NewCapacity = std::min(std::max(NewCapacity, MinCapacity), SizeTypeMax());
-
-    void *NewElts;
-    if (BeginX == FirstEl) {
-      NewElts = safe_malloc(NewCapacity * TSize);
-
-      // Copy the elements over.  No need to run dtors on PODs.
-      memcpy(NewElts, this->BeginX, size() * TSize);
-    } else {
-      // If this wasn't grown from the inline copy, grow the allocated space.
-      NewElts = safe_realloc(this->BeginX, NewCapacity * TSize);
-    }
-
-    this->BeginX = NewElts;
-    this->Capacity = NewCapacity;
-  }
+  void grow_pod(void *FirstEl, size_t MinCapacity, size_t TSize);
 
 public:
   size_t size() const { return Size; }
@@ -116,7 +85,8 @@ public:
 
 template <class T>
 using SmallVectorSizeType =
-    typename std::conditional<sizeof(T) < 4, uintptr_t, uint32_t>::type;
+    typename std::conditional<sizeof(T) < 4 && sizeof(void *) >= 8, uint64_t,
+                              uint32_t>::type;
 
 /// Figure out the offset of the first element.
 template <class T, typename = void> struct SmallVectorAlignmentAndSize {
@@ -230,9 +200,17 @@ public:
   }
 };
 
-/// SmallVectorTemplateBase<TriviallyCopyable = false> - This is where we put method
-/// implementations that are designed to work with non-POD-like T's.
-template <typename T, bool = is_trivially_copyable<T>::value>
+/// SmallVectorTemplateBase<TriviallyCopyable = false> - This is where we put
+/// method implementations that are designed to work with non-trivial T's.
+///
+/// We approximate is_trivially_copyable with trivial move/copy construction and
+/// trivial destruction. While the standard doesn't specify that you're allowed
+/// copy these types with memcpy, there is no way for the type to observe this.
+/// This catches the important case of std::pair<POD, POD>, which is not
+/// trivially assignable.
+template <typename T, bool = (is_trivially_copy_constructible<T>::value) &&
+                             (is_trivially_move_constructible<T>::value) &&
+                             std::is_trivially_destructible<T>::value>
 class SmallVectorTemplateBase : public SmallVectorTemplateCommon<T> {
 protected:
   SmallVectorTemplateBase(size_t Size) : SmallVectorTemplateCommon<T>(Size) {}
@@ -289,14 +267,14 @@ public:
 template <typename T, bool TriviallyCopyable>
 void SmallVectorTemplateBase<T, TriviallyCopyable>::grow(size_t MinSize) {
   // Ensure we can fit the new capacity.
-  // This is only going to be applicable if the when the capacity is 32 bit.
+  // This is only going to be applicable when the capacity is 32 bit.
   if (MinSize > this->SizeTypeMax())
     report_bad_alloc_error("SmallVector capacity overflow during allocation");
 
   // Ensure we can meet the guarantee of space for at least one more element.
   // The above check alone will not catch the case where grow is called with a
   // default MinCapacity of 0, but the current capacity cannot be increased.
-  // This is only going to be applicable if the when the capacity is 32 bit.
+  // This is only going to be applicable when the capacity is 32 bit.
   if (this->capacity() == this->SizeTypeMax())
     report_bad_alloc_error("SmallVector capacity unable to grow");
 
@@ -320,7 +298,9 @@ void SmallVectorTemplateBase<T, TriviallyCopyable>::grow(size_t MinSize) {
 }
 
 /// SmallVectorTemplateBase<TriviallyCopyable = true> - This is where we put
-/// method implementations that are designed to work with POD-like T's.
+/// method implementations that are designed to work with trivially copyable
+/// T's. This allows using memcpy in place of copy/move construction and
+/// skipping destruction.
 template <typename T>
 class SmallVectorTemplateBase<T, true> : public SmallVectorTemplateCommon<T> {
 protected:
@@ -900,7 +880,8 @@ template <typename T> struct alignas(alignof(T)) SmallVectorStorage<T, 0> {};
 /// Note that this does not attempt to be exception safe.
 ///
 template <typename T, unsigned N>
-class SmallVector : public SmallVectorImpl<T>, SmallVectorStorage<T, N> {
+class LLVM_GSL_OWNER SmallVector : public SmallVectorImpl<T>,
+                                   SmallVectorStorage<T, N> {
 public:
   SmallVector() : SmallVectorImpl<T>(N) {}
 

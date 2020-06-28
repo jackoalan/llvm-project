@@ -174,6 +174,7 @@ void SendThreadExitedEvent(lldb::tid_t tid) {
 void SendTerminatedEvent() {
   if (!g_vsc.sent_terminated_event) {
     g_vsc.sent_terminated_event = true;
+    g_vsc.RunTerminateCommands();
     // Send a "terminated" event
     llvm::json::Object event(CreateEventObject("terminated"));
     g_vsc.SendJSON(llvm::json::Value(std::move(event)));
@@ -514,6 +515,7 @@ void SetSourceMapFromArguments(const llvm::json::Object &arguments) {
 //   }]
 // }
 void request_attach(const llvm::json::Object &request) {
+  g_vsc.is_attach = true;
   llvm::json::Object response;
   lldb::SBError error;
   FillResponse(request, response);
@@ -529,17 +531,19 @@ void request_attach(const llvm::json::Object &request) {
   g_vsc.pre_run_commands = GetStrings(arguments, "preRunCommands");
   g_vsc.stop_commands = GetStrings(arguments, "stopCommands");
   g_vsc.exit_commands = GetStrings(arguments, "exitCommands");
+  g_vsc.terminate_commands = GetStrings(arguments, "terminateCommands");
   auto attachCommands = GetStrings(arguments, "attachCommands");
-  g_vsc.stop_at_entry = GetBoolean(arguments, "stopOnEntry", false);
-  const auto debuggerRoot = GetString(arguments, "debuggerRoot");
+  llvm::StringRef core_file = GetString(arguments, "coreFile");
+  g_vsc.stop_at_entry =
+      core_file.empty() ? GetBoolean(arguments, "stopOnEntry", false) : true;
+  const llvm::StringRef debuggerRoot = GetString(arguments, "debuggerRoot");
 
   // This is a hack for loading DWARF in .o files on Mac where the .o files
   // in the debug map of the main executable have relative paths which require
   // the lldb-vscode binary to have its working directory set to that relative
   // root for the .o files in order to be able to load debug info.
-  if (!debuggerRoot.empty()) {
-    llvm::sys::fs::set_current_path(debuggerRoot.data());
-  }
+  if (!debuggerRoot.empty())
+    llvm::sys::fs::set_current_path(debuggerRoot);
 
   // Run any initialize LLDB commands the user specified in the launch.json
   g_vsc.RunInitCommands();
@@ -569,7 +573,10 @@ void request_attach(const llvm::json::Object &request) {
     // Disable async events so the attach will be successful when we return from
     // the launch call and the launch will happen synchronously
     g_vsc.debugger.SetAsync(false);
-    g_vsc.target.Attach(attach_info, error);
+    if (core_file.empty())
+      g_vsc.target.Attach(attach_info, error);
+    else
+      g_vsc.target.LoadCore(core_file.data(), error);
     // Reenable async events
     g_vsc.debugger.SetAsync(true);
   } else {
@@ -584,7 +591,7 @@ void request_attach(const llvm::json::Object &request) {
 
   SetSourceMapFromArguments(*arguments);
 
-  if (error.Success()) {
+  if (error.Success() && core_file.empty()) {
     auto attached_pid = g_vsc.target.GetProcess().GetProcessID();
     if (attached_pid == LLDB_INVALID_PROCESS_ID) {
       if (attachCommands.empty())
@@ -765,10 +772,11 @@ void request_disconnect(const llvm::json::Object &request) {
   FillResponse(request, response);
   auto arguments = request.getObject("arguments");
 
-  bool terminateDebuggee = GetBoolean(arguments, "terminateDebuggee", false);
+  bool defaultTerminateDebuggee = g_vsc.is_attach ? false : true;
+  bool terminateDebuggee =
+      GetBoolean(arguments, "terminateDebuggee", defaultTerminateDebuggee);
   lldb::SBProcess process = g_vsc.target.GetProcess();
   auto state = process.GetState();
-
   switch (state) {
   case lldb::eStateInvalid:
   case lldb::eStateUnloaded:
@@ -784,15 +792,14 @@ void request_disconnect(const llvm::json::Object &request) {
   case lldb::eStateStopped:
   case lldb::eStateRunning:
     g_vsc.debugger.SetAsync(false);
-    if (terminateDebuggee)
-      process.Kill();
-    else
-      process.Detach();
+    lldb::SBError error = terminateDebuggee ? process.Kill() : process.Detach();
+    if (!error.Success())
+      response.try_emplace("error", error.GetCString());
     g_vsc.debugger.SetAsync(true);
     break;
   }
-  g_vsc.SendJSON(llvm::json::Value(std::move(response)));
   SendTerminatedEvent();
+  g_vsc.SendJSON(llvm::json::Value(std::move(response)));
   if (g_vsc.event_thread.joinable()) {
     g_vsc.broadcaster.BroadcastEventByType(eBroadcastBitStopEventThread);
     g_vsc.event_thread.join();
@@ -963,7 +970,7 @@ void request_completions(const llvm::json::Object &request) {
     text.c_str(),
     actual_column,
     0, -1, matches, descriptions);
-  size_t count = std::min((uint32_t)50, matches.GetSize());
+  size_t count = std::min((uint32_t)100, matches.GetSize());
   targets.reserve(count);
   for (size_t i = 0; i < count; i++) {
     std::string match = matches.GetStringAtIndex(i);
@@ -1353,6 +1360,7 @@ void request_initialize(const llvm::json::Object &request) {
 //   }]
 // }
 void request_launch(const llvm::json::Object &request) {
+  g_vsc.is_attach = false;
   llvm::json::Object response;
   lldb::SBError error;
   FillResponse(request, response);
@@ -1361,17 +1369,17 @@ void request_launch(const llvm::json::Object &request) {
   g_vsc.pre_run_commands = GetStrings(arguments, "preRunCommands");
   g_vsc.stop_commands = GetStrings(arguments, "stopCommands");
   g_vsc.exit_commands = GetStrings(arguments, "exitCommands");
+  g_vsc.terminate_commands = GetStrings(arguments, "terminateCommands");
   auto launchCommands = GetStrings(arguments, "launchCommands");
   g_vsc.stop_at_entry = GetBoolean(arguments, "stopOnEntry", false);
-  const auto debuggerRoot = GetString(arguments, "debuggerRoot");
+  const llvm::StringRef debuggerRoot = GetString(arguments, "debuggerRoot");
 
   // This is a hack for loading DWARF in .o files on Mac where the .o files
   // in the debug map of the main executable have relative paths which require
   // the lldb-vscode binary to have its working directory set to that relative
   // root for the .o files in order to be able to load debug info.
-  if (!debuggerRoot.empty()) {
-    llvm::sys::fs::set_current_path(debuggerRoot.data());
-  }
+  if (!debuggerRoot.empty())
+    llvm::sys::fs::set_current_path(debuggerRoot);
 
   // Run any initialize LLDB commands the user specified in the launch.json.
   // This is run before target is created, so commands can't do anything with

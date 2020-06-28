@@ -121,6 +121,11 @@ add_clang_library(clangStaticAnalyzerCheckers
   VLASizeChecker.cpp
   ValistChecker.cpp
   VirtualCallChecker.cpp
+  WebKit/NoUncountedMembersChecker.cpp
+  WebKit/ASTUtils.cpp
+  WebKit/PtrTypesSemantics.cpp
+  WebKit/RefCntblBaseVirtualDtorChecker.cpp
+  WebKit/UncountedCallArgsChecker.cpp
 
   LINK_LIBS
   clangAST
@@ -129,4 +134,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   clangBasic
   clangLex
   clangStaticAnalyzerCore
+
+  DEPENDS
+  omp_gen
   )

@@ -143,11 +143,11 @@ struct PrintingPolicy {
         MSWChar(LO.MicrosoftExt && !LO.WChar), IncludeNewlines(true),
         MSVCFormatting(false), ConstantsAsWritten(false),
         SuppressImplicitBase(false), FullyQualifiedName(false),
-        PrintCanonicalTypes(false), SuppressNestedQualifiers(false),
-        SuppressListInitialization(false), SeparateConditionVarDecls(false),
-        ConstantExprsAsInt(false), SilentNullStatement(false),
-        NeverSuppressScope(false), UseStdOffsetOf(false),
-        NoLoopInitVar(false) {}
+        PrintCanonicalTypes(false), PrintInjectedClassNameWithArguments(true),
+        SuppressNestedQualifiers(false), SuppressListInitialization(false),
+        SeparateConditionVarDecls(false), ConstantExprsAsInt(false),
+        SilentNullStatement(false), NeverSuppressScope(false),
+        UseStdOffsetOf(false), NoLoopInitVar(false) {}
 
   /// Adjust this printing policy for cases where it's known that we're
   /// printing C++ code (for instance, if AST dumping reaches a C++-only
@@ -268,8 +268,8 @@ struct PrintingPolicy {
   /// with zero parameters.
   unsigned UseVoidForZeroParams : 1;
 
-  /// Whether nested templates must be closed like 'a<b<c> >' rather than
-  /// 'a<b<c>>'.
+  /// Whether nested templates must be closed like 'a\<b\<c\> \>' rather than
+  /// 'a\<b\<c\>\>'.
   unsigned SplitTemplateClosers : 1;
 
   /// Provide a 'terse' output.
@@ -327,6 +327,11 @@ struct PrintingPolicy {
 
   /// Whether to print types as written or canonically.
   unsigned PrintCanonicalTypes : 1;
+
+  /// Whether to print an InjectedClassNameType with template arguments or as
+  /// written. When a template argument is unnamed, printing it results in
+  /// invalid C++ code.
+  unsigned PrintInjectedClassNameWithArguments : 1;
 
   unsigned SuppressNestedQualifiers : 1;
 

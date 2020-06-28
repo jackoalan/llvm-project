@@ -15,10 +15,10 @@
 
 #include "PassDetail.h"
 #include "mlir/Analysis/AffineAnalysis.h"
-#include "mlir/Analysis/Dominance.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
@@ -178,7 +178,7 @@ void MemRefDataFlowOpt::forwardStoreToLoad(AffineLoadOp loadOp) {
 void MemRefDataFlowOpt::runOnFunction() {
   // Only supports single block functions at the moment.
   FuncOp f = getFunction();
-  if (f.getBlocks().size() != 1) {
+  if (!llvm::hasSingleElement(f)) {
     markAllAnalysesPreserved();
     return;
   }
@@ -207,7 +207,7 @@ void MemRefDataFlowOpt::runOnFunction() {
       // could still erase it if the call had no side-effects.
       continue;
     if (llvm::any_of(memref.getUsers(), [&](Operation *ownerOp) {
-          return (!isa<AffineStoreOp>(ownerOp) && !isa<DeallocOp>(ownerOp));
+          return !isa<AffineStoreOp, DeallocOp>(ownerOp);
         }))
       continue;
 

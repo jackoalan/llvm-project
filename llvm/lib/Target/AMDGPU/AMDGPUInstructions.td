@@ -77,6 +77,9 @@ class ILFormat<dag outs, dag ins, string asmstr, list<dag> pattern>
 
 def TruePredicate : Predicate<"">;
 
+// FIXME: Tablegen should specially supports this
+def FalsePredicate : Predicate<"false">;
+
 // Add a predicate to the list if does not already exist to deduplicate it.
 class PredConcat<list<Predicate> lst, Predicate pred> {
   list<Predicate> ret =
@@ -811,4 +814,9 @@ def fmaxnum_like_oneuse : PatFrags<(ops node:$src0, node:$src1),
 def any_fmad : PatFrags<(ops node:$src0, node:$src1, node:$src2),
   [(fmad node:$src0, node:$src1, node:$src2),
    (AMDGPUfmad_ftz node:$src0, node:$src1, node:$src2)]
+>;
+
+// FIXME: fsqrt should not select directly
+def any_amdgcn_sqrt : PatFrags<(ops node:$src0),
+  [(fsqrt node:$src0), (int_amdgcn_sqrt node:$src0)]
 >;

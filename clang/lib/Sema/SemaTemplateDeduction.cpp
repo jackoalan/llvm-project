@@ -738,8 +738,9 @@ private:
       // type, so we need to collect the pending deduced values for those packs.
       if (auto *NTTP = dyn_cast<NonTypeTemplateParmDecl>(
               TemplateParams->getParam(Index))) {
-        if (auto *Expansion = dyn_cast<PackExpansionType>(NTTP->getType()))
-          ExtraDeductions.push_back(Expansion->getPattern());
+        if (!NTTP->isExpandedParameterPack())
+          if (auto *Expansion = dyn_cast<PackExpansionType>(NTTP->getType()))
+            ExtraDeductions.push_back(Expansion->getPattern());
       }
       // FIXME: Also collect the unexpanded packs in any type and template
       // parameter packs that are pack expansions.
@@ -2053,6 +2054,101 @@ DeduceTemplateArgumentsByTypeMatch(Sema &S,
       }
 
       return Sema::TDK_NonDeducedMismatch;
+    }
+
+    //     (clang extension)
+    //
+    //     T __attribute__((matrix_type(<integral constant>,
+    //                                  <integral constant>)))
+    case Type::ConstantMatrix: {
+      const ConstantMatrixType *MatrixArg = dyn_cast<ConstantMatrixType>(Arg);
+      if (!MatrixArg)
+        return Sema::TDK_NonDeducedMismatch;
+
+      const ConstantMatrixType *MatrixParam = cast<ConstantMatrixType>(Param);
+      // Check that the dimensions are the same
+      if (MatrixParam->getNumRows() != MatrixArg->getNumRows() ||
+          MatrixParam->getNumColumns() != MatrixArg->getNumColumns()) {
+        return Sema::TDK_NonDeducedMismatch;
+      }
+      // Perform deduction on element types.
+      return DeduceTemplateArgumentsByTypeMatch(
+          S, TemplateParams, MatrixParam->getElementType(),
+          MatrixArg->getElementType(), Info, Deduced, TDF);
+    }
+
+    case Type::DependentSizedMatrix: {
+      const MatrixType *MatrixArg = dyn_cast<MatrixType>(Arg);
+      if (!MatrixArg)
+        return Sema::TDK_NonDeducedMismatch;
+
+      // Check the element type of the matrixes.
+      const DependentSizedMatrixType *MatrixParam =
+          cast<DependentSizedMatrixType>(Param);
+      if (Sema::TemplateDeductionResult Result =
+              DeduceTemplateArgumentsByTypeMatch(
+                  S, TemplateParams, MatrixParam->getElementType(),
+                  MatrixArg->getElementType(), Info, Deduced, TDF))
+        return Result;
+
+      // Try to deduce a matrix dimension.
+      auto DeduceMatrixArg =
+          [&S, &Info, &Deduced, &TemplateParams](
+              Expr *ParamExpr, const MatrixType *Arg,
+              unsigned (ConstantMatrixType::*GetArgDimension)() const,
+              Expr *(DependentSizedMatrixType::*GetArgDimensionExpr)() const) {
+            const auto *ArgConstMatrix = dyn_cast<ConstantMatrixType>(Arg);
+            const auto *ArgDepMatrix = dyn_cast<DependentSizedMatrixType>(Arg);
+            if (!ParamExpr->isValueDependent()) {
+              llvm::APSInt ParamConst(
+                  S.Context.getTypeSize(S.Context.getSizeType()));
+              if (!ParamExpr->isIntegerConstantExpr(ParamConst, S.Context))
+                return Sema::TDK_NonDeducedMismatch;
+
+              if (ArgConstMatrix) {
+                if ((ArgConstMatrix->*GetArgDimension)() == ParamConst)
+                  return Sema::TDK_Success;
+                return Sema::TDK_NonDeducedMismatch;
+              }
+
+              Expr *ArgExpr = (ArgDepMatrix->*GetArgDimensionExpr)();
+              llvm::APSInt ArgConst(
+                  S.Context.getTypeSize(S.Context.getSizeType()));
+              if (!ArgExpr->isValueDependent() &&
+                  ArgExpr->isIntegerConstantExpr(ArgConst, S.Context) &&
+                  ArgConst == ParamConst)
+                return Sema::TDK_Success;
+              return Sema::TDK_NonDeducedMismatch;
+            }
+
+            NonTypeTemplateParmDecl *NTTP =
+                getDeducedParameterFromExpr(Info, ParamExpr);
+            if (!NTTP)
+              return Sema::TDK_Success;
+
+            if (ArgConstMatrix) {
+              llvm::APSInt ArgConst(
+                  S.Context.getTypeSize(S.Context.getSizeType()));
+              ArgConst = (ArgConstMatrix->*GetArgDimension)();
+              return DeduceNonTypeTemplateArgument(
+                  S, TemplateParams, NTTP, ArgConst, S.Context.getSizeType(),
+                  /*ArrayBound=*/true, Info, Deduced);
+            }
+
+            return DeduceNonTypeTemplateArgument(
+                S, TemplateParams, NTTP, (ArgDepMatrix->*GetArgDimensionExpr)(),
+                Info, Deduced);
+          };
+
+      auto Result = DeduceMatrixArg(MatrixParam->getRowExpr(), MatrixArg,
+                                    &ConstantMatrixType::getNumRows,
+                                    &DependentSizedMatrixType::getRowExpr);
+      if (Result)
+        return Result;
+
+      return DeduceMatrixArg(MatrixParam->getColumnExpr(), MatrixArg,
+                             &ConstantMatrixType::getNumColumns,
+                             &DependentSizedMatrixType::getColumnExpr);
     }
 
     //     (clang extension)
@@ -4560,6 +4656,8 @@ Sema::DeduceAutoResult
 Sema::DeduceAutoType(TypeLoc Type, Expr *&Init, QualType &Result,
                      Optional<unsigned> DependentDeductionDepth,
                      bool IgnoreConstraints) {
+  if (Init->containsErrors())
+    return DAR_FailedAlreadyDiagnosed;
   if (Init->getType()->isNonOverloadPlaceholderType()) {
     ExprResult NonPlaceholder = CheckPlaceholderExpr(Init);
     if (NonPlaceholder.isInvalid())
@@ -5720,6 +5818,24 @@ MarkUsedTemplateParameters(ASTContext &Ctx, QualType T,
     MarkUsedTemplateParameters(Ctx,
                                DependentASType->getAddrSpaceExpr(),
                                OnlyDeduced, Depth, Used);
+    break;
+  }
+
+  case Type::ConstantMatrix: {
+    const ConstantMatrixType *MatType = cast<ConstantMatrixType>(T);
+    MarkUsedTemplateParameters(Ctx, MatType->getElementType(), OnlyDeduced,
+                               Depth, Used);
+    break;
+  }
+
+  case Type::DependentSizedMatrix: {
+    const DependentSizedMatrixType *MatType = cast<DependentSizedMatrixType>(T);
+    MarkUsedTemplateParameters(Ctx, MatType->getElementType(), OnlyDeduced,
+                               Depth, Used);
+    MarkUsedTemplateParameters(Ctx, MatType->getRowExpr(), OnlyDeduced, Depth,
+                               Used);
+    MarkUsedTemplateParameters(Ctx, MatType->getColumnExpr(), OnlyDeduced,
+                               Depth, Used);
     break;
   }
 

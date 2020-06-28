@@ -151,9 +151,15 @@ private:
 
 public:
   PPCAIXAsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
-      : PPCAsmPrinter(TM, std::move(Streamer)) {}
+      : PPCAsmPrinter(TM, std::move(Streamer)) {
+    if (MAI->isLittleEndian())
+      report_fatal_error(
+          "cannot create AIX PPC Assembly Printer for a little-endian target");
+  }
 
   StringRef getPassName() const override { return "AIX PPC Assembly Printer"; }
+
+  bool doInitialization(Module &M) override;
 
   void SetupMachineFunction(MachineFunction &MF) override;
 
@@ -162,6 +168,8 @@ public:
   void emitFunctionDescriptor() override;
 
   void emitEndOfAsmFile(Module &) override;
+
+  void emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const override;
 };
 
 } // end anonymous namespace
@@ -274,14 +282,17 @@ bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
 
     switch (ExtraCode[0]) {
     default: return true;  // Unknown modifier.
-    case 'y': {            // A memory reference for an X-form instruction
+    case 'L': // A memory reference to the upper word of a double word op.
+      O << getDataLayout().getPointerSize() << "(";
+      printOperand(MI, OpNo, O);
+      O << ")";
+      return false;
+    case 'y': // A memory reference for an X-form instruction
       O << "0, ";
       printOperand(MI, OpNo, O);
       return false;
-    }
     case 'U': // Print 'u' for update form.
     case 'X': // Print 'x' for indexed form.
-    {
       // FIXME: Currently for PowerPC memory operands are always loaded
       // into a register, so we never get an update or indexed form.
       // This is bad even for offset forms, since even if we know we
@@ -290,7 +301,6 @@ bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
       // tolerate 'U' and 'X' but don't output anything.
       assert(MI->getOperand(OpNo).isReg());
       return false;
-    }
     }
   }
 
@@ -1133,8 +1143,11 @@ void PPCAsmPrinter::emitInstruction(const MachineInstr *MI) {
     // can be enabled for those subtargets.
     unsigned OpNum = (MI->getOpcode() == PPC::STD) ? 2 : 1;
     const MachineOperand &MO = MI->getOperand(OpNum);
-    if (MO.isGlobal() && MO.getGlobal()->getAlignment() < 4)
-      llvm_unreachable("Global must be word-aligned for LD, STD, LWA!");
+    if (MO.isGlobal()) {
+      const DataLayout &DL = MO.getGlobal()->getParent()->getDataLayout();
+      if (MO.getGlobal()->getPointerAlignment(DL) < 4)
+        llvm_unreachable("Global must be word-aligned for LD, STD, LWA!");
+    }
     // Now process the instruction normally.
     break;
   }
@@ -1181,7 +1194,7 @@ void PPCLinuxAsmPrinter::emitInstruction(const MachineInstr *MI) {
                            OutContext)));
     EmitToStreamer(*OutStreamer, MCInstBuilder(PPC::MTLR8).addReg(PPC::X0));
     OutStreamer->emitLabel(EndOfSled);
-    recordSled(BeginOfSled, *MI, SledKind::FUNCTION_ENTER);
+    recordSled(BeginOfSled, *MI, SledKind::FUNCTION_ENTER, 2);
     break;
   }
   case TargetOpcode::PATCHABLE_RET: {
@@ -1269,7 +1282,7 @@ void PPCLinuxAsmPrinter::emitInstruction(const MachineInstr *MI) {
     EmitToStreamer(*OutStreamer, RetInst);
     if (IsConditional)
       OutStreamer->emitLabel(FallthroughLabel);
-    recordSled(BeginOfSled, *MI, SledKind::FUNCTION_EXIT);
+    recordSled(BeginOfSled, *MI, SledKind::FUNCTION_EXIT, 2);
     break;
   }
   case TargetOpcode::PATCHABLE_FUNCTION_EXIT:
@@ -1396,8 +1409,8 @@ void PPCLinuxAsmPrinter::emitEndOfAsmFile(Module &M) {
 
   bool isPPC64 = DL.getPointerSizeInBits() == 64;
 
-  PPCTargetStreamer &TS =
-      static_cast<PPCTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  PPCTargetStreamer *TS =
+      static_cast<PPCTargetStreamer *>(OutStreamer->getTargetStreamer());
 
   if (!TOC.empty()) {
     const char *Name = isPPC64 ? ".toc" : ".got2";
@@ -1412,8 +1425,8 @@ void PPCLinuxAsmPrinter::emitEndOfAsmFile(Module &M) {
       MCSymbol *const TOCEntryLabel = TOCMapPair.second;
 
       OutStreamer->emitLabel(TOCEntryLabel);
-      if (isPPC64)
-        TS.emitTCEntry(*TOCEntryTarget);
+      if (isPPC64 && TS != nullptr)
+        TS->emitTCEntry(*TOCEntryTarget);
       else
         OutStreamer->emitSymbolValue(TOCEntryTarget, 4);
     }
@@ -1537,13 +1550,14 @@ void PPCLinuxAsmPrinter::emitFunctionBodyStart() {
     // 3) A function does not use the TOC pointer R2 but does have calls.
     //    In this case st_other=1 since we do not know whether or not any
     //    of the callees clobber R2. This case is dealt with in this else if
-    //    block.
+    //    block. Tail calls are considered calls and the st_other should also
+    //    be set to 1 in that case as well.
     // 4) The function does not use the TOC pointer but R2 is used inside
     //    the function. In this case st_other=1 once again.
     // 5) This function uses inline asm. We mark R2 as reserved if the function
-    //    has inline asm so we have to assume that it may be used.
-    if (MF->getFrameInfo().hasCalls() || MF->hasInlineAsm() ||
-        (!PPCFI->usesTOCBasePtr() && UsesX2OrR2)) {
+    //    has inline asm as we have to assume that it may be used.
+    if (MF->getFrameInfo().hasCalls() || MF->getFrameInfo().hasTailCall() ||
+        MF->hasInlineAsm() || (!PPCFI->usesTOCBasePtr() && UsesX2OrR2)) {
       PPCTargetStreamer *TS =
           static_cast<PPCTargetStreamer *>(OutStreamer->getTargetStreamer());
       if (TS)
@@ -1568,6 +1582,59 @@ void PPCLinuxAsmPrinter::emitFunctionBodyEnd() {
     OutStreamer->emitIntValue(0, 4/*size*/);
     OutStreamer->emitIntValue(0, 8/*size*/);
   }
+}
+
+void PPCAIXAsmPrinter::emitLinkage(const GlobalValue *GV,
+                                   MCSymbol *GVSym) const {
+
+  assert(MAI->hasVisibilityOnlyWithLinkage() &&
+         "AIX's linkage directives take a visibility setting.");
+
+  MCSymbolAttr LinkageAttr = MCSA_Invalid;
+  switch (GV->getLinkage()) {
+  case GlobalValue::ExternalLinkage:
+    LinkageAttr = GV->isDeclaration() ? MCSA_Extern : MCSA_Global;
+    break;
+  case GlobalValue::LinkOnceAnyLinkage:
+  case GlobalValue::LinkOnceODRLinkage:
+  case GlobalValue::WeakAnyLinkage:
+  case GlobalValue::WeakODRLinkage:
+  case GlobalValue::ExternalWeakLinkage:
+    LinkageAttr = MCSA_Weak;
+    break;
+  case GlobalValue::AvailableExternallyLinkage:
+    LinkageAttr = MCSA_Extern;
+    break;
+  case GlobalValue::PrivateLinkage:
+    return;
+  case GlobalValue::InternalLinkage:
+    OutStreamer->emitSymbolAttribute(GVSym, MCSA_LGlobal);
+    return;
+  case GlobalValue::AppendingLinkage:
+    llvm_unreachable("Should never emit this");
+  case GlobalValue::CommonLinkage:
+    llvm_unreachable("CommonLinkage of XCOFF should not come to this path");
+  }
+
+  assert(LinkageAttr != MCSA_Invalid && "LinkageAttr should not MCSA_Invalid.");
+
+  MCSymbolAttr VisibilityAttr = MCSA_Invalid;
+  switch (GV->getVisibility()) {
+
+    // TODO: "exported" and "internal" Visibility needs to go here.
+
+  case GlobalValue::DefaultVisibility:
+    break;
+  case GlobalValue::HiddenVisibility:
+    VisibilityAttr = MAI->getHiddenVisibilityAttr();
+    break;
+  case GlobalValue::ProtectedVisibility:
+    VisibilityAttr = MAI->getProtectedVisibilityAttr();
+    break;
+  }
+
+  OutStreamer->emitXCOFFSymbolLinkageWithVisibility(GVSym, LinkageAttr,
+                                                    VisibilityAttr);
 }
 
 void PPCAIXAsmPrinter::SetupMachineFunction(MachineFunction &MF) {
@@ -1615,9 +1682,10 @@ void PPCAIXAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   GVSym->setStorageClass(
       TargetLoweringObjectFileXCOFF::getStorageClassForGlobal(GV));
 
-  // External global variables are already handled.
-  if (GV->isDeclaration())
+  if (GV->isDeclarationForLinker()) {
+    emitLinkage(GV, GVSym);
     return;
+  }
 
   SectionKind GVKind = getObjFileLowering().getKindForGlobal(GV, TM);
   if (!GVKind.isGlobalWriteableData() && !GVKind.isReadOnly())
@@ -1686,8 +1754,8 @@ void PPCAIXAsmPrinter::emitEndOfAsmFile(Module &M) {
   // Switch to section to emit TOC base.
   OutStreamer->SwitchSection(getObjFileLowering().getTOCBaseSection());
 
-  PPCTargetStreamer &TS =
-      static_cast<PPCTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  PPCTargetStreamer *TS =
+      static_cast<PPCTargetStreamer *>(OutStreamer->getTargetStreamer());
 
   const unsigned EntryByteSize = Subtarget->isPPC64() ? 8 : 4;
   const unsigned TOCEntriesByteSize = TOC.size() * EntryByteSize;
@@ -1706,8 +1774,42 @@ void PPCAIXAsmPrinter::emitEndOfAsmFile(Module &M) {
     OutStreamer->SwitchSection(TCEntry);
 
     OutStreamer->emitLabel(I.second);
-    TS.emitTCEntry(*I.first);
+    if (TS != nullptr)
+      TS->emitTCEntry(*I.first);
   }
+}
+
+bool PPCAIXAsmPrinter::doInitialization(Module &M) {
+  if (M.alias_size() > 0u)
+    report_fatal_error(
+        "module has aliases, which LLVM does not yet support for AIX");
+
+  const bool Result = PPCAsmPrinter::doInitialization(M);
+
+  auto setCsectAlignment = [this](const GlobalObject *GO) {
+    // Declarations have 0 alignment which is set by default.
+    if (GO->isDeclarationForLinker())
+      return;
+
+    SectionKind GOKind = getObjFileLowering().getKindForGlobal(GO, TM);
+    MCSectionXCOFF *Csect = cast<MCSectionXCOFF>(
+        getObjFileLowering().SectionForGlobal(GO, GOKind, TM));
+
+    Align GOAlign = getGVAlignment(GO, GO->getParent()->getDataLayout());
+    if (GOAlign > Csect->getAlignment())
+      Csect->setAlignment(GOAlign);
+  };
+
+  // We need to know, up front, the alignment of csects for the assembly path,
+  // because once a .csect directive gets emitted, we could not change the
+  // alignment value on it.
+  for (const auto &G : M.globals())
+    setCsectAlignment(&G);
+
+  for (const auto &F : M)
+    setCsectAlignment(&F);
+
+  return Result;
 }
 
 /// createPPCAsmPrinterPass - Returns a pass that prints the PPC assembly code

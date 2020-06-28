@@ -207,14 +207,9 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   while (*p++ != 0)
     ;
   // Iterate through auxiliary vectors for AT_EXECPATH.
-  for (;;) {
-    switch (*(uintptr_t *)p++) {
-    case AT_EXECPATH:
+  for (; *(uintptr_t *)p != AT_NULL; p++) {
+    if (*(uintptr_t *)p++ == AT_EXECPATH)
       return *p;
-    case AT_NULL:
-      break;
-    }
-    p++;
   }
 #endif
   // Fall back to argv[0] if auxiliary vectors are not available.
@@ -1161,6 +1156,27 @@ static bool getDarwinConfDir(bool TempDir, SmallVectorImpl<char> &Result) {
   }
   #endif
   return false;
+}
+
+bool cache_directory(SmallVectorImpl<char> &result) {
+#ifdef __APPLE__
+  if (getDarwinConfDir(false/*tempDir*/, result)) {
+    return true;
+  }
+#else
+  // XDG_CACHE_HOME as defined in the XDG Base Directory Specification:
+  // http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
+  if (const char *RequestedDir = getenv("XDG_CACHE_HOME")) {
+    result.clear();
+    result.append(RequestedDir, RequestedDir + strlen(RequestedDir));
+    return true;
+  }
+#endif
+  if (!home_directory(result)) {
+    return false;
+  }
+  append(result, ".cache");
+  return true;
 }
 
 static const char *getEnvTempDir() {

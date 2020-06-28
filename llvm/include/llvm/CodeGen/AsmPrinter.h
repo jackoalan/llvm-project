@@ -17,8 +17,6 @@
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/AsmPrinterHandler.h"
 #include "llvm/CodeGen/DwarfStringPoolEntry.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -48,7 +46,6 @@ class GlobalObject;
 class GlobalValue;
 class GlobalVariable;
 class MachineBasicBlock;
-class MachineBlockFrequencyInfo;
 class MachineConstantPoolValue;
 class MachineDominatorTree;
 class MachineFunction;
@@ -69,11 +66,12 @@ class MCSymbol;
 class MCTargetOptions;
 class MDNode;
 class Module;
-class ProfileSummaryInfo;
 class raw_ostream;
 class StackMaps;
+class StringRef;
 class TargetLoweringObjectFile;
 class TargetMachine;
+class Twine;
 
 namespace remarks {
 class RemarkStreamer;
@@ -111,10 +109,6 @@ public:
 
   /// Optimization remark emitter.
   MachineOptimizationRemarkEmitter *ORE;
-
-  MachineBlockFrequencyInfo *MBFI;
-
-  ProfileSummaryInfo *PSI;
 
   /// The symbol for the entry in __patchable_function_entires.
   MCSymbol *CurrentPatchableFunctionEntrySym = nullptr;
@@ -286,7 +280,7 @@ public:
     const class Function *Fn;
     uint8_t Version;
 
-    void emit(int, MCStreamer *, const MCSymbol *) const;
+    void emit(int, MCStreamer *) const;
   };
 
   // All the sleds to be emitted.
@@ -665,10 +659,10 @@ public:
 
   /// This emits linkage information about \p GVSym based on \p GV, if this is
   /// supported by the target.
-  void emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const;
+  virtual void emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const;
 
   /// Return the alignment for the specified \p GV.
-  static Align getGVAlignment(const GlobalValue *GV, const DataLayout &DL,
+  static Align getGVAlignment(const GlobalObject *GV, const DataLayout &DL,
                               Align InAlign = Align(1));
 
 private:
@@ -680,6 +674,9 @@ private:
 
   /// This method emits the header for the current function.
   virtual void emitFunctionHeader();
+
+  /// This method emits a comment next to header for the current function.
+  virtual void emitFunctionHeaderComment();
 
   /// Emit a blob of inline asm to the output streamer.
   void

@@ -17,15 +17,9 @@
 #include "X86ISelLowering.h"
 #include "X86InstrInfo.h"
 #include "X86SelectionDAGInfo.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/CodeGen/GlobalISel/CallLowering.h"
-#include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
-#include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/CallingConv.h"
-#include "llvm/Target/TargetMachine.h"
 #include <climits>
 #include <memory>
 
@@ -34,7 +28,13 @@
 
 namespace llvm {
 
+class CallLowering;
 class GlobalValue;
+class InstructionSelector;
+class LegalizerInfo;
+class RegisterBankInfo;
+class StringRef;
+class TargetMachine;
 
 /// The X86 backend supports a number of different styles of PIC.
 ///
@@ -437,6 +437,10 @@ protected:
   /// POP+LFENCE+JMP sequence.
   bool UseLVIControlFlowIntegrity = false;
 
+  /// Insert LFENCE instructions to prevent data speculatively injected into
+  /// loads from being used maliciously.
+  bool UseLVILoadHardening = false;
+
   /// Use software floating point for code generation.
   bool UseSoftFloat = false;
 
@@ -643,8 +647,15 @@ public:
   bool hasRTM() const { return HasRTM; }
   bool hasADX() const { return HasADX; }
   bool hasSHA() const { return HasSHA; }
-  bool hasPRFCHW() const { return HasPRFCHW || HasPREFETCHWT1; }
+  bool hasPRFCHW() const { return HasPRFCHW; }
   bool hasPREFETCHWT1() const { return HasPREFETCHWT1; }
+  bool hasPrefetchW() const {
+    // The PREFETCHW instruction was added with 3DNow but later CPUs gave it
+    // its own CPUID bit as part of deprecating 3DNow. Intel eventually added
+    // it and KNL has another that prefetches to L2 cache. We assume the
+    // L1 version exists if the L2 version does.
+    return has3DNow() || hasPRFCHW() || hasPREFETCHWT1();
+  }
   bool hasSSEPrefetch() const {
     // We implicitly enable these when we have a write prefix supporting cache
     // level OR if we have prfchw, but don't already have a read prefetch from
@@ -739,6 +750,7 @@ public:
   bool preferMaskRegisters() const { return PreferMaskRegisters; }
   bool useGLMDivSqrtCosts() const { return UseGLMDivSqrtCosts; }
   bool useLVIControlFlowIntegrity() const { return UseLVIControlFlowIntegrity; }
+  bool useLVILoadHardening() const { return UseLVILoadHardening; }
 
   unsigned getPreferVectorWidth() const { return PreferVectorWidth; }
   unsigned getRequiredVectorWidth() const { return RequiredVectorWidth; }
@@ -836,7 +848,7 @@ public:
     return PICStyle == PICStyles::Style::StubPIC;
   }
 
-  bool isPositionIndependent() const { return TM.isPositionIndependent(); }
+  bool isPositionIndependent() const;
 
   bool isCallingConvWin64(CallingConv::ID CC) const {
     switch (CC) {

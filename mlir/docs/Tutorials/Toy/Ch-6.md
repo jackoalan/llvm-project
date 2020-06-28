@@ -106,8 +106,7 @@ that only legal operations will remain after the conversion.
 
 ```c++
   mlir::ModuleOp module = getOperation();
-  if (mlir::failed(mlir::applyFullConversion(module, target, patterns,
-                                             &typeConverter)))
+  if (mlir::failed(mlir::applyFullConversion(module, target, patterns)))
     signalPassFailure();
 ```
 
@@ -315,7 +314,7 @@ $ echo 'def main() { print([[1, 2], [3, 4]]); }' | ./bin/toyc-ch6 -emit=jit
 
 You can also play with `-emit=mlir`, `-emit=mlir-affine`, `-emit=mlir-llvm`, and
 `-emit=llvm` to compare the various levels of IR involved. Also try options like
-[`--print-ir-after-all`](../../WritingAPass.md#ir-printing) to track the
+[`--print-ir-after-all`](../../PassManagement.md#ir-printing) to track the
 evolution of the IR throughout the pipeline.
 
 The example code used throughout this section can be found in 

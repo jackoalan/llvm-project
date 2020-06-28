@@ -1687,11 +1687,9 @@ static void AddTypeSpecifierResults(const LangOptions &LangOpts,
     Results.AddResult(Result("class", CCP_Type));
     Results.AddResult(Result("wchar_t", CCP_Type));
 
-    // typename qualified-id
+    // typename name
     Builder.AddTypedTextChunk("typename");
     Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
-    Builder.AddPlaceholderChunk("qualifier");
-    Builder.AddTextChunk("::");
     Builder.AddPlaceholderChunk("name");
     Results.AddResult(Result(Builder.TakeString()));
 
@@ -1814,6 +1812,18 @@ static void AddTypedefResult(ResultBuilder &Results) {
   Builder.AddPlaceholderChunk("type");
   Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
   Builder.AddPlaceholderChunk("name");
+  Builder.AddChunk(CodeCompletionString::CK_SemiColon);
+  Results.AddResult(CodeCompletionResult(Builder.TakeString()));
+}
+
+// using name = type
+static void AddUsingAliasResult(CodeCompletionBuilder &Builder,
+                                ResultBuilder &Results) {
+  Builder.AddTypedTextChunk("using");
+  Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
+  Builder.AddPlaceholderChunk("name");
+  Builder.AddChunk(CodeCompletionString::CK_Equal);
+  Builder.AddPlaceholderChunk("type");
   Builder.AddChunk(CodeCompletionString::CK_SemiColon);
   Results.AddResult(CodeCompletionResult(Builder.TakeString()));
 }
@@ -2061,6 +2071,9 @@ static void AddOrdinaryNameResults(Sema::ParserCompletionContext CCC, Scope *S,
       Builder.AddChunk(CodeCompletionString::CK_SemiColon);
       Results.AddResult(Result(Builder.TakeString()));
 
+      if (SemaRef.getLangOpts().CPlusPlus11)
+        AddUsingAliasResult(Builder, Results);
+
       // using typename qualifier::name (only in a dependent context)
       if (SemaRef.CurContext->isDependentContext()) {
         Builder.AddTypedTextChunk("using typename");
@@ -2141,6 +2154,9 @@ static void AddOrdinaryNameResults(Sema::ParserCompletionContext CCC, Scope *S,
 
   case Sema::PCC_RecoveryInFunction:
   case Sema::PCC_Statement: {
+    if (SemaRef.getLangOpts().CPlusPlus11)
+      AddUsingAliasResult(Builder, Results);
+
     AddTypedefResult(Results);
 
     if (SemaRef.getLangOpts().CPlusPlus && Results.includeCodePatterns() &&
@@ -5195,7 +5211,12 @@ void Sema::CodeCompleteMemberReferenceExpr(Scope *S, Expr *Base,
         Results.AddResult(std::move(Result));
       }
     } else if (!IsArrow && BaseType->isObjCObjectPointerType()) {
-      // Objective-C property reference.
+      // Objective-C property reference. Bail if we're performing fix-it code
+      // completion since Objective-C properties are normally backed by ivars,
+      // most Objective-C fix-its here would have little value.
+      if (AccessOpFixIt.hasValue()) {
+        return false;
+      }
       AddedPropertiesSet AddedProperties;
 
       if (const ObjCObjectPointerType *ObjCPtr =
@@ -5215,7 +5236,12 @@ void Sema::CodeCompleteMemberReferenceExpr(Scope *S, Expr *Base,
                           /*InOriginalClass*/ false);
     } else if ((IsArrow && BaseType->isObjCObjectPointerType()) ||
                (!IsArrow && BaseType->isObjCObjectType())) {
-      // Objective-C instance variable access.
+      // Objective-C instance variable access. Bail if we're performing fix-it
+      // code completion since Objective-C properties are normally backed by
+      // ivars, most Objective-C fix-its here would have little value.
+      if (AccessOpFixIt.hasValue()) {
+        return false;
+      }
       ObjCInterfaceDecl *Class = nullptr;
       if (const ObjCObjectPointerType *ObjCPtr =
               BaseType->getAs<ObjCObjectPointerType>())
@@ -6513,22 +6539,24 @@ static bool ObjCPropertyFlagConflicts(unsigned Attributes, unsigned NewFlag) {
   Attributes |= NewFlag;
 
   // Check for collisions with "readonly".
-  if ((Attributes & ObjCDeclSpec::DQ_PR_readonly) &&
-      (Attributes & ObjCDeclSpec::DQ_PR_readwrite))
+  if ((Attributes & ObjCPropertyAttribute::kind_readonly) &&
+      (Attributes & ObjCPropertyAttribute::kind_readwrite))
     return true;
 
   // Check for more than one of { assign, copy, retain, strong, weak }.
   unsigned AssignCopyRetMask =
       Attributes &
-      (ObjCDeclSpec::DQ_PR_assign | ObjCDeclSpec::DQ_PR_unsafe_unretained |
-       ObjCDeclSpec::DQ_PR_copy | ObjCDeclSpec::DQ_PR_retain |
-       ObjCDeclSpec::DQ_PR_strong | ObjCDeclSpec::DQ_PR_weak);
-  if (AssignCopyRetMask && AssignCopyRetMask != ObjCDeclSpec::DQ_PR_assign &&
-      AssignCopyRetMask != ObjCDeclSpec::DQ_PR_unsafe_unretained &&
-      AssignCopyRetMask != ObjCDeclSpec::DQ_PR_copy &&
-      AssignCopyRetMask != ObjCDeclSpec::DQ_PR_retain &&
-      AssignCopyRetMask != ObjCDeclSpec::DQ_PR_strong &&
-      AssignCopyRetMask != ObjCDeclSpec::DQ_PR_weak)
+      (ObjCPropertyAttribute::kind_assign |
+       ObjCPropertyAttribute::kind_unsafe_unretained |
+       ObjCPropertyAttribute::kind_copy | ObjCPropertyAttribute::kind_retain |
+       ObjCPropertyAttribute::kind_strong | ObjCPropertyAttribute::kind_weak);
+  if (AssignCopyRetMask &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_assign &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_unsafe_unretained &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_copy &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_retain &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_strong &&
+      AssignCopyRetMask != ObjCPropertyAttribute::kind_weak)
     return true;
 
   return false;
@@ -6544,32 +6572,41 @@ void Sema::CodeCompleteObjCPropertyFlags(Scope *S, ObjCDeclSpec &ODS) {
                         CodeCompleter->getCodeCompletionTUInfo(),
                         CodeCompletionContext::CCC_Other);
   Results.EnterNewScope();
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_readonly))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_readonly))
     Results.AddResult(CodeCompletionResult("readonly"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_assign))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_assign))
     Results.AddResult(CodeCompletionResult("assign"));
   if (!ObjCPropertyFlagConflicts(Attributes,
-                                 ObjCDeclSpec::DQ_PR_unsafe_unretained))
+                                 ObjCPropertyAttribute::kind_unsafe_unretained))
     Results.AddResult(CodeCompletionResult("unsafe_unretained"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_readwrite))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_readwrite))
     Results.AddResult(CodeCompletionResult("readwrite"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_retain))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_retain))
     Results.AddResult(CodeCompletionResult("retain"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_strong))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_strong))
     Results.AddResult(CodeCompletionResult("strong"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_copy))
+  if (!ObjCPropertyFlagConflicts(Attributes, ObjCPropertyAttribute::kind_copy))
     Results.AddResult(CodeCompletionResult("copy"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_nonatomic))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_nonatomic))
     Results.AddResult(CodeCompletionResult("nonatomic"));
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_atomic))
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_atomic))
     Results.AddResult(CodeCompletionResult("atomic"));
 
   // Only suggest "weak" if we're compiling for ARC-with-weak-references or GC.
   if (getLangOpts().ObjCWeak || getLangOpts().getGC() != LangOptions::NonGC)
-    if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_weak))
+    if (!ObjCPropertyFlagConflicts(Attributes,
+                                   ObjCPropertyAttribute::kind_weak))
       Results.AddResult(CodeCompletionResult("weak"));
 
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_setter)) {
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_setter)) {
     CodeCompletionBuilder Setter(Results.getAllocator(),
                                  Results.getCodeCompletionTUInfo());
     Setter.AddTypedTextChunk("setter");
@@ -6577,7 +6614,8 @@ void Sema::CodeCompleteObjCPropertyFlags(Scope *S, ObjCDeclSpec &ODS) {
     Setter.AddPlaceholderChunk("method");
     Results.AddResult(CodeCompletionResult(Setter.TakeString()));
   }
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_getter)) {
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_getter)) {
     CodeCompletionBuilder Getter(Results.getAllocator(),
                                  Results.getCodeCompletionTUInfo());
     Getter.AddTypedTextChunk("getter");
@@ -6585,7 +6623,8 @@ void Sema::CodeCompleteObjCPropertyFlags(Scope *S, ObjCDeclSpec &ODS) {
     Getter.AddPlaceholderChunk("method");
     Results.AddResult(CodeCompletionResult(Getter.TakeString()));
   }
-  if (!ObjCPropertyFlagConflicts(Attributes, ObjCDeclSpec::DQ_PR_nullability)) {
+  if (!ObjCPropertyFlagConflicts(Attributes,
+                                 ObjCPropertyAttribute::kind_nullability)) {
     Results.AddResult(CodeCompletionResult("nonnull"));
     Results.AddResult(CodeCompletionResult("nullable"));
     Results.AddResult(CodeCompletionResult("null_unspecified"));
@@ -8110,8 +8149,8 @@ static void AddObjCKeyValueCompletions(ObjCPropertyDecl *Property,
         Builder.AddChunk(CodeCompletionString::CK_RightParen);
       }
 
-      Builder.AddTypedTextChunk(Allocator.CopyString(SelectorId->getName()));
-      Builder.AddTypedTextChunk(":");
+      Builder.AddTypedTextChunk(
+          Allocator.CopyString(SelectorId->getName() + ":"));
       AddObjCPassingTypeChunk(Property->getType(), /*Quals=*/0, Context, Policy,
                               Builder);
       Builder.AddTextChunk(Key);
@@ -8699,39 +8738,43 @@ void Sema::CodeCompleteObjCMethodDecl(Scope *S, Optional<bool> IsInstanceMethod,
 
     Selector Sel = Method->getSelector();
 
-    // Add the first part of the selector to the pattern.
-    Builder.AddTypedTextChunk(
-        Builder.getAllocator().CopyString(Sel.getNameForSlot(0)));
+    if (Sel.isUnarySelector()) {
+      // Unary selectors have no arguments.
+      Builder.AddTypedTextChunk(
+          Builder.getAllocator().CopyString(Sel.getNameForSlot(0)));
+    } else {
+      // Add all parameters to the pattern.
+      unsigned I = 0;
+      for (ObjCMethodDecl::param_iterator P = Method->param_begin(),
+                                          PEnd = Method->param_end();
+           P != PEnd; (void)++P, ++I) {
+        // Add the part of the selector name.
+        if (I == 0)
+          Builder.AddTypedTextChunk(
+              Builder.getAllocator().CopyString(Sel.getNameForSlot(I) + ":"));
+        else if (I < Sel.getNumArgs()) {
+          Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
+          Builder.AddTypedTextChunk(
+              Builder.getAllocator().CopyString(Sel.getNameForSlot(I) + ":"));
+        } else
+          break;
 
-    // Add parameters to the pattern.
-    unsigned I = 0;
-    for (ObjCMethodDecl::param_iterator P = Method->param_begin(),
-                                        PEnd = Method->param_end();
-         P != PEnd; (void)++P, ++I) {
-      // Add the part of the selector name.
-      if (I == 0)
-        Builder.AddTypedTextChunk(":");
-      else if (I < Sel.getNumArgs()) {
-        Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
-        Builder.AddTypedTextChunk(
-            Builder.getAllocator().CopyString(Sel.getNameForSlot(I) + ":"));
-      } else
-        break;
+        // Add the parameter type.
+        QualType ParamType;
+        if ((*P)->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
+          ParamType = (*P)->getType();
+        else
+          ParamType = (*P)->getOriginalType();
+        ParamType = ParamType.substObjCTypeArgs(
+            Context, {}, ObjCSubstitutionContext::Parameter);
+        AttributedType::stripOuterNullability(ParamType);
+        AddObjCPassingTypeChunk(ParamType, (*P)->getObjCDeclQualifier(),
+                                Context, Policy, Builder);
 
-      // Add the parameter type.
-      QualType ParamType;
-      if ((*P)->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
-        ParamType = (*P)->getType();
-      else
-        ParamType = (*P)->getOriginalType();
-      ParamType = ParamType.substObjCTypeArgs(
-          Context, {}, ObjCSubstitutionContext::Parameter);
-      AttributedType::stripOuterNullability(ParamType);
-      AddObjCPassingTypeChunk(ParamType, (*P)->getObjCDeclQualifier(), Context,
-                              Policy, Builder);
-
-      if (IdentifierInfo *Id = (*P)->getIdentifier())
-        Builder.AddTextChunk(Builder.getAllocator().CopyString(Id->getName()));
+        if (IdentifierInfo *Id = (*P)->getIdentifier())
+          Builder.AddTextChunk(
+              Builder.getAllocator().CopyString(Id->getName()));
+      }
     }
 
     if (Method->isVariadic()) {

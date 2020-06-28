@@ -70,10 +70,8 @@ mlir::createLoopFusionPass(unsigned fastMemorySpace,
 
 // TODO(b/117228571) Replace when this is modeled through side-effects/op traits
 static bool isMemRefDereferencingOp(Operation &op) {
-  if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
-      isa<AffineDmaStartOp>(op) || isa<AffineDmaWaitOp>(op))
-    return true;
-  return false;
+  return isa<AffineReadOpInterface, AffineWriteOpInterface, AffineDmaStartOp,
+             AffineDmaWaitOp>(op);
 }
 
 namespace {
@@ -92,9 +90,9 @@ struct LoopNestStateCollector {
         forOps.push_back(cast<AffineForOp>(op));
       else if (op->getNumRegions() != 0)
         hasNonForRegion = true;
-      else if (isa<AffineLoadOp>(op))
+      else if (isa<AffineReadOpInterface>(op))
         loadOpInsts.push_back(op);
-      else if (isa<AffineStoreOp>(op))
+      else if (isa<AffineWriteOpInterface>(op))
         storeOpInsts.push_back(op);
     });
   }
@@ -125,7 +123,7 @@ public:
     unsigned getLoadOpCount(Value memref) {
       unsigned loadOpCount = 0;
       for (auto *loadOpInst : loads) {
-        if (memref == cast<AffineLoadOp>(loadOpInst).getMemRef())
+        if (memref == cast<AffineReadOpInterface>(loadOpInst).getMemRef())
           ++loadOpCount;
       }
       return loadOpCount;
@@ -135,7 +133,7 @@ public:
     unsigned getStoreOpCount(Value memref) {
       unsigned storeOpCount = 0;
       for (auto *storeOpInst : stores) {
-        if (memref == cast<AffineStoreOp>(storeOpInst).getMemRef())
+        if (memref == cast<AffineWriteOpInterface>(storeOpInst).getMemRef())
           ++storeOpCount;
       }
       return storeOpCount;
@@ -145,7 +143,7 @@ public:
     void getStoreOpsForMemref(Value memref,
                               SmallVectorImpl<Operation *> *storeOps) {
       for (auto *storeOpInst : stores) {
-        if (memref == cast<AffineStoreOp>(storeOpInst).getMemRef())
+        if (memref == cast<AffineWriteOpInterface>(storeOpInst).getMemRef())
           storeOps->push_back(storeOpInst);
       }
     }
@@ -154,7 +152,7 @@ public:
     void getLoadOpsForMemref(Value memref,
                              SmallVectorImpl<Operation *> *loadOps) {
       for (auto *loadOpInst : loads) {
-        if (memref == cast<AffineLoadOp>(loadOpInst).getMemRef())
+        if (memref == cast<AffineReadOpInterface>(loadOpInst).getMemRef())
           loadOps->push_back(loadOpInst);
       }
     }
@@ -164,10 +162,10 @@ public:
     void getLoadAndStoreMemrefSet(DenseSet<Value> *loadAndStoreMemrefSet) {
       llvm::SmallDenseSet<Value, 2> loadMemrefs;
       for (auto *loadOpInst : loads) {
-        loadMemrefs.insert(cast<AffineLoadOp>(loadOpInst).getMemRef());
+        loadMemrefs.insert(cast<AffineReadOpInterface>(loadOpInst).getMemRef());
       }
       for (auto *storeOpInst : stores) {
-        auto memref = cast<AffineStoreOp>(storeOpInst).getMemRef();
+        auto memref = cast<AffineWriteOpInterface>(storeOpInst).getMemRef();
         if (loadMemrefs.count(memref) > 0)
           loadAndStoreMemrefSet->insert(memref);
       }
@@ -259,7 +257,7 @@ public:
   bool writesToLiveInOrEscapingMemrefs(unsigned id) {
     Node *node = getNode(id);
     for (auto *storeOpInst : node->stores) {
-      auto memref = cast<AffineStoreOp>(storeOpInst).getMemRef();
+      auto memref = cast<AffineWriteOpInterface>(storeOpInst).getMemRef();
       auto *op = memref.getDefiningOp();
       // Return true if 'memref' is a block argument.
       if (!op)
@@ -272,13 +270,14 @@ public:
     return false;
   }
 
-  // Returns the unique AffineStoreOp in `node` that meets all the following:
+  // Returns the unique AffineWriteOpInterface in `node` that meets all the
+  // following:
   //   *) store is the only one that writes to a function-local memref live out
   //      of `node`,
   //   *) store is not the source of a self-dependence on `node`.
-  // Otherwise, returns a null AffineStoreOp.
-  AffineStoreOp getUniqueOutgoingStore(Node *node) {
-    AffineStoreOp uniqueStore;
+  // Otherwise, returns a null AffineWriteOpInterface.
+  AffineWriteOpInterface getUniqueOutgoingStore(Node *node) {
+    AffineWriteOpInterface uniqueStore;
 
     // Return null if `node` doesn't have any outgoing edges.
     auto outEdgeIt = outEdges.find(node->id);
@@ -287,7 +286,7 @@ public:
 
     const auto &nodeOutEdges = outEdgeIt->second;
     for (auto *op : node->stores) {
-      auto storeOp = cast<AffineStoreOp>(op);
+      auto storeOp = cast<AffineWriteOpInterface>(op);
       auto memref = storeOp.getMemRef();
       // Skip this store if there are no dependences on its memref. This means
       // that store either:
@@ -322,7 +321,8 @@ public:
     Node *node = getNode(id);
     for (auto *storeOpInst : node->stores) {
       // Return false if there exist out edges from 'id' on 'memref'.
-      if (getOutEdgeCount(id, cast<AffineStoreOp>(storeOpInst).getMemRef()) > 0)
+      auto storeMemref = cast<AffineWriteOpInterface>(storeOpInst).getMemRef();
+      if (getOutEdgeCount(id, storeMemref) > 0)
         return false;
     }
     return true;
@@ -634,7 +634,7 @@ bool MemRefDependenceGraph::init(FuncOp f) {
   DenseMap<Value, SetVector<unsigned>> memrefAccesses;
 
   // TODO: support multi-block functions.
-  if (f.getBlocks().size() != 1)
+  if (!llvm::hasSingleElement(f))
     return false;
 
   DenseMap<Operation *, unsigned> forToNodeMap;
@@ -651,28 +651,28 @@ bool MemRefDependenceGraph::init(FuncOp f) {
       Node node(nextNodeId++, &op);
       for (auto *opInst : collector.loadOpInsts) {
         node.loads.push_back(opInst);
-        auto memref = cast<AffineLoadOp>(opInst).getMemRef();
+        auto memref = cast<AffineReadOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
       }
       for (auto *opInst : collector.storeOpInsts) {
         node.stores.push_back(opInst);
-        auto memref = cast<AffineStoreOp>(opInst).getMemRef();
+        auto memref = cast<AffineWriteOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
       }
       forToNodeMap[&op] = node.id;
       nodes.insert({node.id, node});
-    } else if (auto loadOp = dyn_cast<AffineLoadOp>(op)) {
+    } else if (auto loadOp = dyn_cast<AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
       Node node(nextNodeId++, &op);
       node.loads.push_back(&op);
-      auto memref = cast<AffineLoadOp>(op).getMemRef();
+      auto memref = cast<AffineReadOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
-    } else if (auto storeOp = dyn_cast<AffineStoreOp>(op)) {
+    } else if (auto storeOp = dyn_cast<AffineWriteOpInterface>(op)) {
       // Create graph node for top-level store op.
       Node node(nextNodeId++, &op);
       node.stores.push_back(&op);
-      auto memref = cast<AffineStoreOp>(op).getMemRef();
+      auto memref = cast<AffineWriteOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
     } else if (op.getNumRegions() != 0) {
@@ -733,7 +733,7 @@ static void moveLoadsAccessingMemrefTo(Value memref,
   dstLoads->clear();
   SmallVector<Operation *, 4> srcLoadsToKeep;
   for (auto *load : *srcLoads) {
-    if (cast<AffineLoadOp>(load).getMemRef() == memref)
+    if (cast<AffineReadOpInterface>(load).getMemRef() == memref)
       dstLoads->push_back(load);
     else
       srcLoadsToKeep.push_back(load);
@@ -854,7 +854,7 @@ static Value createPrivateMemRef(AffineForOp forOp, Operation *srcStoreOpInst,
   // Builder to create constants at the top level.
   OpBuilder top(forInst->getParentOfType<FuncOp>().getBody());
   // Create new memref type based on slice bounds.
-  auto oldMemRef = cast<AffineStoreOp>(srcStoreOpInst).getMemRef();
+  auto oldMemRef = cast<AffineWriteOpInterface>(srcStoreOpInst).getMemRef();
   auto oldMemRefType = oldMemRef.getType().cast<MemRefType>();
   unsigned rank = oldMemRefType.getRank();
 
@@ -909,22 +909,14 @@ static Value createPrivateMemRef(AffineForOp forOp, Operation *srcStoreOpInst,
   }
   auto newMemRefType = MemRefType::get(newShape, oldMemRefType.getElementType(),
                                        {}, newMemSpace);
-  // Gather alloc operands for the dynamic dimensions of the memref.
-  SmallVector<Value, 4> allocOperands;
-  unsigned dynamicDimCount = 0;
-  for (auto dimSize : oldMemRefType.getShape()) {
-    if (dimSize == -1)
-      allocOperands.push_back(
-          top.create<DimOp>(forOp.getLoc(), oldMemRef, dynamicDimCount++));
-  }
 
-  // Create new private memref for fused loop 'forOp'.
+  // Create new private memref for fused loop 'forOp'. 'newShape' is always
+  // a constant shape.
   // TODO(andydavis) Create/move alloc ops for private memrefs closer to their
   // consumer loop nests to reduce their live range. Currently they are added
   // at the beginning of the function, because loop nests can be reordered
   // during the fusion pass.
-  Value newMemRef =
-      top.create<AllocOp>(forOp.getLoc(), newMemRefType, allocOperands);
+  Value newMemRef = top.create<AllocOp>(forOp.getLoc(), newMemRefType);
 
   // Build an AffineMap to remap access functions based on lower bound offsets.
   SmallVector<AffineExpr, 4> remapExprs;
@@ -956,15 +948,75 @@ static Value createPrivateMemRef(AffineForOp forOp, Operation *srcStoreOpInst,
   return newMemRef;
 }
 
+/// Walking from node 'srcId' to node 'dstId' (exclusive of 'srcId' and
+/// 'dstId'), if there is any non-affine operation accessing 'memref', return
+/// false. Otherwise, return true.
+static bool hasNonAffineUsersOnThePath(unsigned srcId, unsigned dstId,
+                                       Value memref,
+                                       MemRefDependenceGraph *mdg) {
+  auto *srcNode = mdg->getNode(srcId);
+  auto *dstNode = mdg->getNode(dstId);
+  Value::user_range users = memref.getUsers();
+  // For each MemRefDependenceGraph's node that is between 'srcNode' and
+  // 'dstNode' (exclusive of 'srcNodes' and 'dstNode'), check whether any
+  // non-affine operation in the node accesses the 'memref'.
+  for (auto &idAndNode : mdg->nodes) {
+    Operation *op = idAndNode.second.op;
+    // Take care of operations between 'srcNode' and 'dstNode'.
+    if (srcNode->op->isBeforeInBlock(op) && op->isBeforeInBlock(dstNode->op)) {
+      // Walk inside the operation to find any use of the memref.
+      // Interrupt the walk if found.
+      auto walkResult = op->walk([&](Operation *user) {
+        // Skip affine ops.
+        if (isMemRefDereferencingOp(*user))
+          return WalkResult::advance();
+        // Find a non-affine op that uses the memref.
+        if (llvm::is_contained(users, user))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
+      if (walkResult.wasInterrupted())
+        return true;
+    }
+  }
+  return false;
+}
+
+/// Check whether a memref value in node 'srcId' has a non-affine that
+/// is between node 'srcId' and node 'dstId' (exclusive of 'srcNode' and
+/// 'dstNode').
+static bool hasNonAffineUsersOnThePath(unsigned srcId, unsigned dstId,
+                                       MemRefDependenceGraph *mdg) {
+  // Collect memref values in node 'srcId'.
+  auto *srcNode = mdg->getNode(srcId);
+  llvm::SmallDenseSet<Value, 2> memRefValues;
+  srcNode->op->walk([&](Operation *op) {
+    // Skip affine ops.
+    if (isa<AffineForOp>(op))
+      return WalkResult::advance();
+    for (Value v : op->getOperands())
+      // Collect memref values only.
+      if (v.getType().isa<MemRefType>())
+        memRefValues.insert(v);
+    return WalkResult::advance();
+  });
+  // Looking for users between node 'srcId' and node 'dstId'.
+  for (Value memref : memRefValues)
+    if (hasNonAffineUsersOnThePath(srcId, dstId, memref, mdg))
+      return true;
+  return false;
+}
+
 // Checks if node 'srcId' can be safely fused into node 'dstId'. Node 'srcId'
 // may write to multiple memrefs but it is required that only one of them,
 // 'srcLiveOutStoreOp', has output edges.
 // Returns true if 'dstNode's read/write region to 'memref' is a super set of
 // 'srcNode's write region to 'memref' and 'srcId' has only one output edge.
 // TODO(andydavis) Generalize this to handle more live in/out cases.
-static bool canFuseSrcWhichWritesToLiveOut(unsigned srcId, unsigned dstId,
-                                           AffineStoreOp srcLiveOutStoreOp,
-                                           MemRefDependenceGraph *mdg) {
+static bool
+canFuseSrcWhichWritesToLiveOut(unsigned srcId, unsigned dstId,
+                               AffineWriteOpInterface srcLiveOutStoreOp,
+                               MemRefDependenceGraph *mdg) {
   assert(srcLiveOutStoreOp && "Expected a valid store op");
   auto *dstNode = mdg->getNode(dstId);
   Value memref = srcLiveOutStoreOp.getMemRef();
@@ -1015,6 +1067,12 @@ static bool canFuseSrcWhichWritesToLiveOut(unsigned srcId, unsigned dstId,
   // TODO(andydavis) Check the shape and lower bounds here too.
   if (srcNumElements != dstNumElements)
     return false;
+
+  // Return false if 'memref' is used by a non-affine operation that is
+  // between node 'srcId' and node 'dstId'.
+  if (hasNonAffineUsersOnThePath(srcId, dstId, mdg))
+    return false;
+
   return true;
 }
 
@@ -1063,8 +1121,8 @@ static bool isFusionProfitable(Operation *srcOpInst, Operation *srcStoreOpInst,
                                unsigned *dstLoopDepth, bool maximalFusion,
                                double computeToleranceThreshold) {
   LLVM_DEBUG({
-    llvm::dbgs() << "Checking whether fusion is profitable between:\n";
-    llvm::dbgs() << " " << *srcOpInst << " and \n";
+    llvm::dbgs() << "Checking whether fusion is profitable between src op:\n";
+    llvm::dbgs() << ' ' << *srcOpInst << " and destination op(s)\n";
     for (auto dstOpInst : dstLoadOpInsts) {
       llvm::dbgs() << " " << *dstOpInst << "\n";
     };
@@ -1450,7 +1508,7 @@ public:
       DenseSet<Value> visitedMemrefs;
       while (!loads.empty()) {
         // Get memref of load on top of the stack.
-        auto memref = cast<AffineLoadOp>(loads.back()).getMemRef();
+        auto memref = cast<AffineReadOpInterface>(loads.back()).getMemRef();
         if (visitedMemrefs.count(memref) > 0)
           continue;
         visitedMemrefs.insert(memref);
@@ -1488,7 +1546,7 @@ public:
             // feasibility for loops with multiple stores.
             unsigned maxLoopDepth = 0;
             for (auto *op : srcNode->stores) {
-              auto storeOp = cast<AffineStoreOp>(op);
+              auto storeOp = cast<AffineWriteOpInterface>(op);
               if (storeOp.getMemRef() != memref) {
                 srcStoreOp = nullptr;
                 break;
@@ -1563,7 +1621,7 @@ public:
           // Gather 'dstNode' store ops to 'memref'.
           SmallVector<Operation *, 2> dstStoreOpInsts;
           for (auto *storeOpInst : dstNode->stores)
-            if (cast<AffineStoreOp>(storeOpInst).getMemRef() == memref)
+            if (cast<AffineWriteOpInterface>(storeOpInst).getMemRef() == memref)
               dstStoreOpInsts.push_back(storeOpInst);
 
           unsigned bestDstLoopDepth;
@@ -1601,7 +1659,8 @@ public:
               // Create private memref for 'memref' in 'dstAffineForOp'.
               SmallVector<Operation *, 4> storesForMemref;
               for (auto *storeOpInst : sliceCollector.storeOpInsts) {
-                if (cast<AffineStoreOp>(storeOpInst).getMemRef() == memref)
+                if (cast<AffineWriteOpInterface>(storeOpInst).getMemRef() ==
+                    memref)
                   storesForMemref.push_back(storeOpInst);
               }
               // TODO(andydavis) Use union of memref write regions to compute
@@ -1624,10 +1683,22 @@ public:
             // Add new load ops to current Node load op list 'loads' to
             // continue fusing based on new operands.
             for (auto *loadOpInst : dstLoopCollector.loadOpInsts) {
-              auto loadMemRef = cast<AffineLoadOp>(loadOpInst).getMemRef();
-              if (visitedMemrefs.count(loadMemRef) == 0)
+              // NOTE: Change 'loads' to a hash set in case efficiency is an
+              // issue. We still use a vector since it's expected to be small.
+              if (!llvm::is_contained(loads, loadOpInst))
                 loads.push_back(loadOpInst);
             }
+            // Clear visited memrefs after fusion so that previously visited src
+            // nodes are considered for fusion again in the context of the new
+            // fused node.
+            // TODO: This shouldn't be necessary if we visited candidates in the
+            // dependence graph in post-order or once we fully support
+            // multi-store producers. Currently, in a multi-store producer
+            // scenario such as A->B, A->C, B->C, we fail to fuse A+B due to the
+            // multiple outgoing edges. However, after fusing B+C, A has a
+            // single outgoing edge and can be fused if we revisit it in the
+            // context of the new fused B+C node.
+            visitedMemrefs.clear();
 
             // Clear and add back loads and stores.
             mdg->clearNodeLoadAndStores(dstNode->id);
@@ -1782,9 +1853,16 @@ public:
       // Check that all stores are to the same memref.
       DenseSet<Value> storeMemrefs;
       for (auto *storeOpInst : sibNode->stores) {
-        storeMemrefs.insert(cast<AffineStoreOp>(storeOpInst).getMemRef());
+        storeMemrefs.insert(
+            cast<AffineWriteOpInterface>(storeOpInst).getMemRef());
       }
       if (storeMemrefs.size() != 1)
+        return false;
+
+      // Skip if a memref value in one node is used by a non-affine memref
+      // access that lies between 'dstNode' and 'sibNode'.
+      if (hasNonAffineUsersOnThePath(dstNode->id, sibNode->id, mdg) ||
+          hasNonAffineUsersOnThePath(sibNode->id, dstNode->id, mdg))
         return false;
       return true;
     };
@@ -1793,7 +1871,7 @@ public:
     auto fn = dstNode->op->getParentOfType<FuncOp>();
     for (unsigned i = 0, e = fn.getNumArguments(); i != e; ++i) {
       for (auto *user : fn.getArgument(i).getUsers()) {
-        if (auto loadOp = dyn_cast<AffineLoadOp>(user)) {
+        if (auto loadOp = dyn_cast<AffineReadOpInterface>(user)) {
           // Gather loops surrounding 'use'.
           SmallVector<AffineForOp, 4> loops;
           getLoopIVs(*user, &loops);

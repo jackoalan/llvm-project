@@ -65,16 +65,16 @@
 using namespace llvm;
 
 /// Enable analysis of recursive PHI nodes.
-static cl::opt<bool> EnableRecPhiAnalysis("basicaa-recphi", cl::Hidden,
+static cl::opt<bool> EnableRecPhiAnalysis("basic-aa-recphi", cl::Hidden,
                                           cl::init(false));
 
 /// By default, even on 32-bit architectures we use 64-bit integers for
 /// calculations. This will allow us to more-aggressively decompose indexing
 /// expressions calculated using i64 values (e.g., long long in C) which is
 /// common enough to worry about.
-static cl::opt<bool> ForceAtLeast64Bits("basicaa-force-at-least-64b",
+static cl::opt<bool> ForceAtLeast64Bits("basic-aa-force-at-least-64b",
                                         cl::Hidden, cl::init(true));
-static cl::opt<bool> DoubleCalcBits("basicaa-double-calc-bits",
+static cl::opt<bool> DoubleCalcBits("basic-aa-double-calc-bits",
                                     cl::Hidden, cl::init(false));
 
 /// SearchLimitReached / SearchTimes shows how often the limit of
@@ -492,7 +492,13 @@ bool BasicAAResult::DecomposeGEPExpression(const Value *V,
 
     const GEPOperator *GEPOp = dyn_cast<GEPOperator>(Op);
     if (!GEPOp) {
-      if (const auto *Call = dyn_cast<CallBase>(V)) {
+      if (const auto *PHI = dyn_cast<PHINode>(V)) {
+        // Look through single-arg phi nodes created by LCSSA.
+        if (PHI->getNumIncomingValues() == 1) {
+          V = PHI->getIncomingValue(0);
+          continue;
+        }
+      } else if (const auto *Call = dyn_cast<CallBase>(V)) {
         // CaptureTracking can know about special capturing properties of some
         // intrinsics like launder.invariant.group, that can't be expressed with
         // the attributes, but have properties like returning aliasing pointer.
@@ -508,19 +514,6 @@ bool BasicAAResult::DecomposeGEPExpression(const Value *V,
         }
       }
 
-      // If it's not a GEP, hand it off to SimplifyInstruction to see if it
-      // can come up with something. This matches what GetUnderlyingObject does.
-      if (const Instruction *I = dyn_cast<Instruction>(V))
-        // TODO: Get a DominatorTree and AssumptionCache and use them here
-        // (these are both now available in this function, but this should be
-        // updated when GetUnderlyingObject is updated). TLI should be
-        // provided also.
-        if (const Value *Simplified =
-                SimplifyInstruction(const_cast<Instruction *>(I), DL)) {
-          V = Simplified;
-          continue;
-        }
-
       Decomposed.Base = V;
       return false;
     }
@@ -533,8 +526,7 @@ bool BasicAAResult::DecomposeGEPExpression(const Value *V,
 
     // Don't attempt to analyze GEPs if index scale is not a compile-time
     // constant.
-    Type *SrcEleTy = GEPOp->getSourceElementType();
-    if (SrcEleTy->isVectorTy() && cast<VectorType>(SrcEleTy)->isScalable()) {
+    if (isa<ScalableVectorType>(GEPOp->getSourceElementType())) {
       Decomposed.Base = V;
       Decomposed.HasCompileTimeConstantScale = false;
       return false;
@@ -2077,13 +2069,13 @@ char BasicAAWrapperPass::ID = 0;
 
 void BasicAAWrapperPass::anchor() {}
 
-INITIALIZE_PASS_BEGIN(BasicAAWrapperPass, "basicaa",
+INITIALIZE_PASS_BEGIN(BasicAAWrapperPass, "basic-aa",
                       "Basic Alias Analysis (stateless AA impl)", true, true)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PhiValuesWrapperPass)
-INITIALIZE_PASS_END(BasicAAWrapperPass, "basicaa",
+INITIALIZE_PASS_END(BasicAAWrapperPass, "basic-aa",
                     "Basic Alias Analysis (stateless AA impl)", true, true)
 
 FunctionPass *llvm::createBasicAAWrapperPass() {

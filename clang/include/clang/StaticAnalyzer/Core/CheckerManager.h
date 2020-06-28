@@ -37,6 +37,7 @@ class TranslationUnitDecl;
 namespace ento {
 
 class AnalysisManager;
+class CXXAllocatorCall;
 class BugReporter;
 class CallEvent;
 class CheckerBase;
@@ -46,6 +47,7 @@ class ExplodedGraph;
 class ExplodedNode;
 class ExplodedNodeSet;
 class ExprEngine;
+struct EvalCallOptions;
 class MemRegion;
 struct NodeBuilderContext;
 class ObjCMethodCall;
@@ -361,11 +363,9 @@ public:
                                      ExprEngine &Eng);
 
   /// Run checkers between C++ operator new and constructor calls.
-  void runCheckersForNewAllocator(const CXXNewExpr *NE, SVal Target,
-                                  ExplodedNodeSet &Dst,
-                                  ExplodedNode *Pred,
-                                  ExprEngine &Eng,
-                                  bool wasInlined = false);
+  void runCheckersForNewAllocator(const CXXAllocatorCall &Call,
+                                  ExplodedNodeSet &Dst, ExplodedNode *Pred,
+                                  ExprEngine &Eng, bool wasInlined = false);
 
   /// Run checkers for live symbols.
   ///
@@ -434,9 +434,9 @@ public:
   /// Run checkers for evaluating a call.
   ///
   /// Warning: Currently, the CallEvent MUST come from a CallExpr!
-  void runCheckersForEvalCall(ExplodedNodeSet &Dst,
-                              const ExplodedNodeSet &Src,
-                              const CallEvent &CE, ExprEngine &Eng);
+  void runCheckersForEvalCall(ExplodedNodeSet &Dst, const ExplodedNodeSet &Src,
+                              const CallEvent &CE, ExprEngine &Eng,
+                              const EvalCallOptions &CallOpts);
 
   /// Run checkers for the entire Translation Unit.
   void runCheckersOnEndOfTranslationUnit(const TranslationUnitDecl *TU,
@@ -506,7 +506,7 @@ public:
       CheckerFn<void (const Stmt *, CheckerContext &)>;
 
   using CheckNewAllocatorFunc =
-      CheckerFn<void (const CXXNewExpr *, SVal, CheckerContext &)>;
+      CheckerFn<void(const CXXAllocatorCall &Call, CheckerContext &)>;
 
   using CheckDeadSymbolsFunc =
       CheckerFn<void (SymbolReaper &, CheckerContext &)>;

@@ -139,12 +139,12 @@ static int InitLibrary(DeviceTy& Device) {
         DP("Add mapping from host " DPxMOD " to device " DPxMOD " with size %zu"
             "\n", DPxPTR(CurrHostEntry->addr), DPxPTR(CurrDeviceEntry->addr),
             CurrDeviceEntry->size);
-        Device.HostDataToTargetMap.push_front(HostDataToTargetTy(
+        Device.HostDataToTargetMap.emplace(
             (uintptr_t)CurrHostEntry->addr /*HstPtrBase*/,
             (uintptr_t)CurrHostEntry->addr /*HstPtrBegin*/,
             (uintptr_t)CurrHostEntry->addr + CurrHostEntry->size /*HstPtrEnd*/,
             (uintptr_t)CurrDeviceEntry->addr /*TgtPtrBegin*/,
-            true /*IsRefCountINF*/));
+            true /*IsRefCountINF*/);
       }
     }
     Device.DataMapMtx.unlock();
@@ -286,6 +286,7 @@ int target_data_begin(DeviceTy &Device, int32_t arg_num, void **args_base,
       // NULL, so getOrAlloc() returning NULL is not an error.
       DP("Call to getOrAllocTgtPtr returned null pointer (device failure or "
           "illegal mapping).\n");
+      return OFFLOAD_FAIL;
     }
     DP("There are %" PRId64 " bytes allocated at target address " DPxMOD
         " - is%s new\n", data_size, DPxPTR(TgtPtrBegin),
