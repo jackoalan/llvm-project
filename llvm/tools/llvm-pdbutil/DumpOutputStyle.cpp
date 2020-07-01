@@ -163,6 +163,11 @@ Error DumpOutputStyle::dump() {
       return EC;
   }
 
+  if (opts::dump::DumpFixups) {
+    if (auto EC = dumpFixups())
+      return EC;
+  }
+
   if (File.isObj()) {
     if (opts::dump::DumpTypes || !opts::dump::DumpTypeIndex.empty() ||
         opts::dump::DumpTypeExtras)
@@ -1161,6 +1166,44 @@ Error DumpOutputStyle::dumpFpo() {
     return EC;
   if (auto EC = dumpNewFpo(File))
     return EC;
+  return Error::success();
+}
+
+Error DumpOutputStyle::dumpFixups() {
+  printHeader(P, "Fixups");
+
+  if (File.isObj()) {
+    printStreamNotValidForObj();
+    return Error::success();
+  }
+
+  if (!getPdb().hasPDBDbiStream()) {
+    printStreamNotPresent("DBI");
+    return Error::success();
+  }
+
+  auto &Dbi = cantFail(getPdb().getPDBDbiStream());
+
+  if (!Dbi.hasFixupRecords()) {
+    P.printLine("PDB does not contain fixup stream");
+    return Error::success();
+  }
+
+  P.printLine(
+      "             Type              | Extra  |    RVA     | RVATarget");
+
+  for (const auto &F : Dbi.getFixupRecords()) {
+    StringRef RelocationType = object::COFFObjectFile::getRelocationTypeName(
+        F.Type, static_cast<uint16_t>(Dbi.getMachineType()));
+    if (RelocationType != "Unknown") {
+      P.formatLine("{0,30} | {1,6:X} | {2,10:X} | {3,10:X}", RelocationType,
+                   fmtle(F.Extra), fmtle(F.RVA), fmtle(F.RVATarget));
+    } else {
+      P.formatLine("{0,30:X} | {1,6:X} | {2,10:X} | {3,10:X}", fmtle(F.Type),
+                   fmtle(F.Extra), fmtle(F.RVA), fmtle(F.RVATarget));
+    }
+  }
+
   return Error::success();
 }
 

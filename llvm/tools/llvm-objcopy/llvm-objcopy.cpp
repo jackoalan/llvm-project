@@ -289,7 +289,7 @@ static Error executeObjcopy(CopyConfig &Config) {
       return E;
   } else {
     Expected<OwningBinary<llvm::object::Binary>> BinaryOrErr =
-        createBinary(Config.InputFilename);
+        createBinary(Config.InputFilename, Config.HshObjcopy);
     if (!BinaryOrErr)
       return createFileError(Config.InputFilename, BinaryOrErr.takeError());
 
@@ -345,8 +345,7 @@ int main(int argc, char **argv) {
     Tool = ToolType::Strip;
   else if (Is("install-name-tool") || Is("install_name_tool"))
     Tool = ToolType::InstallNameTool;
-  //const bool HshObjcopy = Is("hsh-objcopy");
-  const bool HshObjcopy = true;
+  const bool HshObjcopy = Is("hsh-objcopy");
 
   // Expand response files.
   // TODO: Move these lines, which are copied from lib/Support/CommandLine.cpp,

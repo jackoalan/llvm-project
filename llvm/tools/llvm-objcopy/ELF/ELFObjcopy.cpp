@@ -13,6 +13,7 @@
 #include "llvm-objcopy.h"
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -595,10 +596,46 @@ static Error replaceAndRemoveSections(const CopyConfig &Config, Object &Obj) {
   return Obj.removeSections(Config.AllowBrokenLinks, RemovePred);
 }
 
-static Error hshModRelocations(SectionBase &RefSec, Object &Obj) {
+template <typename DynType>
+static unique_function<void()> MakeRelacountDecrementer(Segment &DynamicSeg) {
+  MutableArrayRef<DynType> Dyns{
+      reinterpret_cast<DynType *>(DynamicSeg.mutableContents().data()),
+      DynamicSeg.FileSize / sizeof(DynType)};
+  for (auto &Dyn : Dyns) {
+    if (Dyn.d_tag == DT_RELACOUNT) {
+      return [&Val = Dyn.d_un.d_val]() { --Val; };
+    }
+  }
+  return {};
+}
+
+static Error hshModRelocations(SectionBase &RefSec, Object &Obj, ElfType OutputElfType) {
+  // .rela.dyn section is patched to make any modified absolute relocations a
+  // no-op for the dynamic linker.
+  DynamicRelocationSection *RelaDyn = nullptr;
+  for (auto &Sec : Obj.sections()) {
+    if (auto *RelSec = dyn_cast<DynamicRelocationSection>(&Sec)) {
+      if (RelSec->Name == ".rela.dyn") {
+        RelaDyn = RelSec;
+        break;
+      }
+    }
+  }
+  unique_function<void()> RelacountDec{};
+  for (auto &Seg : Obj.segments()) {
+    if (Seg.Type == PT_DYNAMIC) {
+      // TODO: Make endian-independent
+      if (OutputElfType == ELFT_ELF64LE)
+        RelacountDec = MakeRelacountDecrementer<Elf64_Dyn>(Seg);
+      else if (OutputElfType == ELFT_ELF32LE)
+        RelacountDec = MakeRelacountDecrementer<Elf32_Dyn>(Seg);
+      break;
+    }
+  }
   for (auto &Sec : Obj.sections()) {
     if (auto *RelSec = dyn_cast<RelocationSection>(&Sec)) {
-      RelSec->makeSectionRelative(&RefSec);
+      if (RelSec->getSection()->Flags & SHF_ALLOC)
+        RelSec->makeSectionRelative(&RefSec, RelaDyn, RelacountDec);
     }
   }
   return Error::success();
@@ -626,6 +663,22 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     Obj.OSABI = Config.OutputArch.getValue().OSABI;
   }
 
+  // Set __hsh_objcopy to 1
+  if (Config.HshObjcopy) {
+    bool FoundSym = false;
+    Obj.SymbolTable->updateSymbols([&](Symbol &Sym) {
+      if (Sym.Name == "__hsh_objcopy") {
+        if (auto *Sec = dyn_cast<Section>(Sym.DefinedIn)) {
+          Sec->mutableContents()[Sym.Value - Sec->Offset] = 1;
+          FoundSym = true;
+        }
+      }
+    });
+    if (!FoundSym)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_objcopy' symbol not found");
+  }
+
   // Dump sections before add/remove for compatibility with GNU objcopy.
   for (StringRef Flag : Config.DumpSection) {
     StringRef SectionName;
@@ -633,14 +686,13 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     std::tie(SectionName, FileName) = Flag.split('=');
 
     if (Config.HshObjcopy) {
-      bool IsEmpty = false;
+      bool IsEmpty = true;
       for (auto &Sec : Obj.sections()) {
         if (Sec.Name == SectionName) {
           if (!Sec.OriginalData.empty()) {
-            if (Error E = hshModRelocations(Sec, Obj))
+            IsEmpty = false;
+            if (Error E = hshModRelocations(Sec, Obj, OutputElfType))
               return E;
-          } else {
-            IsEmpty = true;
           }
           break;
         }

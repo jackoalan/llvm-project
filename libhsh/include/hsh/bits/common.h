@@ -1,12 +1,19 @@
 #pragma once
 
 namespace hsh {
+using namespace std::literals;
 enum class Target : std::uint8_t {
   NullTarget,
-#define HSH_TARGET(Enumeration) Enumeration,
+#define HSH_TARGET(Enumeration, Name) Enumeration,
 #include "targets.def"
   MaxTarget
 };
+constexpr std::string_view TargetNames[] = {
+  "null"sv,
+#define HSH_TARGET(Enumeration, Name) Name##sv,
+#include "targets.def"
+};
+
 enum class ActiveTarget : std::uint8_t {
 #define HSH_ACTIVE_TARGET(Enumeration) Enumeration,
 #include "targets.def"

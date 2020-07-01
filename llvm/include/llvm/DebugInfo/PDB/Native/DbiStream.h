@@ -85,6 +85,9 @@ public:
   bool hasNewFpoRecords() const;
   const codeview::DebugFrameDataSubsectionRef &getNewFpoRecords() const;
 
+  bool hasFixupRecords() const;
+  FixedStreamArray<FixupEntry> getFixupRecords() const;
+
   FixedStreamArray<SecMapEntry> getSectionMap() const;
   void visitSectionContributions(ISectionContribVisitor &Visitor) const;
 
@@ -96,6 +99,7 @@ private:
   Error initializeSectionMapData();
   Error initializeOldFpoRecords(PDBFile *Pdb);
   Error initializeNewFpoRecords(PDBFile *Pdb);
+  Error initializeFixupRecords(PDBFile *Pdb);
 
   Expected<std::unique_ptr<msf::MappedBlockStream>>
   createIndexedStreamForHeaderType(PDBFile *Pdb, DbgHeaderType Type) const;
@@ -129,6 +133,9 @@ private:
   
   std::unique_ptr<msf::MappedBlockStream> NewFpoStream;
   codeview::DebugFrameDataSubsectionRef NewFpoRecords;
+
+  std::unique_ptr<msf::MappedBlockStream> FixupStream;
+  FixedStreamArray<FixupEntry> FixupRecords;
 
   const DbiStreamHeader *Header;
 };

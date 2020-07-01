@@ -86,8 +86,13 @@ class raw_carray32_ostream {
   }
 
 public:
-  explicit raw_carray32_ostream(raw_ostream &OS, StringRef Name) : OS(OS) {
-    OS << "const uint32_t " << Name << "[] = {";
+  explicit raw_carray32_ostream(raw_ostream &OS, StringRef Name,
+                                StringRef AttrString = {})
+      : OS(OS) {
+    OS << "const uint32_t " << Name << "[]";
+    if (!AttrString.empty())
+      OS << '\n' << AttrString;
+    OS << " = {";
   }
   ~raw_carray32_ostream() {
     OS << "\n};";

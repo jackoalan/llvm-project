@@ -193,8 +193,15 @@ int main(int argc, char **argv) {
 
   auto RenderTexture = hsh::create_render_texture2d(Surface);
 
-  PipelineCacheFileManager PCFM;
-  Device.build_pipelines(PCFM);
+  {
+    hsh::ShaderFileMapper SFM;
+    if (!SFM.Good) {
+      std::cerr << "Shader file not found\n";
+      return 1;
+    }
+    PipelineCacheFileManager PCFM;
+    Device.build_pipelines(PCFM);
+  }
 
   MyNS::Binding PipelineBind{};
   MyNS::Binding PipelineTemplate1Bind{};

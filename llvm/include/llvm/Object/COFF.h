@@ -897,7 +897,10 @@ public:
     assert(is64());
     return reinterpret_cast<const coff_load_configuration64 *>(LoadConfig);
   }
-  StringRef getRelocationTypeName(uint16_t Type) const;
+  static StringRef getRelocationTypeName(uint16_t Type, uint16_t Machine);
+  StringRef getRelocationTypeName(uint16_t Type) const {
+    return getRelocationTypeName(Type, getMachine());
+  }
 
 protected:
   void moveSymbolNext(DataRefImpl &Symb) const override;

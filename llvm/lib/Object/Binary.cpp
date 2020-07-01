@@ -93,13 +93,23 @@ Expected<std::unique_ptr<Binary>> object::createBinary(MemoryBufferRef Buffer,
   llvm_unreachable("Unexpected Binary File Type");
 }
 
-Expected<OwningBinary<Binary>> object::createBinary(StringRef Path) {
+Expected<OwningBinary<Binary>> object::createBinary(StringRef Path,
+                                                    bool WritableCopy) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
       MemoryBuffer::getFileOrSTDIN(Path, /*FileSize=*/-1,
                                    /*RequiresNullTerminator=*/false);
   if (std::error_code EC = FileOrErr.getError())
     return errorCodeToError(EC);
   std::unique_ptr<MemoryBuffer> &Buffer = FileOrErr.get();
+
+  if (WritableCopy) {
+    std::unique_ptr<WritableMemoryBuffer> WritableBuffer =
+        WritableMemoryBuffer::getNewUninitMemBuffer(Buffer->getBufferSize(),
+                                                    Path);
+    std::memcpy(WritableBuffer->getBufferStart(), Buffer->getBufferStart(),
+                Buffer->getBufferSize());
+    Buffer = std::move(WritableBuffer);
+  }
 
   Expected<std::unique_ptr<Binary>> BinOrErr =
       createBinary(Buffer->getMemBufferRef());

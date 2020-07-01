@@ -1,6 +1,100 @@
 #pragma once
 
+#ifdef _WIN32
+#else
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#endif
+
+/*
+ * Base pointer set by ShaderFileMapper for loading file-mapped shaders.
+ * If hsh-objcopy has not processed the binary, __hsh_objcopy is left as zero.
+ */
+extern "C" const volatile uint8_t __hsh_objcopy;
+extern "C" const volatile size_t
+    __hsh_reloc_offsets[size_t(hsh::Target::MaxTarget)];
+extern "C" const uint8_t* __hsh_reloc_base;
+extern "C" size_t __hsh_reloc_length;
+
+#ifdef HSH_IMPLEMENTATION
+const volatile uint8_t __hsh_objcopy = 0;
+const volatile size_t __hsh_reloc_offsets[size_t(hsh::Target::MaxTarget)] = {};
+const uint8_t* __hsh_reloc_base = nullptr;
+size_t __hsh_reloc_length = SIZE_MAX;
+#endif
+
 namespace hsh {
+
+#ifdef _WIN32
+#else
+
+#ifdef __linux__
+inline std::string get_exe_path() noexcept {
+  std::ostringstream PathSS;
+  PathSS << "/proc/" << ::getpid() << "/exe";
+  ssize_t LinkSize = 128;
+  do {
+    std::string Ret(LinkSize, '\0');
+    ssize_t ReadLinkSize;
+    if ((ReadLinkSize = ::readlink(PathSS.str().c_str(), &Ret[0], LinkSize)) <
+        0)
+      return {};
+    if (ReadLinkSize < LinkSize) {
+      Ret.resize(ReadLinkSize);
+      return Ret;
+    }
+    LinkSize *= 2;
+  } while (true);
+}
+#endif
+
+inline std::pair<uint8_t *, size_t> mmap_file(const char *FilePath) noexcept {
+  struct stat Stat;
+  if (::stat(FilePath, &Stat) < 0)
+    return {};
+  int Fd;
+  if ((Fd = ::open(FilePath, O_RDONLY)) < 0)
+    return {};
+  void *Mem = ::mmap(nullptr, Stat.st_size, PROT_READ, MAP_PRIVATE, Fd, 0);
+  ::close(Fd);
+  if (Mem == MAP_FAILED)
+    return {};
+  return {reinterpret_cast<uint8_t *>(Mem), Stat.st_size};
+}
+
+inline void munmap_file(uint8_t *Mem, size_t Len) noexcept {
+  ::munmap(Mem, Len);
+}
+
+#endif
+
+struct ShaderFileMapper {
+  bool Good = false;
+  ShaderFileMapper() noexcept {
+    if (__hsh_objcopy == 0) {
+      /* Unprocessed binary, no further action necessary */
+      Good = true;
+      return;
+    }
+    std::string ShaderPath = get_exe_path();
+    ShaderPath += "."sv;
+    ShaderPath += TargetNames[size_t(detail::CurrentTarget)];
+    ShaderPath += ".shader"sv;
+    auto [mapped_base, mapped_length] = mmap_file(ShaderPath.c_str());
+    if (mapped_base) {
+      __hsh_reloc_base = mapped_base;
+      __hsh_reloc_length = mapped_length;
+      Good = true;
+    }
+  }
+  ~ShaderFileMapper() noexcept {
+    if (!__hsh_reloc_base)
+      return;
+    munmap_file(const_cast<uint8_t *>(__hsh_reloc_base), __hsh_reloc_length);
+  }
+};
 
 class binding;
 
@@ -359,6 +453,13 @@ template <typename... Attrs> struct pipeline {
 } // namespace pipeline
 
 namespace detail {
+
+template <typename T> inline const T *reloc(const T *Ptr) noexcept {
+  assert(reinterpret_cast<uintptr_t>(Ptr) < __hsh_reloc_length &&
+         "hsh reloc mapping overrun");
+  return reinterpret_cast<const T *>(__hsh_reloc_base +
+                                     reinterpret_cast<uintptr_t>(Ptr));
+}
 
 template <typename WordType> struct ShaderDataBlob {
   std::size_t Size = 0;

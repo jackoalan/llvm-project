@@ -924,7 +924,26 @@ void RelocationSection::replaceSectionReferences(
     SecToApplyRel = To;
 }
 
-void RelocationSection::makeSectionRelative(SectionBase *RefSec) {
+template <typename RelaType>
+static void RemoveRelativeDynamicReloc(uint64_t Offset,
+                                       DynamicRelocationSection *RelaDyn,
+                                       unique_function<void()> &RelacountDec) {
+  MutableArrayRef<RelaType> Rels{
+      reinterpret_cast<RelaType *>(RelaDyn->mutableContents().data()),
+      RelaDyn->Size / sizeof(RelaType)};
+  for (auto I = Rels.begin(), E = Rels.end(); I != E; ++I) {
+    if (I->r_offset == Offset) {
+      std::move(I + 1, E, I);
+      if (RelacountDec)
+        RelacountDec();
+      break;
+    }
+  }
+}
+
+void RelocationSection::makeSectionRelative(
+    SectionBase *RefSec, DynamicRelocationSection *RelaDyn,
+    unique_function<void()> &RelacountDec) {
   static lld::elf::Configuration LldConfig{};
   LldConfig.wordsize = 8;
   lld::elf::config = &LldConfig;
@@ -952,7 +971,7 @@ void RelocationSection::makeSectionRelative(SectionBase *RefSec) {
     if (NumRelocs == 0)
       return;
 
-    uint8_t *SecData = ApplySec->mutableData();
+    uint8_t *SecData = ApplySec->mutableContents().data();
     LldSection.relocations.reserve(NumRelocs);
     std::vector<lld::elf::Defined> Symbols;
     Symbols.reserve(NumRelocs);
@@ -960,7 +979,7 @@ void RelocationSection::makeSectionRelative(SectionBase *RefSec) {
       if (!R.RelocSymbol || !R.RelocSymbol->DefinedIn ||
           R.RelocSymbol->DefinedIn != RefSec)
         continue;
-      uint64_t Offset = R.Offset - ApplySec->Offset;
+      uint64_t Offset = R.Offset - ApplySec->Addr;
       uint8_t *Data = SecData + Offset;
       lld::elf::Symbol &LldSymbol = Symbols.emplace_back(
           nullptr, "", 0, 0, 0, R.RelocSymbol->Value - RefSec->Addr,
@@ -968,6 +987,16 @@ void RelocationSection::makeSectionRelative(SectionBase *RefSec) {
       LldSection.relocations.push_back(lld::elf::Relocation{
           lld::elf::target->getRelExpr(R.Type, LldSymbol, Data), R.Type, Offset,
           int64_t(R.Addend), &LldSymbol});
+
+      if (RelaDyn) {
+        // TODO: Make endian-independent
+        if (RelaDyn->EntrySize == sizeof(Elf64_Rela))
+          RemoveRelativeDynamicReloc<Elf64_Rela>(R.Offset, RelaDyn,
+                                                 RelacountDec);
+        else if (RelaDyn->EntrySize == sizeof(Elf32_Rela))
+          RemoveRelativeDynamicReloc<Elf32_Rela>(R.Offset, RelaDyn,
+                                                 RelacountDec);
+      }
     }
 
     LldSection.relocateAlloc(SecData, SecData + ApplySec->Size);
@@ -1070,25 +1099,6 @@ void Section::initialize(SectionTableRef SecTable) {
 }
 
 void Section::finalize() { this->Link = LinkSection ? LinkSection->Index : 0; }
-
-uint8_t *Section::mutableData() {
-  if (ParentSegment) {
-    if (ParentSegment->OwnedContents.empty() &&
-        !ParentSegment->Contents.empty()) {
-      ParentSegment->OwnedContents.assign(ParentSegment->Contents.begin(),
-                                          ParentSegment->Contents.end());
-      ParentSegment->Contents = ParentSegment->OwnedContents;
-    }
-    return ParentSegment->OwnedContents.data() +
-           (Offset - ParentSegment->Offset);
-  }
-
-  if (OwnedContents.empty() && !Contents.empty()) {
-    OwnedContents.assign(Contents.begin(), Contents.end());
-    Contents = OwnedContents;
-  }
-  return OwnedContents.data();
-}
 
 void GnuDebugLinkSection::init(StringRef File) {
   FileName = sys::path::filename(File);

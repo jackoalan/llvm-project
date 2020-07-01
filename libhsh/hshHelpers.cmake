@@ -187,3 +187,51 @@ endfunction()
 function(hsh_sources)
   set_source_files_properties(${ARGN} PROPERTIES HSH_ENABLED On)
 endfunction()
+
+#
+# Hsh executable resource extraction
+#
+function(hsh_add_executable target_name basis_target)
+  get_target_property(target_type ${basis_target} TYPE)
+  if(NOT ${target_type} STREQUAL "EXECUTABLE")
+    message(FATAL_ERROR "${basis_target} is not an executable target")
+  endif()
+
+  set(dest_binary "$<TARGET_FILE:${basis_target}>")
+  if(CMAKE_HOST_UNIX)
+    set(dest_binary "$<TARGET_FILE_NAME:${basis_target}>")
+  endif()
+  if(CMAKE_CONFIGURATION_TYPES)
+    list(GET CMAKE_CONFIGURATION_TYPES 0 first_type)
+    string(TOUPPER ${first_type} first_type_upper)
+    set(first_type_suffix _${first_type_upper})
+  endif()
+  get_target_property(ARG_OUTPUT_DIR ${basis_target} RUNTIME_OUTPUT_DIRECTORY${first_type_suffix})
+  if(CMAKE_CONFIGURATION_TYPES)
+    string(FIND "${ARG_OUTPUT_DIR}" "/${first_type}/" type_start REVERSE)
+    string(SUBSTRING "${ARG_OUTPUT_DIR}" 0 ${type_start} path_prefix)
+    string(SUBSTRING "${ARG_OUTPUT_DIR}" ${type_start} -1 path_suffix)
+    string(REPLACE "/${first_type}/" "/${CMAKE_CFG_INTDIR}/"
+            path_suffix ${path_suffix})
+    set(ARG_OUTPUT_DIR ${path_prefix}${path_suffix})
+  endif()
+
+  set(output_path "${ARG_OUTPUT_DIR}/${target_name}${CMAKE_EXECUTABLE_SUFFIX}")
+
+  add_custom_command(OUTPUT ${output_path}
+          COMMAND "$<TARGET_FILE:llvm-objcopy>"
+          --remove-section=".vulkan-spirv.*"
+          --remove-section=".deko.*"
+          --remove-section=".rela.*"
+          --keep-section=".rela.dyn"
+          --keep-section=".rela.plt"
+          --dump-section=".vulkan-spirv.shader"=${target_name}.vulkan-spirv.shader
+          --dump-section=".deko.shader"=${target_name}.deko.shader
+          --dump-section=".deko.control"=${target_name}.deko.control
+          "${dest_binary}" "${output_path}"
+          WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
+          DEPENDS ${basis_target} llvm-objcopy)
+  add_custom_target(${target_name} ALL DEPENDS ${basis_target} ${output_path})
+
+  target_link_options(${basis_target} PRIVATE -Xlinker --emit-relocs)
+endfunction()

@@ -42,6 +42,7 @@ add_llvm_tool(llvm-objcopy
   InstallNameToolOptsTableGen
   StripOptsTableGen
   )
+set_target_properties(llvm-objcopy PROPERTIES OUTPUT_NAME hsh-objcopy)
 target_include_directories(llvm-objcopy PRIVATE "${LLVM_EXTERNAL_LLD_SOURCE_DIR}/include")
 target_link_libraries(llvm-objcopy PRIVATE lldELF)
 

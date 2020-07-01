@@ -19,6 +19,7 @@ set(LLVM_DISTRIBUTION_COMPONENTS
         DirectXShaderCompiler-libs
         libhsh-headers
         libhsh-cmake-exports
+        llvm-objcopy
         CACHE STRING "")
 
 if ("${CMAKE_VERSION}" VERSION_LESS "3.13.4")

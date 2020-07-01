@@ -285,11 +285,13 @@ HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
 template <> struct ShaderObject<Target::VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
   ShaderObject() noexcept = default;
-  vk::ShaderModule Get(const vk::ShaderModuleCreateInfo &Info,
+  vk::ShaderModule Get(const ShaderCode<Target::VULKAN_SPIRV> &Info,
                        const SourceLocation &Location) noexcept {
     if (!ShaderModule) {
-      ShaderModule =
-          vulkan::Globals.Device.createShaderModuleUnique(Info).value;
+      ShaderModule = vulkan::Globals.Device
+                         .createShaderModuleUnique(vk::ShaderModuleCreateInfo{
+                             {}, Info.Blob.Size, reloc(Info.Blob.Data)})
+                         .value;
       vulkan::Globals.SetDebugObjectName(Location, ShaderModule.get());
     }
     return ShaderModule.get();
@@ -505,7 +507,7 @@ template <std::uint32_t NStages, std::uint32_t NBindings,
           std::uint32_t NAttachments>
 struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
                        NSamplers, NAttachments> {
-  std::array<vk::ShaderModuleCreateInfo, NStages> StageCodes;
+  std::array<ShaderCode<Target::VULKAN_SPIRV>, NStages> StageCodes;
   std::array<vk::ShaderStageFlagBits, NStages> StageFlags;
   std::array<vk::VertexInputBindingDescription, NBindings>
       VertexBindingDescriptions;
@@ -535,8 +537,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
       std::index_sequence<SSeq...>, std::index_sequence<BSeq...>,
       std::index_sequence<ASeq...>, std::index_sequence<SampSeq...>,
       std::index_sequence<AttSeq...>) noexcept
-      : StageCodes{vk::ShaderModuleCreateInfo{
-            {}, std::get<SSeq>(S).Blob.Size, std::get<SSeq>(S).Blob.Data}...},
+      : StageCodes(S),
         StageFlags{HshToVkShaderStage(std::get<SSeq>(S).Stage)...},
         VertexBindingDescriptions{vk::VertexInputBindingDescription{
             BSeq, std::get<BSeq>(B).Stride,
@@ -1243,7 +1244,7 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
   bool enableLayer(std::string_view Name) noexcept {
     for (const auto &L : Layers) {
-      if (!Name.compare(L.layerName)) {
+      if (!Name.compare(L.layerName.data())) {
         EnabledLayers.push_back(Name.data());
         return true;
       }
@@ -1253,7 +1254,7 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 
   bool enableExtension(std::string_view Name) noexcept {
     for (const auto &E : Extensions) {
-      if (!Name.compare(E.extensionName)) {
+      if (!Name.compare(E.extensionName.data())) {
         EnabledExtensions.push_back(Name.data());
         return true;
       }
@@ -1328,7 +1329,7 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
 
   bool enableLayer(std::string_view Name) noexcept {
     for (const auto &L : Layers) {
-      if (!Name.compare(L.layerName)) {
+      if (!Name.compare(L.layerName.data())) {
         EnabledLayers.push_back(Name.data());
         return true;
       }
@@ -1338,7 +1339,7 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
 
   bool enableExtension(std::string_view Name) noexcept {
     for (const auto &E : Extensions) {
-      if (!Name.compare(E.extensionName)) {
+      if (!Name.compare(E.extensionName.data())) {
         EnabledExtensions.push_back(Name.data());
         return true;
       }
@@ -1803,14 +1804,13 @@ public:
         continue;
       }
 
-      vk::StructureChain<vk::PhysicalDeviceProperties2,
-                         vk::PhysicalDeviceDriverProperties>
-          Properties2;
-      if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2)
-        Properties2 = PD.getProperties2<vk::PhysicalDeviceProperties2,
-                                        vk::PhysicalDeviceDriverProperties>();
-      if (!Acceptor(Properties,
-                    Properties2.get<vk::PhysicalDeviceDriverProperties>()))
+      if (!Acceptor(
+              Properties,
+              (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2
+                   ? PD.getProperties2<vk::PhysicalDeviceProperties2,
+                                       vk::PhysicalDeviceDriverProperties>()
+                         .get<vk::PhysicalDeviceDriverProperties>()
+                   : vk::PhysicalDeviceDriverProperties{})))
         continue;
 
       Ret.Data = std::make_unique<struct vulkan_device_owner::Data>();

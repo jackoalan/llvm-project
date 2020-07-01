@@ -484,6 +484,11 @@ public:
           return false;
         auto Target = HshTarget(D->InitHshTarget);
 
+        std::string SectionString;
+        raw_string_ostream SectionStringOS{SectionString};
+        SectionStringOS << "__attribute__((section(\"."
+                        << HshTargetToString(Target) << ".shader\")))";
+
         auto Policy =
             MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
         auto Sources = Builder.printResults(*Policy);
@@ -528,7 +533,8 @@ public:
           }
           *OS << "inline ";
           if (Target == HT_VULKAN_SPIRV) {
-            raw_carray32_ostream DataOut(*OS, "_hshs_"s + HashStr);
+            raw_carray32_ostream DataOut(*OS, "_hshs_"s + HashStr,
+                                         SectionStringOS.str());
             DataOut.write((const uint32_t *)Data.data(), Data.size() / 4);
           } else if (Target == HT_DEKO3D) {
             /* Dksh headers are packed together by the linker */
@@ -547,7 +553,8 @@ public:
               DataOut.write((const char *)Data.data() + 256, Data.size() - 256);
             }
           } else {
-            raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr);
+            raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr,
+                                       SectionStringOS.str());
             DataOut.write((const char *)Data.data(), Data.size());
           }
           *OS << "\ninline hsh::detail::ShaderObject<";

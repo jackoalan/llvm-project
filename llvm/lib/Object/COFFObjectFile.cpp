@@ -1163,8 +1163,9 @@ COFFObjectFile::getRelocations(const coff_section *Sec) const {
   case COFF::reloc_type:                                                       \
     return #reloc_type;
 
-StringRef COFFObjectFile::getRelocationTypeName(uint16_t Type) const {
-  switch (getMachine()) {
+StringRef COFFObjectFile::getRelocationTypeName(uint16_t Type,
+                                                uint16_t Machine) {
+  switch (Machine) {
   case COFF::IMAGE_FILE_MACHINE_AMD64:
     switch (Type) {
     LLVM_COFF_SWITCH_RELOC_TYPE_NAME(IMAGE_REL_AMD64_ABSOLUTE);

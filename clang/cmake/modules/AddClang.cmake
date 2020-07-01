@@ -162,10 +162,8 @@ macro(add_clang_tool name)
 
   if (CLANG_BUILD_TOOLS)
     set(export_to_clangtargets)
-    if(${name} STREQUAL hshgen)
-      set(export_to_clangtargets EXPORT hshTargets)
-    elseif(${name} IN_LIST LLVM_DISTRIBUTION_COMPONENTS OR
-            NOT LLVM_DISTRIBUTION_COMPONENTS)
+    if(${name} IN_LIST LLVM_DISTRIBUTION_COMPONENTS OR
+        NOT LLVM_DISTRIBUTION_COMPONENTS)
       set(export_to_clangtargets EXPORT ClangTargets)
       set_property(GLOBAL PROPERTY CLANG_HAS_EXPORTS True)
     endif()

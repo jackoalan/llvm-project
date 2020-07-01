@@ -12,6 +12,7 @@
 #include "Buffer.h"
 #include "CopyConfig.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -455,7 +456,6 @@ public:
   uint64_t OriginalOffset = 0;
   Segment *ParentSegment = nullptr;
   ArrayRef<uint8_t> Contents;
-  std::vector<uint8_t> OwnedContents;
   std::set<const SectionBase *, SectionCompare> Sections;
 
   explicit Segment(ArrayRef<uint8_t> Data) : Contents(Data) {}
@@ -471,13 +471,16 @@ public:
   void addSection(const SectionBase *Sec) { Sections.insert(Sec); }
 
   ArrayRef<uint8_t> getContents() const { return Contents; }
+  MutableArrayRef<uint8_t> mutableContents() {
+    return MutableArrayRef<uint8_t>{const_cast<uint8_t *>(Contents.data()),
+                                    Contents.size()};
+  }
 };
 
 class Section : public SectionBase {
   MAKE_SEC_WRITER_FRIEND
 
   ArrayRef<uint8_t> Contents;
-  std::vector<uint8_t> OwnedContents;
   SectionBase *LinkSection = nullptr;
 
 public:
@@ -489,7 +492,10 @@ public:
       function_ref<bool(const SectionBase *)> ToRemove) override;
   void initialize(SectionTableRef SecTable) override;
   void finalize() override;
-  uint8_t *mutableData();
+  MutableArrayRef<uint8_t> mutableContents() {
+    return MutableArrayRef<uint8_t>{const_cast<uint8_t *>(Contents.data()),
+                                    Contents.size()};
+  }
 
   static bool classof(const SectionBase *S) {
     return S->OriginalType == ELF::SHT_PROGBITS;
@@ -777,7 +783,9 @@ public:
       const DenseMap<SectionBase *, SectionBase *> &FromTo) override;
 
   // Used by hsh-objcopy
-  void makeSectionRelative(SectionBase *RefSec);
+  void makeSectionRelative(SectionBase *RefSec,
+                           DynamicRelocationSection *RelaDyn,
+                           unique_function<void()> &RelacountDec);
 
   static bool classof(const SectionBase *S) {
     if (S->OriginalFlags & ELF::SHF_ALLOC)
@@ -858,6 +866,10 @@ public:
   Error removeSectionReferences(
       bool AllowBrokenLinks,
       function_ref<bool(const SectionBase *)> ToRemove) override;
+  MutableArrayRef<uint8_t> mutableContents() {
+    return MutableArrayRef<uint8_t>{const_cast<uint8_t *>(Contents.data()),
+                                    Contents.size()};
+  }
 
   static bool classof(const SectionBase *S) {
     if (!(S->OriginalFlags & ELF::SHF_ALLOC))
