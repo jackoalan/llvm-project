@@ -37,6 +37,10 @@ NO-DBI:                     Cross Module Exports
 NO-DBI-NEXT: ============================================================
 NO-DBI-NEXT:     DBI stream not present
 
+NO-DBI:                            Fixups
+NO-DBI-NEXT: ============================================================
+NO-DBI-NEXT:     DBI stream not present
+
 
 NO-DBI-YAML-NOT: Native PDB Error: The specified stream could not be loaded.
 

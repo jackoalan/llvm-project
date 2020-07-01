@@ -129,7 +129,9 @@ Error DbiStream::reload(PDBFile *Pdb) {
   if (auto EC = initializeOldFpoRecords(Pdb))
     return EC;
   if (auto EC = initializeNewFpoRecords(Pdb))
-     return EC;
+    return EC;
+  if (auto EC = initializeFixupRecords(Pdb))
+    return EC;
 
   if (Reader.bytesRemaining() > 0)
     return make_error<RawError>(raw_error_code::corrupt_file,
@@ -212,6 +214,12 @@ bool DbiStream::hasNewFpoRecords() const { return NewFpoStream != nullptr; }
 
 const DebugFrameDataSubsectionRef &DbiStream::getNewFpoRecords() const {
   return NewFpoRecords;
+}
+
+bool DbiStream::hasFixupRecords() const { return FixupStream != nullptr; }
+
+FixedStreamArray<FixupEntry> DbiStream::getFixupRecords() const {
+  return FixupRecords;
 }
 
 const DbiModuleList &DbiStream::modules() const { return Modules; }
@@ -319,6 +327,30 @@ Error DbiStream::initializeNewFpoRecords(PDBFile *Pdb) {
     return EC;
 
   NewFpoStream = std::move(FS);
+  return Error::success();
+}
+
+Error DbiStream::initializeFixupRecords(PDBFile *Pdb) {
+  Expected<std::unique_ptr<msf::MappedBlockStream>> ExpectedStream =
+      createIndexedStreamForHeaderType(Pdb, DbgHeaderType::Fixup);
+  if (auto EC = ExpectedStream.takeError())
+    return EC;
+
+  auto &FS = *ExpectedStream;
+  if (!FS)
+    return Error::success();
+
+  size_t StreamLen = FS->getLength();
+  if (StreamLen % sizeof(FixupEntry))
+    return make_error<RawError>(raw_error_code::corrupt_file,
+                                "Corrupted Fixup stream.");
+
+  size_t NumRecords = StreamLen / sizeof(FixupEntry);
+  BinaryStreamReader Reader(*FS);
+  if (auto EC = Reader.readArray(FixupRecords, NumRecords))
+    return make_error<RawError>(raw_error_code::corrupt_file,
+                                "Corrupted Fixup stream.");
+  FixupStream = std::move(FS);
   return Error::success();
 }
 

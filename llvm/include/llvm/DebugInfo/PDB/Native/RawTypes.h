@@ -343,6 +343,16 @@ struct SrcHeaderBlockEntry {
 };
 static_assert(sizeof(SrcHeaderBlockEntry) == 40, "Incorrect struct size!");
 
+/// A relocation entry within the Fixup substream of the DBI stream.
+/// Corresponds to XFIXUP_DATA in the reference implementation.
+struct FixupEntry {
+  support::ulittle16_t Type;
+  support::ulittle16_t Extra;
+  support::ulittle32_t RVA;
+  support::ulittle32_t RVATarget;
+};
+static_assert(sizeof(FixupEntry) == 12, "Incorrect struct size!");
+
 } // namespace pdb
 } // namespace llvm
 

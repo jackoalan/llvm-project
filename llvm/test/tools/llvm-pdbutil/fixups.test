@@ -1,0 +1,11 @@
+; RUN: llvm-pdbutil dump -fixups %p/Inputs/FixupsTest.pdb \
+; RUN:     | FileCheck %s
+
+CHECK:                            Fixups
+CHECK-NEXT: ============================================================
+CHECK-NEXT:              Type              | Extra  |    RVA     | RVATarget
+CHECK-NEXT: IMAGE_REL_AMD64_ADDR64         |    0x0 |     0x3000 |     0x3008
+CHECK-NEXT: IMAGE_REL_AMD64_REL32          |    0x0 |     0x101F |     0x3008
+CHECK-NEXT: IMAGE_REL_AMD64_REL32          | 0x8000 |     0x1024 |     0x1000
+CHECK-NEXT: IMAGE_REL_AMD64_REL32          |    0x0 |     0x102B |     0x3000
+CHECK-NEXT: IMAGE_REL_AMD64_REL32          | 0x8000 |     0x1032 |     0x1000

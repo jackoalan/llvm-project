@@ -180,6 +180,7 @@ extern llvm::cl::opt<bool> DumpSectionMap;
 extern llvm::cl::opt<bool> DumpModules;
 extern llvm::cl::opt<bool> DumpModuleFiles;
 extern llvm::cl::opt<bool> DumpFpo;
+extern llvm::cl::opt<bool> DumpFixups;
 extern llvm::cl::opt<bool> RawAll;
 }
 

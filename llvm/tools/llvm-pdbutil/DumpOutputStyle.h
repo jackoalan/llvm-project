@@ -94,6 +94,7 @@ private:
   Error dumpFpo();
   Error dumpOldFpo(PDBFile &File);
   Error dumpNewFpo(PDBFile &File);
+  Error dumpFixups();
   Error dumpTpiStream(uint32_t StreamIdx);
   Error dumpTypesFromObjectFile();
   Error dumpTypeRefStats();
