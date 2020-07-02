@@ -14,6 +14,8 @@
 #include "Writer.h"
 #include "llvm-objcopy.h"
 
+#include "llvm/DebugInfo/PDB/Native/DbiStream.h"
+#include "llvm/DebugInfo/PDB/Native/NativeSession.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/CRC.h"
@@ -27,6 +29,8 @@ namespace coff {
 
 using namespace object;
 using namespace COFF;
+using namespace pdb;
+using namespace support::endian;
 
 static bool isDebugSection(const Section &Sec) {
   return Sec.Name.startswith(".debug");
@@ -126,7 +130,135 @@ static void setSectionFlags(Section &Sec, SectionFlag AllFlags) {
   Sec.Header.Characteristics = NewCharacteristics;
 }
 
-static Error handleArgs(const CopyConfig &Config, Object &Obj) {
+static void applyRelX64(uint8_t *Off, uint16_t Type, uint64_t S,
+                        uint64_t P) {
+  switch (Type) {
+  case IMAGE_REL_AMD64_ADDR32:
+    write32le(Off, S);
+    break;
+  case IMAGE_REL_AMD64_ADDR64:
+    write64le(Off, S);
+    break;
+  case IMAGE_REL_AMD64_ADDR32NB:
+    write32le(Off, S);
+    break;
+  case IMAGE_REL_AMD64_REL32:
+    write32le(Off, S - P - 4);
+    break;
+  case IMAGE_REL_AMD64_REL32_1:
+    write32le(Off, S - P - 5);
+    break;
+  case IMAGE_REL_AMD64_REL32_2:
+    write32le(Off, S - P - 6);
+    break;
+  case IMAGE_REL_AMD64_REL32_3:
+    write32le(Off, S - P - 7);
+    break;
+  case IMAGE_REL_AMD64_REL32_4:
+    write32le(Off, S - P - 8);
+    break;
+  case IMAGE_REL_AMD64_REL32_5:
+    write32le(Off, S - P - 9);
+    break;
+  default:
+    error("unsupported relocation type 0x" + Twine::utohexstr(Type));
+  }
+}
+
+static void makeSectionRelative(Section &RefSec, Object &Obj, DbiStream &Dbi) {
+  const uint32_t SecVirtualAddress = RefSec.Header.VirtualAddress;
+  const uint32_t SecVirtualSize = RefSec.Header.VirtualSize;
+
+  Section *LastApplySec = nullptr;
+  auto FindSectionOfRVA = [&](uint32_t RVA) -> Section * {
+    if (!LastApplySec || RVA < LastApplySec->Header.VirtualAddress ||
+        RVA >= LastApplySec->Header.VirtualAddress +
+                   LastApplySec->Header.VirtualSize) {
+      for (auto &Sec : Obj.getMutableSections()) {
+        if (RVA >= Sec.Header.VirtualAddress &&
+            RVA < Sec.Header.VirtualAddress + Sec.Header.VirtualSize) {
+          LastApplySec = &Sec;
+          return LastApplySec;
+        }
+      }
+      return nullptr;
+    }
+    return LastApplySec;
+  };
+
+  for (const auto &Fixup : Dbi.getFixupRecords()) {
+    if (Fixup.RVATarget >= SecVirtualAddress &&
+        Fixup.RVATarget < SecVirtualAddress + SecVirtualSize) {
+      if (Section *ApplySec = FindSectionOfRVA(Fixup.RVA)) {
+        uint8_t *SecData = ApplySec->mutableContents().data();
+        uint64_t Offset = Fixup.RVA - ApplySec->Header.VirtualAddress;
+        uint8_t *Data = SecData + Offset;
+        applyRelX64(Data, Fixup.Type, Fixup.RVATarget - SecVirtualAddress,
+                    Fixup.RVA);
+      }
+    }
+  }
+}
+
+static Error handleArgs(const CopyConfig &Config, Object &Obj,
+                        COFFObjectFile &ObjFile) {
+  if (Config.HshObjcopy) {
+    StringRef PdbPath;
+    const llvm::codeview::DebugInfo *PdbInfo = nullptr;
+    if (Error E = ObjFile.getDebugPDBInfo(PdbInfo, PdbPath))
+      return E;
+
+    std::unique_ptr<IPDBSession> PDBSession;
+    if (Error E = NativeSession::createFromPdbPath(PdbPath, PDBSession))
+      return E;
+
+    NativeSession &PDBNative = static_cast<NativeSession&>(*PDBSession);
+    auto Dbi = PDBNative.getPDBFile().getPDBDbiStream();
+    if (!Dbi)
+      return createStringError(inconvertibleErrorCode(), "DBI stream not present in PDB");
+
+    if (!Dbi->hasFixupRecords())
+      return createStringError(inconvertibleErrorCode(), "Fixup stream not present in PDB");
+
+    // Set __hsh_objcopy to 1
+#if 0
+    bool FoundSym = false;
+    for (const auto& Sym : Obj.getSymbols()) {
+      if (Sym.Name == "__hsh_objcopy") {
+        if (auto *Sec = const_cast<Section*>(Obj.findSection(Sym.TargetSectionId))) {
+          Sec->mutableContents()[Sym.Sym.Value - Sec->Header.VirtualAddress] = 1;
+          FoundSym = true;
+        }
+      }
+    }
+    if (!FoundSym)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_objcopy' symbol not found");
+#endif
+
+    for (StringRef Flag : Config.DumpSection) {
+      StringRef SectionName;
+      StringRef FileName;
+      std::tie(SectionName, FileName) = Flag.split('=');
+
+      bool IsEmpty = true;
+      for (auto &Sec : Obj.getMutableSections()) {
+        if (Sec.Name == SectionName) {
+          if (!Sec.getContents().empty()) {
+            IsEmpty = false;
+            makeSectionRelative(Sec, Obj, *Dbi);
+          }
+          break;
+        }
+      }
+      if (IsEmpty)
+        continue;
+
+      //if (Error E = dumpSectionToFile(SectionName, FileName, Obj))
+      //  return E;
+    }
+  }
+
   // Perform the actual section removals.
   Obj.removeSections([&Config](const Section &Sec) {
     // Contrary to --only-keep-debug, --only-section fully removes sections that
@@ -244,7 +376,8 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj) {
   if (Config.AllowBrokenLinks || !Config.BuildIdLinkDir.empty() ||
       Config.BuildIdLinkInput || Config.BuildIdLinkOutput ||
       !Config.SplitDWO.empty() || !Config.SymbolsPrefix.empty() ||
-      !Config.AllocSectionsPrefix.empty() || !Config.DumpSection.empty() ||
+      !Config.AllocSectionsPrefix.empty() ||
+      (!Config.DumpSection.empty() && !Config.HshObjcopy) ||
       !Config.KeepSection.empty() || Config.NewSymbolVisibility ||
       !Config.SymbolsToGlobalize.empty() || !Config.SymbolsToKeep.empty() ||
       !Config.SymbolsToLocalize.empty() || !Config.SymbolsToWeaken.empty() ||
@@ -271,7 +404,7 @@ Error executeObjcopyOnBinary(const CopyConfig &Config, COFFObjectFile &In,
     return createFileError(Config.InputFilename, ObjOrErr.takeError());
   Object *Obj = ObjOrErr->get();
   assert(Obj && "Unable to deserialize COFF object");
-  if (Error E = handleArgs(Config, *Obj))
+  if (Error E = handleArgs(Config, *Obj, In))
     return createFileError(Config.InputFilename, std::move(E));
   COFFWriter Writer(*Obj, Out);
   if (Error E = Writer.write())

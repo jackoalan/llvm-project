@@ -198,6 +198,7 @@ public:
     Symbol *operator*() const { return file->getSymbol(I->SymbolTableIndex); }
   };
 
+  SectionChunk() = default;
   SectionChunk(ObjFile *file, const coff_section *header);
   static bool classof(const Chunk *c) { return c->kind() == SectionKind; }
   size_t getSize() const { return header->SizeOfRawData; }

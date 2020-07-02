@@ -3,6 +3,7 @@ set(LLVM_LINK_COMPONENTS
   Option
   Support
   MC
+  DebugInfoPDB
   )
 
 set(LLVM_TARGET_DEFINITIONS ObjcopyOpts.td)

@@ -46,6 +46,12 @@ struct Section {
     return ContentsRef;
   }
 
+  MutableArrayRef<uint8_t> mutableContents() {
+    ArrayRef<uint8_t> Contents = getContents();
+    return MutableArrayRef<uint8_t>{const_cast<uint8_t *>(Contents.data()),
+                                    Contents.size()};
+  }
+
   void setContentsRef(ArrayRef<uint8_t> Data) {
     OwnedContents.clear();
     ContentsRef = Data;
