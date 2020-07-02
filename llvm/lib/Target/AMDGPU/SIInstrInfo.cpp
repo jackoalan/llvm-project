@@ -1857,8 +1857,14 @@ static MachineInstr *swapRegAndNonRegOperand(MachineInstr &MI,
     RegOp.ChangeToImmediate(NonRegOp.getImm());
   else if (NonRegOp.isFI())
     RegOp.ChangeToFrameIndex(NonRegOp.getIndex());
-  else
+  else if (NonRegOp.isGlobal()) {
+    RegOp.ChangeToGA(NonRegOp.getGlobal(), NonRegOp.getOffset(),
+                     NonRegOp.getTargetFlags());
+  } else
     return nullptr;
+
+  // Make sure we don't reinterpret a subreg index in the target flags.
+  RegOp.setTargetFlags(NonRegOp.getTargetFlags());
 
   NonRegOp.ChangeToRegister(Reg, false, false, IsKill, IsDead, IsUndef, IsDebug);
   NonRegOp.setSubReg(SubReg);
@@ -2988,6 +2994,10 @@ bool SIInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (MI.isTerminator() || MI.isPosition())
     return true;
 
+  // INLINEASM_BR can jump to another block
+  if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
+    return true;
+
   // Target-independent instructions do not have an implicit-use of EXEC, even
   // when they operate on VGPRs. Treating EXEC modifications as scheduling
   // boundaries prevents incorrect movements of such instructions.
@@ -3775,7 +3785,7 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr &MI,
     }
 
     if (isVOP3(MI) && LiteralCount) {
-      if (LiteralCount && !ST.hasVOP3Literal()) {
+      if (!ST.hasVOP3Literal()) {
         ErrInfo = "VOP3 instruction uses literal";
         return false;
       }

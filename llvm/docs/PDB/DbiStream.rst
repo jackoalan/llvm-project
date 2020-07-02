@@ -427,7 +427,9 @@ any ``.debug$F`` section from any of the linker inputs.
 is a debug data directory of type ``IMAGE_DEBUG_TYPE_EXCEPTION``.
 
 **Fixup Data** - ``DbgStreamArray[2]``.  The data in the referenced stream is a
-debug data directory of type ``IMAGE_DEBUG_TYPE_FIXUP``.
+debug data directory of type ``IMAGE_DEBUG_TYPE_FIXUP``.  This stream is present
+when linked with ``/DEBUGTYPE:FIXUP``.  It contains records of all relocations
+performed by the linker.
 
 **Omap To Src Data** - ``DbgStreamArray[3]``.  The data in the referenced stream
 is a debug data directory of type ``IMAGE_DEBUG_TYPE_OMAP_TO_SRC``.  This 

@@ -1185,7 +1185,8 @@ Error DumpOutputStyle::dumpFixups() {
   auto &Dbi = cantFail(getPdb().getPDBDbiStream());
 
   if (!Dbi.hasFixupRecords()) {
-    P.printLine("PDB does not contain fixup stream");
+    P.printLine(
+        "PDB does not contain fixup stream (link with /DEBUGTYPE:CV,FIXUP)");
     return Error::success();
   }
 
@@ -1196,7 +1197,7 @@ Error DumpOutputStyle::dumpFixups() {
     StringRef RelocationType = object::COFFObjectFile::getRelocationTypeName(
         F.Type, static_cast<uint16_t>(Dbi.getMachineType()));
     if (RelocationType != "Unknown") {
-      P.formatLine("{0,30} | {1,6:X} | {2,10:X} | {3,10:X}", RelocationType,
+      P.formatLine("{0,-30} | {1,6:X} | {2,10:X} | {3,10:X}", RelocationType,
                    fmtle(F.Extra), fmtle(F.RVA), fmtle(F.RVATarget));
     } else {
       P.formatLine("{0,30:X} | {1,6:X} | {2,10:X} | {3,10:X}", fmtle(F.Type),
