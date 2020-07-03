@@ -14,8 +14,11 @@
 #include "Writer.h"
 #include "llvm-objcopy.h"
 
+#include "llvm/DebugInfo/CodeView/RecordName.h"
+#include "llvm/DebugInfo/CodeView/SymbolDeserializer.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
 #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
+#include "llvm/DebugInfo/PDB/Native/SymbolStream.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/CRC.h"
@@ -29,6 +32,7 @@ namespace coff {
 
 using namespace object;
 using namespace COFF;
+using namespace codeview;
 using namespace pdb;
 using namespace support::endian;
 
@@ -202,9 +206,11 @@ static void makeSectionRelative(Section &RefSec, Object &Obj, DbiStream &Dbi) {
 
 static Error handleArgs(const CopyConfig &Config, Object &Obj,
                         COFFObjectFile &ObjFile) {
+  SmallVector<ssize_t, 16> SecIdsToRemove;
+
   if (Config.HshObjcopy) {
     StringRef PdbPath;
-    const llvm::codeview::DebugInfo *PdbInfo = nullptr;
+    const DebugInfo *PdbInfo = nullptr;
     if (Error E = ObjFile.getDebugPDBInfo(PdbInfo, PdbPath))
       return E;
 
@@ -220,47 +226,68 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     if (!Dbi->hasFixupRecords())
       return createStringError(inconvertibleErrorCode(), "Fixup stream not present in PDB");
 
-    // Set __hsh_objcopy to 1
-#if 0
+    auto Symbols = PDBNative.getPDBFile().getPDBSymbolStream();
+    if (!Symbols)
+      return createStringError(inconvertibleErrorCode(), "Symbol stream not present in PDB");
+
+    // Set __hsh_objcopy to 1 and find offsets table
     bool FoundSym = false;
-    for (const auto& Sym : Obj.getSymbols()) {
-      if (Sym.Name == "__hsh_objcopy") {
-        if (auto *Sec = const_cast<Section*>(Obj.findSection(Sym.TargetSectionId))) {
-          Sec->mutableContents()[Sym.Sym.Value - Sec->Header.VirtualAddress] = 1;
-          FoundSym = true;
+    ssize_t HshOffsetsSecId = -1;
+    uint32_t HshOffsetsSecOffset = 0;
+    for (const auto &Sym : Symbols->getSymbolArray()) {
+      if (Sym.kind() == S_PUB32) {
+        StringRef Name = getSymbolName(Sym);
+        if (Name == "__hsh_objcopy") {
+          auto Pub =
+              cantFail(SymbolDeserializer::deserializeAs<PublicSym32>(Sym));
+          if (auto *Sec = const_cast<Section *>(Obj.findSection(Pub.Segment))) {
+            Sec->mutableContents()[Pub.Offset] = 1;
+            FoundSym = true;
+            if (HshOffsetsSecId != -1)
+              break;
+          }
+        } else if (Name == "__hsh_offsets") {
+          auto Pub =
+              cantFail(SymbolDeserializer::deserializeAs<PublicSym32>(Sym));
+          if (auto *Sec = const_cast<Section *>(Obj.findSection(Pub.Segment))) {
+            HshOffsetsSecId = Sec->UniqueId;
+            HshOffsetsSecOffset = Pub.Offset;
+            if (FoundSym)
+              break;
+          }
         }
       }
     }
     if (!FoundSym)
       return createStringError(object_error::parse_failed,
                                "'__hsh_objcopy' symbol not found");
-#endif
+    if (HshOffsetsSecId == -1)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_offsets' symbol not found");
 
-    for (StringRef Flag : Config.DumpSection) {
-      StringRef SectionName;
-      StringRef FileName;
-      std::tie(SectionName, FileName) = Flag.split('=');
+    Obj.HshSectionsTableSectionId = -1;
 
-      bool IsEmpty = true;
-      for (auto &Sec : Obj.getMutableSections()) {
-        if (Sec.Name == SectionName) {
+    // Process hsh section and mark for removal
+#if 0
+    for (auto &Sec : Obj.getMutableSections()) {
+      if (Sec.Name.startswith(".hsh")) {
+        uint32_t HshIdx = 0;
+        if (!Sec.Name.drop_front(4).getAsInteger(10, HshIdx)) {
           if (!Sec.getContents().empty()) {
-            IsEmpty = false;
             makeSectionRelative(Sec, Obj, *Dbi);
+            Obj.HshSections.push_back(
+                {Sec.getContents(),
+                 uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
+            SecIdsToRemove.push_back(Sec.UniqueId);
           }
-          break;
         }
       }
-      if (IsEmpty)
-        continue;
-
-      //if (Error E = dumpSectionToFile(SectionName, FileName, Obj))
-      //  return E;
     }
+#endif
   }
 
   // Perform the actual section removals.
-  Obj.removeSections([&Config](const Section &Sec) {
+  Obj.removeSections([&Config, &SecIdsToRemove](const Section &Sec) {
     // Contrary to --only-keep-debug, --only-section fully removes sections that
     // aren't mentioned.
     if (!Config.OnlySection.empty() && !Config.OnlySection.matches(Sec.Name))
@@ -274,6 +301,10 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     }
 
     if (Config.ToRemove.matches(Sec.Name))
+      return true;
+
+    if (std::find(SecIdsToRemove.begin(), SecIdsToRemove.end(), Sec.UniqueId) !=
+        SecIdsToRemove.end())
       return true;
 
     return false;
@@ -376,8 +407,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
   if (Config.AllowBrokenLinks || !Config.BuildIdLinkDir.empty() ||
       Config.BuildIdLinkInput || Config.BuildIdLinkOutput ||
       !Config.SplitDWO.empty() || !Config.SymbolsPrefix.empty() ||
-      !Config.AllocSectionsPrefix.empty() ||
-      (!Config.DumpSection.empty() && !Config.HshObjcopy) ||
+      !Config.AllocSectionsPrefix.empty() || !Config.DumpSection.empty() ||
       !Config.KeepSection.empty() || Config.NewSymbolVisibility ||
       !Config.SymbolsToGlobalize.empty() || !Config.SymbolsToKeep.empty() ||
       !Config.SymbolsToLocalize.empty() || !Config.SymbolsToWeaken.empty() ||

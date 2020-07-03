@@ -70,12 +70,12 @@ add_custom_command(OUTPUT "${dxc_header}"
 # UAM library
 find_program(MESON meson)
 if(NOT MESON)
-  message(FATAL_ERROR "Failed to find meson, which is required to build bundled radare2")
+  message(FATAL_ERROR "Failed to find meson, which is required to build uam")
 endif()
 
 find_program(NINJA ninja)
 if(NOT NINJA)
-  message(FATAL_ERROR "Failed to find ninja, which is required to build bundled radare2")
+  message(FATAL_ERROR "Failed to find ninja, which is required to build uam")
 endif()
 
 set(MESON_OPTIONS "--prefix=${CLANG_BINARY_DIR}")

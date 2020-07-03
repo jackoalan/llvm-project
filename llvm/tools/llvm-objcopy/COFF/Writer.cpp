@@ -236,6 +236,14 @@ Error COFFWriter::finalize(bool IsBigObj) {
   FileSize += SymTabSize + StrTabSize;
   FileSize = alignTo(FileSize, FileAlignment);
 
+  if (Obj.HshSectionsTableSectionId != -1) {
+    HshSectionPtr = FileSize;
+    for (const auto &HshSec : Obj.HshSections) {
+      FileSize += HshSec.Contents.size();
+      FileSize = alignTo(FileSize, FileAlignment);
+    }
+  }
+
   return Error::success();
 }
 
@@ -379,6 +387,27 @@ Error COFFWriter::write(bool IsBigObj) {
   if (Obj.IsPE)
     if (Error E = patchDebugDirectory())
       return E;
+
+  if (Obj.HshSectionsTableSectionId != -1) {
+    const Section *HshTableSection =
+        Obj.findSection(Obj.HshSectionsTableSectionId);
+    assert(HshTableSection);
+    uint32_t HshTableSectionOffset = HshTableSection->Header.PointerToRawData;
+
+    for (const auto &HshSec : Obj.HshSections) {
+      uint8_t *Ptr = Buf.getBufferStart() + HshSectionPtr;
+
+      support::ulittle32_t *OffsetPtr =
+          reinterpret_cast<support::ulittle32_t *>(Buf.getBufferStart() +
+                                                   HshTableSectionOffset +
+                                                   HshSec.TableSectionOffset);
+      *OffsetPtr = HshSectionPtr;
+
+      std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
+      HshSectionPtr += HshSec.Contents.size();
+      HshSectionPtr = alignTo(HshSectionPtr, FileAlignment);
+    }
+  }
 
   return Buf.commit();
 }

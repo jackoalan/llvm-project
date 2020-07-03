@@ -141,6 +141,13 @@ struct Object {
   void removeSections(function_ref<bool(const Section &)> ToRemove);
   void truncateSections(function_ref<bool(const Section &)> ToTruncate);
 
+  ssize_t HshSectionsTableSectionId = -1;
+  struct HshSection {
+    ArrayRef<uint8_t> Contents;
+    uint32_t TableSectionOffset;
+  };
+  std::vector<HshSection> HshSections;
+
 private:
   std::vector<Symbol> Symbols;
   DenseMap<size_t, Symbol *> SymbolMap;

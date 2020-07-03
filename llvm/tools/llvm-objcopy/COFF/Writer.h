@@ -29,6 +29,7 @@ class COFFWriter {
   size_t FileAlignment;
   size_t SizeOfInitializedData;
   StringTableBuilder StrTabBuilder;
+  size_t HshSectionPtr;
 
   template <class SymbolTy> std::pair<size_t, size_t> finalizeSymbolTable();
   Error finalizeRelocTargets();
