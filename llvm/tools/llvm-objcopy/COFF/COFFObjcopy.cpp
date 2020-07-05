@@ -170,7 +170,8 @@ static void applyRelX64(uint8_t *Off, uint16_t Type, uint64_t S,
 }
 
 static void moveSection(Section &RefSec, Object &Obj, DbiStream &Dbi,
-                        uint32_t NewBase) {
+                        uint32_t NewBase,
+                        const std::function<void(uint32_t)> &RemoveBaseReloc) {
   const uint32_t SecVirtualAddress = RefSec.Header.VirtualAddress;
   const uint32_t SecVirtualSize = RefSec.Header.VirtualSize;
 
@@ -201,6 +202,8 @@ static void moveSection(Section &RefSec, Object &Obj, DbiStream &Dbi,
         // TODO: Other architectures
         applyRelX64(Data, Fixup.Type,
                     Fixup.RVATarget - SecVirtualAddress + NewBase, Fixup.RVA);
+        if (RemoveBaseReloc)
+          RemoveBaseReloc(Fixup.RVA);
       }
     }
   }
@@ -272,6 +275,40 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
 
     Obj.HshSectionsTableSectionId = HshOffsetsSecId;
 
+    std::function<void(uint32_t)> RemoveBaseReloc{};
+    for (auto &Sec : Obj.getMutableSections()) {
+      if (Sec.Name == ".reloc") {
+        RemoveBaseReloc = [RelocData = Sec.mutableContents()](uint32_t RVA) {
+          uint8_t *Ptr = RelocData.data();
+          uint8_t *End = Ptr + RelocData.size();
+          while (Ptr < End) {
+            uint32_t PageRVA = read32le(Ptr);
+            uint32_t SizeOfBlock = read32le(Ptr + 4);
+            uint8_t *BlockEnd = Ptr + SizeOfBlock;
+            if ((RVA & 0xfffff000) == PageRVA) {
+              Ptr += 8;
+              while (Ptr < End && Ptr < BlockEnd) {
+                uint16_t Entry = read16le(Ptr);
+                if (Entry >> 12) {
+                  uint32_t TestRVA = PageRVA + (Entry & 0xfff);
+                  if (TestRVA == RVA) {
+                    std::move(Ptr + 2, BlockEnd, Ptr);
+                    write16le(BlockEnd - 2, 0);
+                    return;
+                  }
+                }
+                Ptr += 2;
+              }
+              return;
+            } else {
+              Ptr = BlockEnd;
+            }
+          }
+        };
+        break;
+      }
+    }
+
     uint32_t NewSectionBaseAddr = UINT32_MAX;
     for (auto &Sec : Obj.getMutableSections()) {
       if (Sec.Name.startswith(".hsh")) {
@@ -282,7 +319,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
         uint32_t HshIdx = 0;
         if (!Sec.Name.drop_front(4).getAsInteger(10, HshIdx)) {
           if (!Sec.getContents().empty()) {
-            moveSection(Sec, Obj, *Dbi, 0);
+            moveSection(Sec, Obj, *Dbi, 0, RemoveBaseReloc);
             Obj.HshSections.push_back(
                 {Sec.getContents(),
                  uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
@@ -291,7 +328,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
         }
       } else if (NewSectionBaseAddr != UINT32_MAX) {
         // Re-relocate sections after hsh sections
-        moveSection(Sec, Obj, *Dbi, NewSectionBaseAddr);
+        moveSection(Sec, Obj, *Dbi, NewSectionBaseAddr, {});
         Sec.Header.VirtualAddress = NewSectionBaseAddr;
 
         if (Sec.Name == ".reloc") {
