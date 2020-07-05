@@ -237,10 +237,11 @@ Error COFFWriter::finalize(bool IsBigObj) {
   FileSize = alignTo(FileSize, FileAlignment);
 
   if (Obj.HshSectionsTableSectionId != -1) {
+    FileSize = alignTo(FileSize, 0x10000);
     HshSectionPtr = FileSize;
     for (const auto &HshSec : Obj.HshSections) {
       FileSize += HshSec.Contents.size();
-      FileSize = alignTo(FileSize, FileAlignment);
+      FileSize = alignTo(FileSize, 0x10000);
     }
   }
 
@@ -405,7 +406,7 @@ Error COFFWriter::write(bool IsBigObj) {
 
       std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
       HshSectionPtr += HshSec.Contents.size();
-      HshSectionPtr = alignTo(HshSectionPtr, FileAlignment);
+      HshSectionPtr = alignTo(HshSectionPtr, 0x10000);
     }
   }
 

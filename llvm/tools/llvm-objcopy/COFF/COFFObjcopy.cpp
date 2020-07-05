@@ -169,7 +169,8 @@ static void applyRelX64(uint8_t *Off, uint16_t Type, uint64_t S,
   }
 }
 
-static void makeSectionRelative(Section &RefSec, Object &Obj, DbiStream &Dbi) {
+static void moveSection(Section &RefSec, Object &Obj, DbiStream &Dbi,
+                        uint32_t NewBase) {
   const uint32_t SecVirtualAddress = RefSec.Header.VirtualAddress;
   const uint32_t SecVirtualSize = RefSec.Header.VirtualSize;
 
@@ -197,8 +198,9 @@ static void makeSectionRelative(Section &RefSec, Object &Obj, DbiStream &Dbi) {
         uint8_t *SecData = ApplySec->mutableContents().data();
         uint64_t Offset = Fixup.RVA - ApplySec->Header.VirtualAddress;
         uint8_t *Data = SecData + Offset;
-        applyRelX64(Data, Fixup.Type, Fixup.RVATarget - SecVirtualAddress,
-                    Fixup.RVA);
+        // TODO: Other architectures
+        applyRelX64(Data, Fixup.Type,
+                    Fixup.RVATarget - SecVirtualAddress + NewBase, Fixup.RVA);
       }
     }
   }
@@ -218,17 +220,20 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     if (Error E = NativeSession::createFromPdbPath(PdbPath, PDBSession))
       return E;
 
-    NativeSession &PDBNative = static_cast<NativeSession&>(*PDBSession);
+    NativeSession &PDBNative = static_cast<NativeSession &>(*PDBSession);
     auto Dbi = PDBNative.getPDBFile().getPDBDbiStream();
     if (!Dbi)
-      return createStringError(inconvertibleErrorCode(), "DBI stream not present in PDB");
+      return createStringError(inconvertibleErrorCode(),
+                               "DBI stream not present in PDB");
 
     if (!Dbi->hasFixupRecords())
-      return createStringError(inconvertibleErrorCode(), "Fixup stream not present in PDB");
+      return createStringError(inconvertibleErrorCode(),
+                               "Fixup stream not present in PDB");
 
     auto Symbols = PDBNative.getPDBFile().getPDBSymbolStream();
     if (!Symbols)
-      return createStringError(inconvertibleErrorCode(), "Symbol stream not present in PDB");
+      return createStringError(inconvertibleErrorCode(),
+                               "Symbol stream not present in PDB");
 
     // Set __hsh_objcopy to 1 and find offsets table
     bool FoundSym = false;
@@ -265,25 +270,41 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
       return createStringError(object_error::parse_failed,
                                "'__hsh_offsets' symbol not found");
 
-    Obj.HshSectionsTableSectionId = -1;
+    Obj.HshSectionsTableSectionId = HshOffsetsSecId;
 
-    // Process hsh section and mark for removal
-#if 0
+    uint32_t NewSectionBaseAddr = UINT32_MAX;
     for (auto &Sec : Obj.getMutableSections()) {
       if (Sec.Name.startswith(".hsh")) {
+        // Process hsh sections and mark for removal
+        if (NewSectionBaseAddr == UINT32_MAX)
+          NewSectionBaseAddr = Sec.Header.VirtualAddress;
+
         uint32_t HshIdx = 0;
         if (!Sec.Name.drop_front(4).getAsInteger(10, HshIdx)) {
           if (!Sec.getContents().empty()) {
-            makeSectionRelative(Sec, Obj, *Dbi);
+            moveSection(Sec, Obj, *Dbi, 0);
             Obj.HshSections.push_back(
                 {Sec.getContents(),
                  uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
             SecIdsToRemove.push_back(Sec.UniqueId);
           }
         }
+      } else if (NewSectionBaseAddr != UINT32_MAX) {
+        // Re-relocate sections after hsh sections
+        moveSection(Sec, Obj, *Dbi, NewSectionBaseAddr);
+        Sec.Header.VirtualAddress = NewSectionBaseAddr;
+
+        if (Sec.Name == ".reloc") {
+          data_directory *Dir = &Obj.DataDirectories[BASE_RELOCATION_TABLE];
+          if (Dir->Size > 0)
+            Dir->RelativeVirtualAddress = NewSectionBaseAddr;
+        }
+
+        NewSectionBaseAddr =
+            alignTo(NewSectionBaseAddr + Sec.Header.VirtualSize,
+                    Obj.PeHeader.SectionAlignment);
       }
     }
-#endif
   }
 
   // Perform the actual section removals.
