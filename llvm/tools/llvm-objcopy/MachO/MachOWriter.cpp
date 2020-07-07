@@ -127,11 +127,19 @@ size_t MachOWriter::totalSize() const {
                        S->NReloc * sizeof(MachO::any_relocation_info));
     }
 
-  if (!Ends.empty())
-    return *std::max_element(Ends.begin(), Ends.end());
+  size_t FileSize = !Ends.empty() ? *std::max_element(Ends.begin(), Ends.end())
+                                  : headerSize() + loadCommandsSize();
 
-  // Otherwise, we have only Mach header and load commands.
-  return headerSize() + loadCommandsSize();
+  if (O.HshSectionsTableSection) {
+    FileSize = alignTo(FileSize, 0x1000);
+    HshSectionPtr = FileSize;
+    for (const auto &HshSec : O.HshSections) {
+      FileSize += HshSec.Contents.size();
+      FileSize = alignTo(FileSize, 0x1000);
+    }
+  }
+
+  return FileSize;
 }
 
 void MachOWriter::writeHeader() {
@@ -506,6 +514,25 @@ Error MachOWriter::write() {
   writeLoadCommands();
   writeSections();
   writeTail();
+
+  if (O.HshSectionsTableSection) {
+    uint32_t HshTableSectionOffset = O.HshSectionsTableSection->Offset;
+
+    for (const auto &HshSec : O.HshSections) {
+      uint8_t *Ptr = B.getBufferStart() + HshSectionPtr;
+
+      support::ulittle32_t *OffsetPtr =
+          reinterpret_cast<support::ulittle32_t *>(B.getBufferStart() +
+                                                   HshTableSectionOffset +
+                                                   HshSec.TableSectionOffset);
+      *OffsetPtr = HshSectionPtr;
+
+      std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
+      HshSectionPtr += HshSec.Contents.size();
+      HshSectionPtr = alignTo(HshSectionPtr, 0x1000);
+    }
+  }
+
   return B.commit();
 }
 

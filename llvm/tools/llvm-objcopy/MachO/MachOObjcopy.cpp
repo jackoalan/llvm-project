@@ -11,12 +11,15 @@
 #include "MachOReader.h"
 #include "MachOWriter.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 
 namespace llvm {
 namespace objcopy {
 namespace macho {
+
+using namespace support::endian;
 
 using namespace object;
 using SectionPred = std::function<bool(const std::unique_ptr<Section> &Sec)>;
@@ -71,7 +74,8 @@ static Error removeLoadCommands(const CopyConfig &Config, Object &Obj) {
   return Error::success();
 }
 
-static Error removeSections(const CopyConfig &Config, Object &Obj) {
+static Error removeSections(const CopyConfig &Config, Object &Obj,
+                            const DenseSet<Section *> &SectionsToRemove) {
   SectionPred RemovePred = [](const std::unique_ptr<Section> &) {
     return false;
   };
@@ -99,6 +103,16 @@ static Error removeSections(const CopyConfig &Config, Object &Obj) {
     };
   }
 
+  if (!SectionsToRemove.empty()) {
+    RemovePred = [RemovePred,
+                  &SectionsToRemove](const std::unique_ptr<Section> &Sec) {
+      if (SectionsToRemove.find(Sec.get()) != SectionsToRemove.end())
+        return true;
+
+      return RemovePred(Sec);
+    };
+  }
+
   return Obj.removeSections(RemovePred);
 }
 
@@ -117,6 +131,8 @@ static void updateAndRemoveSymbols(const CopyConfig &Config, Object &Obj) {
   }
 
   auto RemovePred = [Config, &Obj](const std::unique_ptr<SymbolEntry> &N) {
+    if (N->ForceRemove)
+      return true;
     if (N->Referenced)
       return false;
     if (Config.StripAll)
@@ -250,6 +266,123 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj) {
                              "option not supported by llvm-objcopy for MachO");
   }
 
+  DenseSet<Section*> SectionsToRemove;
+
+  if (Config.HshObjcopy) {
+    bool FoundSym = false;
+    Section *HshOffsetsSec = nullptr;
+    uint32_t HshOffsetsSecOffset = 0;
+    for (const SymbolEntry &Sym : Obj.SymTable) {
+      if (Sym.Name == "___hsh_objcopy") {
+        if (Optional<uint32_t> SecIdx = Sym.section()) {
+          for (const LoadCommand &LC : Obj.LoadCommands) {
+            for (const std::unique_ptr<Section> &Sec : LC.Sections) {
+              if (Sec->Index == SecIdx) {
+                Sec->mutableContents()[Sym.n_value - Sec->Addr] = 1;
+                FoundSym = true;
+                break;
+              }
+            }
+            if (FoundSym)
+              break;
+          }
+        }
+      } else if (Sym.Name == "___hsh_offsets") {
+        if (Optional<uint32_t> SecIdx = Sym.section()) {
+          for (const LoadCommand &LC : Obj.LoadCommands) {
+            for (const std::unique_ptr<Section> &Sec : LC.Sections) {
+              if (Sec->Index == SecIdx) {
+                HshOffsetsSec = Sec.get();
+                HshOffsetsSecOffset = Sym.n_value - Sec->Addr;
+                break;
+              }
+            }
+            if (HshOffsetsSec)
+              break;
+          }
+        }
+      }
+      if (FoundSym && HshOffsetsSec)
+        break;
+    }
+    if (!FoundSym)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_objcopy' symbol not found");
+    if (!HshOffsetsSec)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_offsets' symbol not found");
+
+    Obj.HshSectionsTableSection = HshOffsetsSec;
+
+    auto RemoveRebase = [&](int32_t SegIdx, uint64_t SegOff) {
+      auto Search =
+          std::find_if(Obj.Rebases.OwnedEntries.begin(),
+                       Obj.Rebases.OwnedEntries.end(), [=](const auto &Rebase) {
+                         return Rebase.segmentIndex() == SegIdx &&
+                                Rebase.segmentOffset() == SegOff;
+                       });
+      if (Search != Obj.Rebases.OwnedEntries.end())
+        Obj.Rebases.OwnedEntries.erase(Search);
+    };
+
+    auto RemoveBind = [&](auto &Binds, const SymbolEntry &Sym, Section *Sec) {
+      for (auto I = Binds.OwnedEntries.begin();
+           I != Binds.OwnedEntries.end();) {
+        bool DoErase = false;
+        if (I->symbolName() == Sym.Name) {
+          auto &BindLC = Obj.LoadCommands[I->segmentIndex()];
+          for (auto &BindSec : BindLC.Sections) {
+            uint64_t OffsetInSeg = BindSec->Addr - BindLC.VMAddr;
+            if (OffsetInSeg <= I->segmentOffset() &&
+                I->segmentOffset() < OffsetInSeg + BindSec->Size) {
+              uint8_t *Ptr = BindSec->mutableContents().data() +
+                             I->segmentOffset() - OffsetInSeg;
+              write64le(Ptr, read64le(Ptr) - Sec->Addr);
+              DoErase = true;
+              break;
+            }
+          }
+        }
+        if (DoErase) {
+          RemoveRebase(I->segmentIndex(), I->segmentOffset());
+          I = Binds.OwnedEntries.erase(I);
+          continue;
+        }
+        ++I;
+      }
+    };
+
+    auto RemoveSection = [&](Section *Sec, uint32_t HshIdx) {
+      SectionsToRemove.insert(Sec);
+      Obj.HshSections.push_back(
+          {Sec->Content,
+           uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
+      for (SymbolEntry &Sym : Obj.SymTable) {
+        if (Optional<uint32_t> SecIdx = Sym.section()) {
+          if (SecIdx == Sec->Index) {
+            RemoveBind(Obj.Binds, Sym, Sec);
+            RemoveBind(Obj.WeakBinds, Sym, Sec);
+            Sym.ForceRemove = true;
+          }
+        }
+      }
+    };
+
+    for (const LoadCommand &LC : Obj.LoadCommands) {
+      for (const std::unique_ptr<Section> &Sec : LC.Sections) {
+        StringRef Name(Sec->CanonicalName);
+        if (Name.startswith("__TEXT,__hsh")) {
+          uint32_t HshIdx = 0;
+          if (!Name.drop_front(12).getAsInteger(10, HshIdx)) {
+            if (!Sec->Content.empty()) {
+              RemoveSection(Sec.get(), HshIdx);
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Dump sections before add/remove for compatibility with GNU objcopy.
   for (StringRef Flag : Config.DumpSection) {
     StringRef SectionName;
@@ -259,7 +392,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj) {
       return E;
   }
 
-  if (Error E = removeSections(Config, Obj))
+  if (Error E = removeSections(Config, Obj, SectionsToRemove))
     return E;
 
   // Mark symbols to determine which symbols are still needed.

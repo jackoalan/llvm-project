@@ -123,10 +123,12 @@ void MachOReader::readLoadCommands(Object &O) const {
       O.CodeSignatureCommandIndex = O.LoadCommands.size();
       break;
     case MachO::LC_SEGMENT:
+      LC.VMAddr = MachOObj.getSegmentLoadCommand(LoadCmd).vmaddr;
       LC.Sections = extractSections<MachO::section, MachO::segment_command>(
           LoadCmd, MachOObj, NextSectionIndex);
       break;
     case MachO::LC_SEGMENT_64:
+      LC.VMAddr = MachOObj.getSegment64LoadCommand(LoadCmd).vmaddr;
       LC.Sections =
           extractSections<MachO::section_64, MachO::segment_command_64>(
               LoadCmd, MachOObj, NextSectionIndex);
@@ -232,18 +234,45 @@ void MachOReader::setSymbolInRelocationInfo(Object &O) const {
 
 void MachOReader::readRebaseInfo(Object &O) const {
   O.Rebases.Opcodes = MachOObj.getDyldInfoRebaseOpcodes();
+
+  Error BErr = Error::success();
+  auto Range =
+      const_cast<object::MachOObjectFile &>(MachOObj).rebaseTable(BErr);
+  O.Rebases.OwnedEntries.assign(Range.begin(), Range.end());
+  if (BErr)
+    O.Rebases.OwnedEntries.clear();
 }
 
 void MachOReader::readBindInfo(Object &O) const {
   O.Binds.Opcodes = MachOObj.getDyldInfoBindOpcodes();
+
+  Error BErr = Error::success();
+  auto Range = const_cast<object::MachOObjectFile &>(MachOObj).bindTable(BErr);
+  O.Binds.OwnedEntries.assign(Range.begin(), Range.end());
+  if (BErr)
+    O.Binds.OwnedEntries.clear();
 }
 
 void MachOReader::readWeakBindInfo(Object &O) const {
   O.WeakBinds.Opcodes = MachOObj.getDyldInfoWeakBindOpcodes();
+
+  Error BErr = Error::success();
+  auto Range =
+      const_cast<object::MachOObjectFile &>(MachOObj).weakBindTable(BErr);
+  O.WeakBinds.OwnedEntries.assign(Range.begin(), Range.end());
+  if (BErr)
+    O.WeakBinds.OwnedEntries.clear();
 }
 
 void MachOReader::readLazyBindInfo(Object &O) const {
   O.LazyBinds.Opcodes = MachOObj.getDyldInfoLazyBindOpcodes();
+
+  Error BErr = Error::success();
+  auto Range =
+      const_cast<object::MachOObjectFile &>(MachOObj).lazyBindTable(BErr);
+  O.LazyBinds.OwnedEntries.assign(Range.begin(), Range.end());
+  if (BErr)
+    O.LazyBinds.OwnedEntries.clear();
 }
 
 void MachOReader::readExportInfo(Object &O) const {

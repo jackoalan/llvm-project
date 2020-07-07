@@ -26,6 +26,7 @@ class MachOWriter {
   uint64_t PageSize;
   Buffer &B;
   MachOLayoutBuilder LayoutBuilder;
+  mutable size_t HshSectionPtr;
 
   size_t headerSize() const;
   size_t loadCommandsSize() const;

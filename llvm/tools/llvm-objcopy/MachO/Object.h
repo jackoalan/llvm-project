@@ -13,7 +13,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/MC/StringTableBuilder.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/ObjectYAML/DWARFYAML.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/YAMLTraits.h"
 #include <cstdint>
@@ -73,6 +75,13 @@ struct Section {
             getType() == MachO::S_GB_ZEROFILL ||
             getType() == MachO::S_THREAD_LOCAL_ZEROFILL);
   }
+
+  MutableArrayRef<uint8_t> mutableContents() {
+    return MutableArrayRef<uint8_t>{
+        const_cast<uint8_t *>(
+            reinterpret_cast<const uint8_t *>(Content.data())),
+        Content.size()};
+  }
 };
 
 struct LoadCommand {
@@ -92,6 +101,9 @@ struct LoadCommand {
   // corresponding content inside the binary.
   std::vector<std::unique_ptr<Section>> Sections;
 
+  // vmaddr field from segment load commands
+  uint64_t VMAddr = 0;
+
   // Returns the segment name if the load command is a segment command.
   Optional<StringRef> getSegmentName() const;
 };
@@ -101,6 +113,7 @@ struct LoadCommand {
 struct SymbolEntry {
   std::string Name;
   bool Referenced = false;
+  bool ForceRemove = false;
   uint32_t Index;
   uint8_t n_type;
   uint8_t n_sect;
@@ -190,6 +203,48 @@ struct RelocationInfo {
   }
 };
 
+class ByteBuffer {
+public:
+  ByteBuffer() : _ostream(_bytes) { }
+
+  void append_byte(uint8_t b) {
+    _ostream << b;
+  }
+  void append_uleb128(uint64_t value) {
+    llvm::encodeULEB128(value, _ostream);
+  }
+  void append_uleb128Fixed(uint64_t value, unsigned byteCount) {
+    unsigned min = llvm::getULEB128Size(value);
+    assert(min <= byteCount);
+    unsigned pad = byteCount - min;
+    llvm::encodeULEB128(value, _ostream, pad);
+  }
+  void append_sleb128(int64_t value) {
+    llvm::encodeSLEB128(value, _ostream);
+  }
+  void append_string(StringRef str) {
+    _ostream << str;
+    append_byte(0);
+  }
+  void align(unsigned alignment) {
+    while ( (_ostream.tell() % alignment) != 0 )
+      append_byte(0);
+  }
+  size_t size() {
+    return _ostream.tell();
+  }
+  const uint8_t *bytes() {
+    return reinterpret_cast<const uint8_t*>(_ostream.str().data());
+  }
+
+  operator ArrayRef<uint8_t>() { return {bytes(), size()}; }
+
+private:
+  SmallVector<char, 128>        _bytes;
+  // Stream ivar must be after SmallVector ivar to construct properly.
+  llvm::raw_svector_ostream     _ostream;
+};
+
 /// The location of the rebase info inside the binary is described by
 /// LC_DYLD_INFO load command. Dyld rebases an image whenever dyld loads it at
 /// an address different from its preferred address.  The rebase information is
@@ -204,6 +259,9 @@ struct RebaseInfo {
   // At the moment we do not parse this info (and it is simply copied over),
   // but the proper support will be added later.
   ArrayRef<uint8_t> Opcodes;
+
+  std::vector<object::MachORebaseEntry> OwnedEntries;
+  ByteBuffer OwnedOpcodes;
 };
 
 /// The location of the bind info inside the binary is described by
@@ -220,6 +278,9 @@ struct BindInfo {
   // At the moment we do not parse this info (and it is simply copied over),
   // but the proper support will be added later.
   ArrayRef<uint8_t> Opcodes;
+
+  std::vector<object::MachOBindEntry> OwnedEntries;
+  ByteBuffer OwnedOpcodes;
 };
 
 /// The location of the weak bind info inside the binary is described by
@@ -238,6 +299,9 @@ struct WeakBindInfo {
   // At the moment we do not parse this info (and it is simply copied over),
   // but the proper support will be added later.
   ArrayRef<uint8_t> Opcodes;
+
+  std::vector<object::MachOBindEntry> OwnedEntries;
+  ByteBuffer OwnedOpcodes;
 };
 
 /// The location of the lazy bind info inside the binary is described by
@@ -251,6 +315,9 @@ struct WeakBindInfo {
 /// to lazy_bind_off to get the information on what to bind.
 struct LazyBindInfo {
   ArrayRef<uint8_t> Opcodes;
+
+  std::vector<object::MachOBindEntry> OwnedEntries;
+  ByteBuffer OwnedOpcodes;
 };
 
 /// The location of the export info inside the binary is described by
@@ -321,6 +388,13 @@ struct Object {
 
   BumpPtrAllocator Alloc;
   StringSaver NewSectionsContents;
+
+  Section *HshSectionsTableSection = nullptr;
+  struct HshSection {
+    StringRef Contents;
+    uint32_t TableSectionOffset;
+  };
+  std::vector<HshSection> HshSections;
 
   Object() : NewSectionsContents(Alloc) {}
 

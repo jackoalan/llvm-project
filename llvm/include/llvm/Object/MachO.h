@@ -175,6 +175,9 @@ public:
   StringRef segmentName() const;
   StringRef sectionName() const;
   uint64_t address() const;
+  MachO::RebaseType type() const {
+    return static_cast<MachO::RebaseType>(RebaseType);
+  }
 
   bool operator==(const MachORebaseEntry &) const;
 
@@ -226,6 +229,10 @@ public:
   StringRef segmentName() const;
   StringRef sectionName() const;
   uint64_t address() const;
+
+  MachO::BindType bindType() const {
+    return static_cast<MachO::BindType>(BindType);
+  }
 
   bool operator==(const MachOBindEntry &) const;
 

@@ -33,6 +33,11 @@ class MachOLayoutBuilder {
   uint64_t layoutRelocations(uint64_t Offset);
   Error layoutTail(uint64_t Offset);
 
+  void buildRebaseInfo();
+  void buildBindInfo();
+  void buildWeakBindInfo();
+  void buildLazyBindInfo();
+
 public:
   MachOLayoutBuilder(Object &O, bool Is64Bit, uint64_t PageSize)
       : O(O), Is64Bit(Is64Bit), PageSize(PageSize) {}

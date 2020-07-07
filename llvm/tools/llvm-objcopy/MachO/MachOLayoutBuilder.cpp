@@ -15,6 +15,8 @@ namespace llvm {
 namespace objcopy {
 namespace macho {
 
+using namespace MachO;
+
 uint32_t MachOLayoutBuilder::computeSizeOfCmds() const {
   uint32_t Size = 0;
   for (const LoadCommand &LC : O.LoadCommands) {
@@ -373,9 +375,204 @@ Error MachOLayoutBuilder::layoutTail(uint64_t Offset) {
   return Error::success();
 }
 
+void MachOLayoutBuilder::buildRebaseInfo() {
+  if (O.Rebases.OwnedEntries.empty()) {
+    O.Rebases.Opcodes = {};
+    return;
+  }
+
+  auto &Out = O.Rebases.OwnedOpcodes;
+
+  // TODO: compress rebasing info.
+  RebaseType LastType = (RebaseType)0;
+  uint32_t LastSegOffset = ~0U;
+  uint8_t LastSegIndex = (uint8_t)~0U;
+  uint32_t PendingDoImmTimes = 0U;
+  auto DoRebase = [&]() {
+    if (!PendingDoImmTimes)
+      return;
+    if (PendingDoImmTimes < 15) {
+      Out.append_byte(REBASE_OPCODE_DO_REBASE_IMM_TIMES | PendingDoImmTimes);
+    } else {
+      Out.append_byte(REBASE_OPCODE_DO_REBASE_ULEB_TIMES);
+      Out.append_uleb128(PendingDoImmTimes);
+    }
+    PendingDoImmTimes = 0;
+  };
+  for (const object::MachORebaseEntry &Entry : O.Rebases.OwnedEntries) {
+    if (LastType != Entry.type()) {
+      DoRebase();
+      Out.append_byte(REBASE_OPCODE_SET_TYPE_IMM | Entry.type());
+      LastType = Entry.type();
+    }
+    if (LastSegIndex != Entry.segmentIndex() ||
+        LastSegOffset != Entry.segmentOffset()) {
+      DoRebase();
+      Out.append_byte(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+                      Entry.segmentIndex());
+      Out.append_uleb128(Entry.segmentOffset());
+      LastSegIndex = Entry.segmentIndex();
+      LastSegOffset = Entry.segmentOffset();
+    }
+    PendingDoImmTimes += 1;
+    LastSegOffset += Is64Bit ? 8 : 4;
+  }
+  DoRebase();
+  Out.append_byte(REBASE_OPCODE_DONE);
+  Out.align(Is64Bit ? 8 : 4);
+
+  O.Rebases.Opcodes = Out;
+}
+
+void MachOLayoutBuilder::buildBindInfo() {
+  if (O.Binds.OwnedEntries.empty()) {
+    O.Binds.Opcodes = {};
+    return;
+  }
+
+  auto &Out = O.Binds.OwnedOpcodes;
+
+  // TODO: compress bind info.
+  int64_t LastAddend = 0;
+  int LastOrdinal = 0x80000000;
+  StringRef LastSymbolName;
+  BindType LastType = (BindType)0;
+  uint32_t LastSegOffset = ~0U;
+  uint8_t LastSegIndex = (uint8_t)~0U;
+  for (const object::MachOBindEntry &Entry : O.Binds.OwnedEntries) {
+    if (Entry.ordinal() != LastOrdinal) {
+      if (Entry.ordinal() <= 0)
+        Out.append_byte(BIND_OPCODE_SET_DYLIB_SPECIAL_IMM |
+                        (Entry.ordinal() & BIND_IMMEDIATE_MASK));
+      else if (Entry.ordinal() <= BIND_IMMEDIATE_MASK)
+        Out.append_byte(BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | Entry.ordinal());
+      else {
+        Out.append_byte(BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB);
+        Out.append_uleb128(Entry.ordinal());
+      }
+      LastOrdinal = Entry.ordinal();
+    }
+
+    if (LastSymbolName != Entry.symbolName()) {
+      Out.append_byte(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM);
+      Out.append_string(Entry.symbolName());
+      LastSymbolName = Entry.symbolName();
+    }
+
+    if (LastType != Entry.bindType()) {
+      Out.append_byte(BIND_OPCODE_SET_TYPE_IMM | Entry.bindType());
+      LastType = Entry.bindType();
+    }
+
+    if (LastSegIndex != Entry.segmentIndex() ||
+        LastSegOffset != Entry.segmentOffset()) {
+      Out.append_byte(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+                      Entry.segmentIndex());
+      Out.append_uleb128(Entry.segmentOffset());
+      LastSegIndex = Entry.segmentIndex();
+      LastSegOffset = Entry.segmentOffset();
+    }
+    if (Entry.addend() != LastAddend) {
+      Out.append_byte(BIND_OPCODE_SET_ADDEND_SLEB);
+      Out.append_sleb128(Entry.addend());
+      LastAddend = Entry.addend();
+    }
+    Out.append_byte(BIND_OPCODE_DO_BIND);
+    LastSegOffset += Is64Bit ? 8 : 4;
+  }
+  Out.append_byte(BIND_OPCODE_DONE);
+  Out.align(Is64Bit ? 8 : 4);
+
+  O.Binds.Opcodes = Out;
+}
+
+void MachOLayoutBuilder::buildWeakBindInfo() {
+  if (O.WeakBinds.OwnedEntries.empty()) {
+    O.WeakBinds.Opcodes = {};
+    return;
+  }
+
+  auto &Out = O.WeakBinds.OwnedOpcodes;
+
+  // TODO: compress bind info.
+  int64_t LastAddend = 0;
+  StringRef LastSymbolName;
+  BindType LastType = (BindType)0;
+  uint32_t LastSegOffset = ~0U;
+  uint8_t LastSegIndex = (uint8_t)~0U;
+  for (const object::MachOBindEntry &Entry : O.WeakBinds.OwnedEntries) {
+    if (LastSymbolName != Entry.symbolName()) {
+      Out.append_byte(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM);
+      Out.append_string(Entry.symbolName());
+      LastSymbolName = Entry.symbolName();
+    }
+
+    if (LastType != Entry.bindType()) {
+      Out.append_byte(BIND_OPCODE_SET_TYPE_IMM | Entry.bindType());
+      LastType = Entry.bindType();
+    }
+
+    if (LastSegIndex != Entry.segmentIndex() ||
+        LastSegOffset != Entry.segmentOffset()) {
+      Out.append_byte(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+                      Entry.segmentIndex());
+      Out.append_uleb128(Entry.segmentOffset());
+      LastSegIndex = Entry.segmentIndex();
+      LastSegOffset = Entry.segmentOffset();
+    }
+    if (Entry.addend() != LastAddend) {
+      Out.append_byte(BIND_OPCODE_SET_ADDEND_SLEB);
+      Out.append_sleb128(Entry.addend());
+      LastAddend = Entry.addend();
+    }
+    Out.append_byte(BIND_OPCODE_DO_BIND);
+    LastSegOffset += Is64Bit ? 8 : 4;
+  }
+  Out.append_byte(BIND_OPCODE_DONE);
+  Out.align(Is64Bit ? 8 : 4);
+
+  O.WeakBinds.Opcodes = Out;
+}
+
+void MachOLayoutBuilder::buildLazyBindInfo() {
+  if (O.LazyBinds.OwnedEntries.empty()) {
+    O.LazyBinds.Opcodes = {};
+    return;
+  }
+
+  auto &Out = O.LazyBinds.OwnedOpcodes;
+
+  for (const object::MachOBindEntry &Entry : O.LazyBinds.OwnedEntries) {
+    Out.append_byte(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
+                    Entry.segmentIndex());
+    Out.append_uleb128(Entry.segmentOffset());
+    if (Entry.ordinal() <= 0)
+      Out.append_byte(BIND_OPCODE_SET_DYLIB_SPECIAL_IMM |
+                      (Entry.ordinal() & BIND_IMMEDIATE_MASK));
+    else if (Entry.ordinal() <= BIND_IMMEDIATE_MASK)
+      Out.append_byte(BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | Entry.ordinal());
+    else {
+      Out.append_byte(BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB);
+      Out.append_uleb128(Entry.ordinal());
+    }
+    // FIXME: We need to | the opcode here with flags.
+    Out.append_byte(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM);
+    Out.append_string(Entry.symbolName());
+    Out.append_byte(BIND_OPCODE_DO_BIND);
+    Out.append_byte(BIND_OPCODE_DONE);
+  }
+  Out.align(Is64Bit ? 8 : 4);
+
+  O.LazyBinds.Opcodes = Out;
+}
+
 Error MachOLayoutBuilder::layout() {
   O.Header.NCmds = O.LoadCommands.size();
   O.Header.SizeOfCmds = computeSizeOfCmds();
+  buildRebaseInfo();
+  buildBindInfo();
+  buildWeakBindInfo();
+  buildLazyBindInfo();
   constructStringTable();
   updateSymbolIndexes();
   uint64_t Offset = layoutSegments();
