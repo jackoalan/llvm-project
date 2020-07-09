@@ -2185,7 +2185,19 @@ template <class ELFT> size_t ELFWriter<ELFT>::totalSize() const {
   if (!WriteSectionHeaders)
     return Obj.SHOff;
   size_t ShdrCount = Obj.sections().size() + 1; // Includes null shdr.
-  return Obj.SHOff + ShdrCount * sizeof(Elf_Shdr);
+
+  size_t FileSize = Obj.SHOff + ShdrCount * sizeof(Elf_Shdr);
+
+  if (Obj.HshSectionsTableSection) {
+    FileSize = alignTo(FileSize, 0x1000);
+    HshSectionPtr = FileSize;
+    for (const auto &HshSec : Obj.HshSections) {
+      FileSize += HshSec.Contents.size();
+      FileSize = alignTo(FileSize, 0x1000);
+    }
+  }
+
+  return FileSize;
 }
 
 template <class ELFT> Error ELFWriter<ELFT>::write() {
@@ -2197,6 +2209,26 @@ template <class ELFT> Error ELFWriter<ELFT>::write() {
   writeSectionData();
   if (WriteSectionHeaders)
     writeShdrs();
+
+  if (Obj.HshSectionsTableSection) {
+    uint64_t HshTableSectionOffset = Obj.HshSectionsTableSection->Offset;
+
+    for (const auto &HshSec : Obj.HshSections) {
+      uint8_t *Ptr = Buf.getBufferStart() + HshSectionPtr;
+
+      support::ulittle32_t *OffsetPtr =
+          reinterpret_cast<support::ulittle32_t *>(Buf.getBufferStart() +
+                                                   HshTableSectionOffset +
+                                                   HshSec.TableSectionOffset);
+      size_t SecSize = alignTo(HshSec.Contents.size(), 0x1000);
+      OffsetPtr[0] = HshSectionPtr;
+      OffsetPtr[1] = SecSize;
+
+      std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
+      HshSectionPtr += SecSize;
+    }
+  }
+
   return Buf.commit();
 }
 

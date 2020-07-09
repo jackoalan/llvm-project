@@ -443,13 +443,22 @@ static Error updateAndRemoveSymbols(const CopyConfig &Config, Object &Obj) {
   return Obj.removeSymbols(RemoveSymbolsPred);
 }
 
-static Error replaceAndRemoveSections(const CopyConfig &Config, Object &Obj) {
+static Error
+replaceAndRemoveSections(const CopyConfig &Config, Object &Obj,
+                         const DenseSet<SectionBase *> &SectionsToRemove) {
   SectionPred RemovePred = [](const SectionBase &) { return false; };
 
   // Removes:
   if (!Config.ToRemove.empty()) {
     RemovePred = [&Config](const SectionBase &Sec) {
       return Config.ToRemove.matches(Sec.Name);
+    };
+  }
+
+  if (!SectionsToRemove.empty()) {
+    RemovePred = [RemovePred, &SectionsToRemove](const SectionBase &Sec) {
+      return SectionsToRemove.find(&Sec) != SectionsToRemove.end() ||
+             RemovePred(Sec);
     };
   }
 
@@ -663,20 +672,59 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     Obj.OSABI = Config.OutputArch.getValue().OSABI;
   }
 
+  DenseSet<SectionBase *> SectionsToRemove;
+
   // Set __hsh_objcopy to 1
   if (Config.HshObjcopy) {
     bool FoundSym = false;
+    Section *HshOffsetsSec = nullptr;
+    uint32_t HshOffsetsSecOffset = 0;
     Obj.SymbolTable->updateSymbols([&](Symbol &Sym) {
       if (Sym.Name == "__hsh_objcopy") {
         if (auto *Sec = dyn_cast<Section>(Sym.DefinedIn)) {
           Sec->mutableContents()[Sym.Value - Sec->Offset] = 1;
           FoundSym = true;
         }
+      } else if (Sym.Name == "__hsh_offsets") {
+        if (auto *Sec = dyn_cast<Section>(Sym.DefinedIn)) {
+          HshOffsetsSec = Sec;
+          HshOffsetsSecOffset = Sym.Value - HshOffsetsSec->Addr;
+        }
       }
     });
     if (!FoundSym)
       return createStringError(object_error::parse_failed,
                                "'__hsh_objcopy' symbol not found");
+    if (!HshOffsetsSec)
+      return createStringError(object_error::parse_failed,
+                               "'__hsh_offsets' symbol not found");
+
+    Obj.HshSectionsTableSection = HshOffsetsSec;
+
+    for (auto &Sec : Obj.sections()) {
+      StringRef Name(Sec.Name);
+      if (Name.startswith(".hsh")) {
+        // Remove hsh section and append data to end of file
+        if (!Sec.OriginalData.empty()) {
+          uint32_t HshIdx = 0;
+          if (!Name.drop_front(4).getAsInteger(10, HshIdx)) {
+            if (Error E = hshModRelocations(Sec, Obj, OutputElfType))
+              return E;
+            ArrayRef<uint8_t> Contents;
+            if (auto *SecCast = dyn_cast<Section>(&Sec))
+              Contents = SecCast->getContents();
+            Obj.HshSections.push_back(
+                {Contents, uint32_t(HshOffsetsSecOffset +
+                                    HshIdx * 2 * sizeof(uint32_t))});
+            SectionsToRemove.insert(&Sec);
+          }
+        }
+      } else if (Name.startswith(".rela.") && Name != ".rela.dyn" &&
+                 Name != ".rela.plt") {
+        // Remove relocation sections (no longer needed)
+        SectionsToRemove.insert(&Sec);
+      }
+    }
   }
 
   // Dump sections before add/remove for compatibility with GNU objcopy.
@@ -684,23 +732,6 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
     StringRef SectionName;
     StringRef FileName;
     std::tie(SectionName, FileName) = Flag.split('=');
-
-    if (Config.HshObjcopy) {
-      bool IsEmpty = true;
-      for (auto &Sec : Obj.sections()) {
-        if (Sec.Name == SectionName) {
-          if (!Sec.OriginalData.empty()) {
-            IsEmpty = false;
-            if (Error E = hshModRelocations(Sec, Obj, OutputElfType))
-              return E;
-          }
-          break;
-        }
-      }
-      if (IsEmpty)
-        continue;
-    }
-
     if (Error E = dumpSectionToFile(SectionName, FileName, Obj))
       return E;
   }
@@ -709,7 +740,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
   // remove the relocation sections before removing the symbols. That allows
   // us to avoid reporting the inappropriate errors about removing symbols
   // named in relocations.
-  if (Error E = replaceAndRemoveSections(Config, Obj))
+  if (Error E = replaceAndRemoveSections(Config, Obj, SectionsToRemove))
     return E;
 
   if (Error E = updateAndRemoveSymbols(Config, Obj))

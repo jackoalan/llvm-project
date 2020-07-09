@@ -25,6 +25,7 @@ enum HshTarget : int {
   HT_METAL_BIN_IOS,
   HT_METAL_BIN_TVOS,
   HT_DEKO3D,
+  HT_DEKO3D_CONTROL, // Pseudo-target for establishing control section
   HT_MAX
 };
 

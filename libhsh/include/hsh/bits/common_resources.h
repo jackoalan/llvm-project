@@ -12,15 +12,16 @@
  * Base pointer set by ShaderFileMapper for loading file-mapped shaders.
  * If hsh-objcopy has not processed the binary, __hsh_objcopy is left as zero.
  */
+struct __hsh_off { uint32_t offset, length; };
 extern "C" const volatile uint8_t __hsh_objcopy;
-extern "C" const volatile size_t
-    __hsh_reloc_offsets[size_t(hsh::Target::MaxTarget)];
+extern "C" const volatile __hsh_off
+    __hsh_offsets[size_t(hsh::Target::MaxTarget)];
 extern "C" const uint8_t* __hsh_reloc_base;
 extern "C" size_t __hsh_reloc_length;
 
 #ifdef HSH_IMPLEMENTATION
 const volatile uint8_t __hsh_objcopy = 0;
-const volatile size_t __hsh_reloc_offsets[size_t(hsh::Target::MaxTarget)] = {};
+const volatile __hsh_off __hsh_offsets[size_t(hsh::Target::MaxTarget)] = {};
 const uint8_t* __hsh_reloc_base = nullptr;
 size_t __hsh_reloc_length = SIZE_MAX;
 #endif
@@ -50,18 +51,16 @@ inline std::string get_exe_path() noexcept {
 }
 #endif
 
-inline std::pair<uint8_t *, size_t> mmap_file(const char *FilePath) noexcept {
-  struct stat Stat;
-  if (::stat(FilePath, &Stat) < 0)
-    return {};
+inline uint8_t *mmap_file(const char *FilePath, size_t Offset,
+                          size_t Length) noexcept {
   int Fd;
   if ((Fd = ::open(FilePath, O_RDONLY)) < 0)
     return {};
-  void *Mem = ::mmap(nullptr, Stat.st_size, PROT_READ, MAP_PRIVATE, Fd, 0);
+  void *Mem = ::mmap(nullptr, Length, PROT_READ, MAP_PRIVATE, Fd, Offset);
   ::close(Fd);
   if (Mem == MAP_FAILED)
     return {};
-  return {reinterpret_cast<uint8_t *>(Mem), Stat.st_size};
+  return reinterpret_cast<uint8_t *>(Mem);
 }
 
 inline void munmap_file(uint8_t *Mem, size_t Len) noexcept {
@@ -78,14 +77,13 @@ struct ShaderFileMapper {
       Good = true;
       return;
     }
-    std::string ShaderPath = get_exe_path();
-    ShaderPath += "."sv;
-    ShaderPath += TargetNames[size_t(detail::CurrentTarget)];
-    ShaderPath += ".shader"sv;
-    auto [mapped_base, mapped_length] = mmap_file(ShaderPath.c_str());
-    if (mapped_base) {
-      __hsh_reloc_base = mapped_base;
-      __hsh_reloc_length = mapped_length;
+    const volatile __hsh_off &Offset =
+        __hsh_offsets[size_t(detail::CurrentTarget)];
+    uint8_t *MappedBase =
+        mmap_file(get_exe_path().c_str(), Offset.offset, Offset.length);
+    if (MappedBase) {
+      __hsh_reloc_base = MappedBase;
+      __hsh_reloc_length = Offset.length;
       Good = true;
     }
   }

@@ -356,7 +356,7 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj) {
       SectionsToRemove.insert(Sec);
       Obj.HshSections.push_back(
           {Sec->Content,
-           uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
+           uint32_t(HshOffsetsSecOffset + HshIdx * 2 * sizeof(uint32_t))});
       for (SymbolEntry &Sym : Obj.SymTable) {
         if (Optional<uint32_t> SecIdx = Sym.section()) {
           if (SecIdx == Sec->Index) {

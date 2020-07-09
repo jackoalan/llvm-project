@@ -120,7 +120,7 @@ add_clang_library(clangHsh
         PrintingPolicies/GLSLPrintingPolicy.cpp
         PrintingPolicies/HLSLPrintingPolicy.cpp
         PrintingPolicies/ShaderPrintingPolicy.cpp
-        Consumer.cpp
+        HshAction.cpp
         Partitioner.cpp
         Builder.cpp
         LINK_LIBS

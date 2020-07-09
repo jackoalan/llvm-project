@@ -402,11 +402,12 @@ Error COFFWriter::write(bool IsBigObj) {
           reinterpret_cast<support::ulittle32_t *>(Buf.getBufferStart() +
                                                    HshTableSectionOffset +
                                                    HshSec.TableSectionOffset);
-      *OffsetPtr = HshSectionPtr;
+      size_t SecSize = alignTo(HshSec.Contents.size(), 0x10000);
+      OffsetPtr[0] = HshSectionPtr;
+      OffsetPtr[1] = SecSize;
 
       std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
-      HshSectionPtr += HshSec.Contents.size();
-      HshSectionPtr = alignTo(HshSectionPtr, 0x10000);
+      HshSectionPtr += SecSize;
     }
   }
 

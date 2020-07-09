@@ -1,4 +1,4 @@
-//===--- Consumer.cpp - ASTConsumer for hshgen tool -----------------------===//
+//===--- HshAction.cpp - clang action for hshgen tool ---------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -20,6 +20,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Basic/FileManager.h"
+#include "clang/Basic/TargetInfo.h"
 #include "clang/Config/config.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Hsh/HshGenerator.h"
@@ -260,6 +261,33 @@ public:
     return HashStr;
   }
 
+  std::string makeSectionAttributeString(HshTarget Target,
+                                         bool &BeforeType) const {
+    std::string SectionString;
+    raw_string_ostream SectionStringOS{SectionString};
+
+    BeforeType = false;
+    switch (CI.getTarget().getTriple().getObjectFormat()) {
+    case llvm::Triple::ELF:
+      SectionStringOS << "__attribute__((section(\".hsh" << int(Target)
+                      << "\")))";
+      break;
+    case llvm::Triple::MachO:
+      SectionStringOS << "__attribute__((section(\"__TEXT,__hsh" << int(Target)
+                      << "\")))";
+      break;
+    case llvm::Triple::COFF:
+      SectionStringOS << "__declspec(allocate(\".hsh" << int(Target) << "\"))";
+      BeforeType = true;
+      break;
+    default:
+      assert(false && "Unsupported object format");
+      break;
+    }
+
+    return SectionStringOS.str();
+  }
+
   bool handlePipelineDerivative(NamedDecl *Decl) {
     auto &Diags = Context.getDiagnostics();
     auto *CD = dyn_cast<CXXRecordDecl>(Decl);
@@ -484,10 +512,9 @@ public:
           return false;
         auto Target = HshTarget(D->InitHshTarget);
 
-        std::string SectionString;
-        raw_string_ostream SectionStringOS{SectionString};
-        SectionStringOS << "__attribute__((section(\"."
-                        << HshTargetToString(Target) << ".shader\")))";
+        bool AttributeBeforeType = false;
+        std::string SectionAttributeString =
+            makeSectionAttributeString(Target, AttributeBeforeType);
 
         auto Policy =
             MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
@@ -534,27 +561,28 @@ public:
           *OS << "inline ";
           if (Target == HT_VULKAN_SPIRV) {
             raw_carray32_ostream DataOut(*OS, "_hshs_"s + HashStr,
-                                         SectionStringOS.str());
+                                         SectionAttributeString,
+                                         AttributeBeforeType);
             DataOut.write((const uint32_t *)Data.data(), Data.size() / 4);
           } else if (Target == HT_DEKO3D) {
             /* Dksh headers are packed together by the linker */
             {
               raw_carray_ostream ControlOut(
                   *OS, "_dekoc_"s + ControlHashStr,
-                  "__attribute__((section(\".deko.control\"), aligned(64)))");
+                  "__attribute__((section(\".hsh11\"), aligned(64)))");
               ControlOut.write((const char *)Data.data() + 24, 64);
             }
             {
               *OS << "\ninline ";
-              raw_carray_ostream DataOut(
-                  *OS, "_hshs_"s + HashStr,
-                  "__attribute__((section(\".deko.shader\"), "
-                  "aligned(DK_SHADER_CODE_ALIGNMENT)))");
+              raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr,
+                                         "__attribute__((section(\".hsh10\"), "
+                                         "aligned(DK_SHADER_CODE_ALIGNMENT)))");
               DataOut.write((const char *)Data.data() + 256, Data.size() - 256);
             }
           } else {
             raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr,
-                                       SectionStringOS.str());
+                                       SectionAttributeString,
+                                       AttributeBeforeType);
             DataOut.write((const char *)Data.data(), Data.size());
           }
           *OS << "\ninline hsh::detail::ShaderObject<";

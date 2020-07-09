@@ -48,10 +48,13 @@ class raw_carray_ostream : public raw_ostream {
 
 public:
   explicit raw_carray_ostream(raw_ostream &OS, StringRef Name,
-                              StringRef AttrString = {})
+                              StringRef AttrString = {},
+                              bool AttrBeforeType = false)
       : OS(OS) {
+    if (!AttrString.empty() && AttrBeforeType)
+      OS << AttrString << '\n';
     OS << "const uint8_t " << Name << "[]";
-    if (!AttrString.empty())
+    if (!AttrString.empty() && !AttrBeforeType)
       OS << '\n' << AttrString;
     OS << " = {";
   }
@@ -87,10 +90,13 @@ class raw_carray32_ostream {
 
 public:
   explicit raw_carray32_ostream(raw_ostream &OS, StringRef Name,
-                                StringRef AttrString = {})
+                                StringRef AttrString = {},
+                                bool AttrBeforeType = false)
       : OS(OS) {
+    if (!AttrString.empty() && AttrBeforeType)
+      OS << AttrString << '\n';
     OS << "const uint32_t " << Name << "[]";
-    if (!AttrString.empty())
+    if (!AttrString.empty() && !AttrBeforeType)
       OS << '\n' << AttrString;
     OS << " = {";
   }

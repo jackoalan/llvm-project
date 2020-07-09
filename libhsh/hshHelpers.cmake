@@ -189,7 +189,12 @@ function(hsh_sources)
 endfunction()
 
 #
-# Hsh executable resource extraction
+# Add fixed-up hsh executable based on normal executable target
+#
+# This involves striping out hsh shader sections and appending them to
+# the emitted binary so they do not get persistently memory-mapped.
+# libhsh then has all information to temporarily map the shader data
+# while they are being built at runtime.
 #
 function(hsh_add_executable target_name basis_target)
   get_target_property(target_type ${basis_target} TYPE)
@@ -218,20 +223,33 @@ function(hsh_add_executable target_name basis_target)
 
   set(output_path "${ARG_OUTPUT_DIR}/${target_name}${CMAKE_EXECUTABLE_SUFFIX}")
 
-  add_custom_command(OUTPUT ${output_path}
-          COMMAND "$<TARGET_FILE:llvm-objcopy>"
-          --remove-section=".vulkan-spirv.*"
-          --remove-section=".deko.*"
-          --remove-section=".rela.*"
-          --keep-section=".rela.dyn"
-          --keep-section=".rela.plt"
-          --dump-section=".vulkan-spirv.shader"=${target_name}.vulkan-spirv.shader
-          --dump-section=".deko.shader"=${target_name}.deko.shader
-          --dump-section=".deko.control"=${target_name}.deko.control
-          "${dest_binary}" "${output_path}"
-          WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
-          DEPENDS ${basis_target} llvm-objcopy)
-  add_custom_target(${target_name} ALL DEPENDS ${basis_target} ${output_path})
+  if (APPLE)
+    # TODO: Come up with some kind of bundle handling (install basis removal?)
+    # To debug the fixed-up executable on macOS, a symlink is created to a potential dSYM bundle
+    add_custom_command(OUTPUT ${output_path}
+            COMMAND "$<TARGET_FILE:llvm-objcopy>"
+            "${dest_binary}" "${output_path}"
+            COMMAND "${CMAKE_COMMAND}" -E create_symlink "${dest_binary}.dSYM" "${output_path}.dSYM"
+            WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
+            DEPENDS ${basis_target} llvm-objcopy)
+  else()
+    add_custom_command(OUTPUT ${output_path}
+            COMMAND "$<TARGET_FILE:llvm-objcopy>"
+            "${dest_binary}" "${output_path}"
+            WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
+            DEPENDS ${basis_target} llvm-objcopy)
+  endif()
 
-  target_link_options(${basis_target} PRIVATE -Xlinker --emit-relocs)
+  add_custom_target(${target_name} ALL DEPENDS ${basis_target} ${output_path})
+  set_target_properties(${target_name} PROPERTIES LOCATION "${output_path}")
+
+  if (WIN32)
+    # Emit PDB with fixups
+    target_link_options(${basis_target} PRIVATE /link /DEBUG /DEBUGTYPE:CV,FIXUP)
+  elseif (APPLE)
+    # A default MachO file is sufficient for fixups
+  else()
+    # Assume ELF-based platform otherwise
+    target_link_options(${basis_target} PRIVATE -Xlinker --emit-relocs)
+  endif()
 endfunction()

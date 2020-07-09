@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
   {
     hsh::ShaderFileMapper SFM;
     if (!SFM.Good) {
-      std::cerr << "Shader file not found\n";
+      std::cerr << "Unable to map shader data\n";
       return 1;
     }
     PipelineCacheFileManager PCFM;

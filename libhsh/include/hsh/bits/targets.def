@@ -34,6 +34,7 @@ HSH_TARGET(METAL_BIN_MAC, "metal-macos")
 HSH_TARGET(METAL_BIN_IOS, "metal-ios")
 HSH_TARGET(METAL_BIN_TVOS, "metal_tvos")
 HSH_TARGET(DEKO3D, "deko3d")
+HSH_TARGET(DEKO3D_CONTROL, "deko3d-control")
 
 #undef HSH_ACTIVE_TARGET
 #undef HSH_TARGET

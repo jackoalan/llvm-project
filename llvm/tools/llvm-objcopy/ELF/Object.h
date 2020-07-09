@@ -347,6 +347,8 @@ public:
   // algorithm.
   bool OnlyKeepDebug;
 
+  mutable size_t HshSectionPtr;
+
   Error finalize() override;
   Error write() override;
   ELFWriter(Object &Obj, Buffer &Buf, bool WSH, bool OnlyKeepDebug);
@@ -492,6 +494,7 @@ public:
       function_ref<bool(const SectionBase *)> ToRemove) override;
   void initialize(SectionTableRef SecTable) override;
   void finalize() override;
+  ArrayRef<uint8_t> getContents() const { return Contents; }
   MutableArrayRef<uint8_t> mutableContents() {
     return MutableArrayRef<uint8_t>{const_cast<uint8_t *>(Contents.data()),
                                     Contents.size()};
@@ -1060,6 +1063,13 @@ public:
   StringTableSection *SectionNames = nullptr;
   SymbolTableSection *SymbolTable = nullptr;
   SectionIndexSection *SectionIndexTable = nullptr;
+
+  Section *HshSectionsTableSection = nullptr;
+  struct HshSection {
+    ArrayRef<uint8_t> Contents;
+    uint32_t TableSectionOffset;
+  };
+  std::vector<HshSection> HshSections;
 
   void sortSections();
   SectionTableRef sections() { return SectionTableRef(Sections); }

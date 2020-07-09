@@ -321,8 +321,8 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
           if (!Sec.getContents().empty()) {
             moveSection(Sec, Obj, *Dbi, 0, RemoveBaseReloc);
             Obj.HshSections.push_back(
-                {Sec.getContents(),
-                 uint32_t(HshOffsetsSecOffset + HshIdx * sizeof(uint32_t))});
+                {Sec.getContents(), uint32_t(HshOffsetsSecOffset +
+                                             HshIdx * 2 * sizeof(uint32_t))});
             SecIdsToRemove.push_back(Sec.UniqueId);
           }
         }

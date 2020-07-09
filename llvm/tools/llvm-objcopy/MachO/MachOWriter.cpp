@@ -525,11 +525,12 @@ Error MachOWriter::write() {
           reinterpret_cast<support::ulittle32_t *>(B.getBufferStart() +
                                                    HshTableSectionOffset +
                                                    HshSec.TableSectionOffset);
-      *OffsetPtr = HshSectionPtr;
+      size_t SecSize = alignTo(HshSec.Contents.size(), 0x1000);
+      OffsetPtr[0] = HshSectionPtr;
+      OffsetPtr[1] = SecSize;
 
       std::copy(HshSec.Contents.begin(), HshSec.Contents.end(), Ptr);
-      HshSectionPtr += HshSec.Contents.size();
-      HshSectionPtr = alignTo(HshSectionPtr, 0x1000);
+      HshSectionPtr += SecSize;
     }
   }
 
