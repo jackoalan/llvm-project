@@ -525,7 +525,7 @@ public:
         auto &Binaries =
             BinaryMap.insert(std::make_pair(Target, Compiler.compile(Sources)))
                 .first->second;
-        auto *SourceIt = Sources.begin();
+        auto SourceIt = Sources.begin();
         int StageIt = HshVertexStage;
 
         InitOS << "{\n    {\n";
@@ -694,13 +694,13 @@ public:
         for (auto &[Data, Hash] : BinaryMap[Target]) {
           if (Data.empty())
             continue;
-          AnonOS << "    _hsho_" << MakeHashString(Hash) << ",\n";
+          AnonOS << "    &_hsho_" << MakeHashString(Hash) << ",\n";
         }
 
         AnonOS << "  },\n  {\n";
 
         for (auto SamplerHash : SamplerHashes)
-          AnonOS << "    _hshsamp_" << MakeHashString(SamplerHash) << ",\n";
+          AnonOS << "    &_hshsamp_" << MakeHashString(SamplerHash) << ",\n";
 
         AnonOS << "  }\n};\n";
       }
@@ -840,8 +840,10 @@ public:
         *OS << ");\n";
       }
       *OS << "#else\n"
+             "#ifndef _MSC_VER\n"
              "#pragma GCC diagnostic push\n"
-             "#pragma GCC diagnostic ignored \"-Wcovered-switch-default\"\n";
+             "#pragma GCC diagnostic ignored \"-Wcovered-switch-default\"\n"
+             "#endif\n";
 
       struct SpecializationTree {
         static raw_ostream &indent(raw_ostream &OS, unsigned Indentation) {
@@ -915,7 +917,9 @@ public:
       } SpecTree{Context, cast<ClassTemplateDecl>(UseDecl), NonConstExprs};
       SpecTree.print(*OS, HostPolicy, BindingName);
 
-      *OS << "#pragma GCC diagnostic pop\n"
+      *OS << "#ifndef _MSC_VER\n"
+             "#pragma GCC diagnostic pop\n"
+             "#endif\n"
              "#endif\n"
              "}\n};\n"
              "#define "
@@ -1139,8 +1143,8 @@ public:
     bool FileNotFound(StringRef FileName,
                       SmallVectorImpl<char> &RecoveryPath) override {
       if (FileName.endswith_lower(".hshhead")) {
-        SmallString<1024> VirtualFilePath("./");
-        VirtualFilePath += FileName;
+        SmallString<1024> VirtualFilePath(".");
+        sys::path::append(VirtualFilePath, FileName);
         FM.getVirtualFile(VirtualFilePath, DummyInclude.size(),
                           std::time(nullptr));
         RecoveryPath.push_back('.');

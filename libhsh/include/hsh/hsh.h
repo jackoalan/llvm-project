@@ -1,5 +1,11 @@
 #pragma once
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -259,8 +265,7 @@ struct dynamic_owner<uniform_buffer<void>>
     return get<T>();
   }
 
-  template <typename U>
-  void load(const U &obj) noexcept {
+  template <typename U> void load(const U &obj) noexcept {
     auto *ptr = base::map();
     std::memcpy(ptr, &obj, sizeof(U));
     base::unmap();

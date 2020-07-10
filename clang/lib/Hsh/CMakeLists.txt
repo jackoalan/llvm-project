@@ -5,19 +5,21 @@ set(lib_destination "${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}")
 set(lib_install_destination "lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}")
 
 if(CMAKE_HOST_UNIX)
-  set(LINK_OR_COPY create_symlink
+  set(INTERN_COPY COMMAND "${CMAKE_COMMAND}" -E copy
+          lib/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7 "${lib_destination}")
+  set(LINK_OR_COPY COMMAND "${CMAKE_COMMAND}" -E create_symlink
           libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7
           "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
 else()
-  set(LINK_OR_COPY copy
-          "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
-          "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  set(INTERN_COPY COMMAND "${CMAKE_COMMAND}" -E copy
+          bin/dxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX} "${lib_destination}")
+  unset(LINK_OR_COPY)
 endif()
 
 ExternalProject_Add(
         DirectXShaderCompiler
         GIT_REPOSITORY https://github.com/microsoft/DirectXShaderCompiler
-        GIT_TAG b5dda91c10aeb31c2075d6383a59fc5af6a28c40
+        GIT_TAG 73c0d97f0dff11cbfac30b0d0f94bed8feff7e51
         BUILD_COMMAND "${CMAKE_COMMAND}" --build . --target dxcompiler
         INSTALL_COMMAND
         "${CMAKE_COMMAND}" -E make_directory "${CLANG_BINARY_DIR}/include/dxc/"
@@ -29,21 +31,21 @@ ExternalProject_Add(
         COMMAND
         "${CMAKE_COMMAND}" -E copy ../DirectXShaderCompiler/include/dxc/Support/WinAdapter.h
         "${CLANG_BINARY_DIR}/include/dxc/Support/WinAdapter.h"
-        COMMAND
-        "${CMAKE_COMMAND}" -E copy lib/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7 "${lib_destination}"
-        COMMAND
-        "${CMAKE_COMMAND}" -E ${LINK_OR_COPY}
+        ${INTERN_COPY}
+        ${LINK_OR_COPY}
         CMAKE_CACHE_ARGS
         -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER:STRING=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:STRING=${CMAKE_CXX_COMPILER}
+        -DENABLE_SPIRV_CODEGEN:STRING=On
         -DLLVM_TARGETS_TO_BUILD:STRING=None
         -DDXC_BUILD_ARCH:STRING=x64
         -DCLANG_ENABLE_ARCMT:STRING=Off
         -DCLANG_ENABLE_STATIC_ANALYZER:STRING=Off
         -DCLANG_INCLUDE_TESTS:STRING=Off
         -DLLVM_INCLUDE_TESTS:STRING=Off
-        -DHLSL_INCLUDE_TESTS:STRING=On
+        -DHLSL_INCLUDE_TESTS:STRING=Off
+        -DHLSL_BUILD_DXILCONV:STRING=Off
         -DLLVM_INCLUDE_DOCS:STRING=Off
         -DLLVM_INCLUDE_EXAMPLES:STRING=Off
         -DLIBCLANG_BUILD_STATIC:STRING=On
@@ -78,7 +80,7 @@ if(NOT NINJA)
   message(FATAL_ERROR "Failed to find ninja, which is required to build uam")
 endif()
 
-set(MESON_OPTIONS "--prefix=${CLANG_BINARY_DIR}")
+set(MESON_OPTIONS "--prefix=${CLANG_BINARY_DIR}" -Dbuildtype=$<IF:$<CONFIG:Debug>,debug,release>)
 
 ExternalProject_Add(
         UAM

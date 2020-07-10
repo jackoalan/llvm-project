@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef _MSC_VER
+#pragma section(".hsh5", read)
+#endif
+
 namespace hsh {
 using namespace std::literals;
 enum class Target : std::uint8_t {
@@ -9,7 +13,7 @@ enum class Target : std::uint8_t {
   MaxTarget
 };
 constexpr std::string_view TargetNames[] = {
-  "null"sv,
+    "null"sv,
 #define HSH_TARGET(Enumeration, Name) Name##sv,
 #include "targets.def"
 };

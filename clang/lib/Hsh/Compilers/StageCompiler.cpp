@@ -29,7 +29,7 @@ StageBinaries StageCompiler::compile(ArrayRef<std::string> Sources) const {
 StageBinaries
 TextStageCompiler::doCompile(ArrayRef<std::string> Sources) const {
   StageBinaries Binaries;
-  auto *OutIt = Binaries.begin();
+  auto OutIt = Binaries.begin();
   for (const auto &Stage : Sources) {
     auto &Out = OutIt++->first;
     if (Stage.empty())

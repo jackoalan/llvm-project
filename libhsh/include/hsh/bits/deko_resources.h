@@ -605,7 +605,9 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
             DkStencilOp_Keep, DkStencilOp_Replace, DkStencilOp_Keep,
             DkCompareOp_Always}},
         ColorBlendState{DkColorState{
-            ((uint32_t(std::get<AttSeq>(Atts).blendEnabled() ? 1 : 0) << AttSeq) | ...),
+            ((uint32_t(std::get<AttSeq>(Atts).blendEnabled() ? 1 : 0)
+              << AttSeq) |
+             ...),
             DkLogicOp_Clear, DkCompareOp_Always}},
         ColorWriteState{
             DkColorWriteState{((HshToDkColorComponentFlags(
@@ -651,16 +653,15 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
 
 template <std::uint32_t NStages, std::uint32_t NSamplers>
 struct ShaderData<Target::DEKO3D, NStages, NSamplers> {
-  using ObjectRef = std::reference_wrapper<ShaderObject<Target::DEKO3D>>;
+  using ObjectRef = ShaderObject<Target::DEKO3D> *;
   std::array<ObjectRef, NStages> ShaderObjects;
-  using SamplerRef = std::reference_wrapper<SamplerObject<Target::DEKO3D>>;
+  using SamplerRef = SamplerObject<Target::DEKO3D> *;
   TargetTraits<Target::DEKO3D>::Pipeline Pipeline;
   template <std::size_t... StSeq>
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps,
                        std::index_sequence<StSeq...>) noexcept
-      : ShaderObjects(S), Pipeline{NStages,
-                                   {&std::get<StSeq>(S).get().Shader...}} {}
+      : ShaderObjects(S), Pipeline{NStages, {&std::get<StSeq>(S)->Shader...}} {}
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps) noexcept
       : ShaderData(S, Samps, std::make_index_sequence<NStages>()) {}
@@ -668,7 +669,7 @@ struct ShaderData<Target::DEKO3D, NStages, NSamplers> {
   void InitializeShaders(const std::array<StageCode, NStages> &StageCodes,
                          std::index_sequence<StSeq...>) noexcept {
     (std::get<StSeq>(StageCodes)
-         .Initialize(std::get<StSeq>(ShaderObjects).get().Shader),
+         .Initialize(std::get<StSeq>(ShaderObjects)->Shader),
      ...);
   }
   void

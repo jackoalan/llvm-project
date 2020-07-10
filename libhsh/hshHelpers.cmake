@@ -18,6 +18,7 @@ endmacro()
 unset(HSH_TARGETS_FOUND)
 unset(HSH_EXTRA_INCLUDE_DIRS)
 unset(HSH_EXTRA_COMPILE_DEFINES)
+unset(HSH_EXTRA_LIBS)
 
 #
 # Configuration macro variables
@@ -52,6 +53,7 @@ if(WIN32)
     list(APPEND HSH_TARGETS_FOUND vulkan-spirv)
     list(GET VULKAN_SDK_DIRS 0 VULKAN_SDK_DIR)
     list(APPEND HSH_EXTRA_INCLUDE_DIRS "${VULKAN_SDK_DIR}/Include")
+    list(APPEND HSH_EXTRA_COMPILE_DEFINES VK_USE_PLATFORM_WIN32_KHR=1)
   endif()
 elseif(NX)
   find_path(LIBNX_INCLUDE_DIR NAMES deko3d.hpp)
@@ -64,6 +66,17 @@ else()
   if (VULKAN_INCLUDE_DIR)
     message(STATUS "[hsh]: Found vulkan headers")
     list(APPEND HSH_TARGETS_FOUND vulkan-spirv)
+    include(FindPkgConfig)
+    pkg_check_modules(vk-xcb IMPORTED_TARGET xcb)
+    if(vk-xcb_FOUND)
+      list(APPEND HSH_EXTRA_COMPILE_DEFINES VK_USE_PLATFORM_XCB_KHR=1)
+      list(APPEND HSH_EXTRA_LIBS PkgConfig::vk-xcb)
+    endif()
+    pkg_check_modules(vk-wayland IMPORTED_TARGET wayland-client)
+    if(vk-wayland_FOUND)
+      list(APPEND HSH_EXTRA_COMPILE_DEFINES VK_USE_PLATFORM_WAYLAND_KHR=1)
+      list(APPEND HSH_EXTRA_LIBS PkgConfig::vk-wayland)
+    endif()
   endif()
 endif()
 
@@ -86,6 +99,7 @@ endif()
 add_library(hsh INTERFACE)
 target_include_directories(hsh INTERFACE "${HSH_INCLUDE_DIR}" ${HSH_EXTRA_INCLUDE_DIRS})
 target_compile_definitions(hsh INTERFACE ${HSH_EXTRA_COMPILE_DEFINES})
+target_link_libraries(hsh INTERFACE ${HSH_EXTRA_LIBS})
 
 #
 # target_hsh makes all sources of a target individually depend on
@@ -245,7 +259,7 @@ function(hsh_add_executable target_name basis_target)
 
   if (WIN32)
     # Emit PDB with fixups
-    target_link_options(${basis_target} PRIVATE /link /DEBUG /DEBUGTYPE:CV,FIXUP)
+    target_link_options(${basis_target} PRIVATE /INCREMENTAL:NO /DEBUG /DEBUGTYPE:CV,FIXUP)
   elseif (APPLE)
     # A default MachO file is sufficient for fixups
   else()

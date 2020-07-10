@@ -18,6 +18,12 @@
 
 #include "clang/Basic/Diagnostic.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include <unknwn.h>
+#include <atlcomcli.h>
+#endif
 #include "dxc/dxcapi.h"
 
 #ifdef __EMULATE_UUID
@@ -72,10 +78,11 @@ public:
 #if LLVM_ON_UNIX
     SmallString<128> LibPath(ResourceDir);
     sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
-    Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);
 #else
-    Library = sys::DynamicLibrary::getPermanentLibrary("dxcompiler.dll", &Err);
+    SmallString<128> LibPath(ResourceDir);
+    sys::path::append(LibPath, "dxcompiler" LTDL_SHLIB_EXT);
 #endif
+    Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);
     if (!Library.isValid()) {
       Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                          "unable to load %0; %1"))
@@ -139,8 +146,8 @@ class DxcStageCompilerImpl : public DxcStageCompiler {
 protected:
   StageBinaries doCompile(ArrayRef<std::string> Sources) const override {
     StageBinaries Binaries;
-    auto *OutIt = Binaries.begin();
-    const auto *ProfileIt = ShaderProfiles.begin();
+    auto OutIt = Binaries.begin();
+    auto ProfileIt = ShaderProfiles.cbegin();
     int StageIt = 0;
     for (const auto &Stage : Sources) {
       auto &Out = OutIt++->first;
@@ -202,7 +209,7 @@ protected:
       if (HResult != ERROR_SUCCESS) {
         Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                            "%0 problem from dxcompiler: %1"))
-            << HshStageToString(HStage) << HResult;
+            << HshStageToString(HStage) << unsigned(HResult);
       }
     }
     return Binaries;

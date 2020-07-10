@@ -547,7 +547,7 @@ void HshBuiltins::findBuiltinDecls(ASTContext &Context) {
                                          "is hsh::pipeline::pipeline invalid?"))
           << Name;
     };
-    auto *CheckIt = PipelineFields.begin();
+    auto CheckIt = PipelineFields.begin();
 #define PIPELINE_FIELD(Name, Stage)                                            \
   if (!(++CheckIt)->first)                                                     \
     ReportMissingPipelineField(#Name);
@@ -729,8 +729,9 @@ bool HshBuiltins::checkHshTypeCompatibility(const ASTContext &Context,
                                             bool AllowTextures) const {
   if (auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
           Tp->getAsCXXRecordDecl())) {
-    auto *CTD =
-        Spec->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>();
+    auto *CTD = Spec->getSpecializedTemplateOrPartial()
+                    .get<ClassTemplateDecl *>()
+                    ->getCanonicalDecl();
     if (CTD == StdArrayType || CTD == AlignedArrayType) {
       const auto &Arg = Spec->getTemplateArgs()[0];
       return checkHshTypeCompatibility(Context, VD, Arg.getAsType(),
@@ -917,15 +918,17 @@ HshBuiltins::getDerivedPipelineSpecialization(CXXRecordDecl *Decl) const {
 
 bool HshBuiltins::isStdArrayType(const CXXRecordDecl *RD) const {
   if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
-    return CTSD->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>() ==
-           StdArrayType;
+    return CTSD->getSpecializedTemplateOrPartial()
+               .get<ClassTemplateDecl *>()
+               ->getCanonicalDecl() == StdArrayType;
   return false;
 }
 
 bool HshBuiltins::isAlignedArrayType(const CXXRecordDecl *RD) const {
   if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
-    return CTSD->getSpecializedTemplateOrPartial().get<ClassTemplateDecl *>() ==
-           AlignedArrayType;
+    return CTSD->getSpecializedTemplateOrPartial()
+               .get<ClassTemplateDecl *>()
+               ->getCanonicalDecl() == AlignedArrayType;
   return false;
 }
 

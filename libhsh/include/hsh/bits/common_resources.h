@@ -1,34 +1,74 @@
 #pragma once
 
-#ifdef _WIN32
-#else
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
+#ifndef _WIN32
 #include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 /*
  * Base pointer set by ShaderFileMapper for loading file-mapped shaders.
  * If hsh-objcopy has not processed the binary, __hsh_objcopy is left as zero.
  */
-struct __hsh_off { uint32_t offset, length; };
+struct __hsh_off {
+  uint32_t offset, length;
+};
 extern "C" const volatile uint8_t __hsh_objcopy;
 extern "C" const volatile __hsh_off
     __hsh_offsets[size_t(hsh::Target::MaxTarget)];
-extern "C" const uint8_t* __hsh_reloc_base;
+extern "C" const uint8_t *__hsh_reloc_base;
 extern "C" size_t __hsh_reloc_length;
 
 #ifdef HSH_IMPLEMENTATION
 const volatile uint8_t __hsh_objcopy = 0;
 const volatile __hsh_off __hsh_offsets[size_t(hsh::Target::MaxTarget)] = {};
-const uint8_t* __hsh_reloc_base = nullptr;
+const uint8_t *__hsh_reloc_base = nullptr;
 size_t __hsh_reloc_length = SIZE_MAX;
 #endif
 
 namespace hsh {
 
 #ifdef _WIN32
+
+inline std::basic_string<TCHAR> get_exe_path() noexcept {
+  std::basic_string<TCHAR> FileName;
+  DWORD FileNameSize = MAX_PATH; // first guess, not an absolute limit
+  DWORD Copied = 0;
+  do {
+    FileNameSize *= 2;
+    FileName.resize(FileNameSize);
+    Copied = ::GetModuleFileName(nullptr, FileName.data(), FileNameSize);
+  } while (Copied >= FileNameSize);
+  FileName.resize(Copied);
+  return FileName;
+}
+
+inline uint8_t *mmap_file(const TCHAR *FilePath, size_t Offset,
+                          size_t Length) noexcept {
+  HANDLE File = ::CreateFile(FilePath, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (File == INVALID_HANDLE_VALUE)
+    return nullptr;
+
+  HANDLE FileMapping =
+      ::CreateFileMapping(File, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  ::CloseHandle(File);
+  if (File == INVALID_HANDLE_VALUE)
+    return nullptr;
+
+  void *Mem = ::MapViewOfFile(FileMapping, FILE_MAP_READ, 0, Offset, Length);
+  ::CloseHandle(FileMapping);
+  if (Mem == nullptr)
+    return nullptr;
+
+  return reinterpret_cast<uint8_t *>(Mem);
+}
+
+inline void munmap_file(uint8_t *Mem, size_t Len) noexcept {
+  ::UnmapViewOfFile(Mem);
+}
+
 #else
 
 #ifdef __linux__
@@ -406,29 +446,29 @@ template <std::size_t TargetIdx, std::size_t CurIdx, typename... Attrs>
 struct ColorAttachmentSelectorImpl {};
 
 template <std::size_t TargetIdx, std::size_t CurIdx, typename CA,
-    typename... RemAttrs>
+          typename... RemAttrs>
 struct ColorAttachmentSelectorImpl<TargetIdx, CurIdx, CA, RemAttrs...>
     : ColorAttachmentSelectorImpl<TargetIdx, CurIdx, RemAttrs...> {};
 
 template <std::size_t TargetIdx, std::size_t CurIdx,
-    BlendFactor SrcColorBlendFactor, BlendFactor DstColorBlendFactor,
-    BlendOp ColorBlendOp, BlendFactor SrcAlphaBlendFactor,
-    BlendFactor DstAlphaBlendFactor, BlendOp AlphaBlendOp,
-    ColorComponentFlags ColorWriteComponents, typename... RemAttrs>
+          BlendFactor SrcColorBlendFactor, BlendFactor DstColorBlendFactor,
+          BlendOp ColorBlendOp, BlendFactor SrcAlphaBlendFactor,
+          BlendFactor DstAlphaBlendFactor, BlendOp AlphaBlendOp,
+          ColorComponentFlags ColorWriteComponents, typename... RemAttrs>
 struct ColorAttachmentSelectorImpl<
     TargetIdx, CurIdx,
     color_attachment<SrcColorBlendFactor, DstColorBlendFactor, ColorBlendOp,
-        SrcAlphaBlendFactor, DstAlphaBlendFactor, AlphaBlendOp,
-        ColorWriteComponents>,
+                     SrcAlphaBlendFactor, DstAlphaBlendFactor, AlphaBlendOp,
+                     ColorWriteComponents>,
     RemAttrs...>
     : std::conditional_t<
-        TargetIdx == CurIdx,
-        color_attachment<SrcColorBlendFactor, DstColorBlendFactor,
-            ColorBlendOp, SrcAlphaBlendFactor,
-            DstAlphaBlendFactor, AlphaBlendOp,
-            ColorWriteComponents>,
-        ColorAttachmentSelectorImpl<TargetIdx, CurIdx + 1, RemAttrs...>> {};
-}
+          TargetIdx == CurIdx,
+          color_attachment<SrcColorBlendFactor, DstColorBlendFactor,
+                           ColorBlendOp, SrcAlphaBlendFactor,
+                           DstAlphaBlendFactor, AlphaBlendOp,
+                           ColorWriteComponents>,
+          ColorAttachmentSelectorImpl<TargetIdx, CurIdx + 1, RemAttrs...>> {};
+} // namespace detail
 
 template <typename... Attrs> struct pipeline {
   hsh::float4 position;
@@ -667,9 +707,9 @@ struct ShaderConstData {
 
 template <Target T, std::uint32_t NStages, std::uint32_t NSamplers>
 struct ShaderData {
-  using ObjectRef = std::reference_wrapper<ShaderObject<T>>;
+  using ObjectRef = ShaderObject<T> *;
   std::array<ObjectRef, NStages> ShaderObjects;
-  using SamplerRef = std::reference_wrapper<SamplerObject<T>>;
+  using SamplerRef = SamplerObject<T> *;
   std::array<SamplerRef, NSamplers> SamplerObjects;
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
                        std::array<SamplerRef, NSamplers> Samps) noexcept

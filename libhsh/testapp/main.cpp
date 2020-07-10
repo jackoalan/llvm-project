@@ -1,5 +1,8 @@
 #define HSH_IMPLEMENTATION
-#define VK_USE_PLATFORM_XCB_KHR
+#if _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#endif
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -15,21 +18,147 @@ constexpr std::string_view AppName = "Hello Triangle"sv;
 
 #if !HSH_PROFILE_MODE
 
-struct XcbConnection;
-struct XcbWindow {
-  XcbConnection &Connection;
-  xcb_window_t Window;
-  explicit XcbWindow(XcbConnection &Connection);
-  ~XcbWindow();
+#if _WIN32
+
+struct WsiConnection;
+struct WsiWindow {
+  WsiConnection &Connection;
+  HWND Window;
+  explicit WsiWindow(WsiConnection &Connection);
+  ~WsiWindow();
 };
 
-struct XcbConnection {
+struct WsiConnection {
+  HINSTANCE Instance;
+
+  operator HINSTANCE() const { return Instance; }
+
+  static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
+                                     LPARAM lParam) {
+    if (msg == WM_DESTROY)
+      PostQuitMessage(0);
+    return DefWindowProc(hWnd, msg, wParam, lParam);
+  }
+
+  WsiConnection() {
+    Instance = GetModuleHandle(nullptr);
+    assert(Instance);
+
+    WNDCLASSEX Class{};
+
+    Class.cbSize = sizeof(Class);
+    Class.style = 0;
+    Class.lpfnWndProc = &WindowProc;
+    Class.cbClsExtra = 0;
+    Class.cbWndExtra = 0;
+    Class.hInstance = Instance;
+    Class.hIcon = nullptr;
+    Class.hCursor = nullptr;
+    Class.hbrBackground = HBRUSH(GetStockObject(BLACK_BRUSH));
+    Class.lpszMenuName = nullptr;
+    Class.lpszClassName = TEXT("TestappWndClass");
+    Class.hIconSm = nullptr;
+
+    ATOM ClassAtom = RegisterClassEx(&Class);
+    assert(ClassAtom);
+  }
+
+  WsiWindow makeWindow() { return WsiWindow(*this); }
+
+  void runloop(const std::function<bool()> &IdleFunc) {
+    bool Running = true;
+    while (Running) {
+      MSG Msg;
+      if (!PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (!IdleFunc())
+          break;
+        continue;
+      }
+
+      switch (Msg.message) {
+      case WM_QUIT:
+        Running = false;
+        break;
+      default:
+        TranslateMessage(&Msg);
+        DispatchMessage(&Msg);
+        break;
+      }
+    }
+  }
+};
+
+WsiWindow::WsiWindow(WsiConnection &Connection) : Connection(Connection) {
+  Window = CreateWindow(TEXT("TestappWndClass"), TEXT("HSH Test App"),
+                        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 512,
+                        512, (HWND) nullptr, (HMENU) nullptr, Connection,
+                        (LPVOID) nullptr);
+  ShowWindow(Window, SW_SHOW);
+}
+
+WsiWindow::~WsiWindow() { DestroyWindow(Window); }
+
+struct PipelineCacheFileManager {
+  static std::wstring GetFilename(const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    std::wostringstream FileName;
+    // TODO: make this more portable
+    wchar_t LocalAppData[MAX_PATH];
+    if (GetEnvironmentVariable(TEXT("LOCALAPPDATA"), LocalAppData, MAX_PATH)) {
+      FileName << LocalAppData;
+      FileName << TEXT("/cache/hsh-test-pipeline-cache-");
+      for (int i = 0; i < VK_UUID_SIZE; ++i)
+        FileName << std::hex << unsigned(UUID[i]);
+      FileName << TEXT(".bin");
+    }
+    return FileName.str();
+  }
+
+  template <typename Func>
+  static void ReadPipelineCache(Func F,
+                                const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    if (std::FILE *File = ::_wfopen(GetFilename(UUID).c_str(), TEXT("rb"))) {
+      std::fseek(File, 0, SEEK_END);
+      auto Size = std::ftell(File);
+      if (Size != 0) {
+        std::fseek(File, 0, SEEK_SET);
+        std::unique_ptr<uint8_t[]> Data(new uint8_t[Size]);
+        Size = std::fread(Data.get(), 1, Size, File);
+        if (Size != 0)
+          F(Data.get(), Size);
+      }
+      std::fclose(File);
+    }
+  }
+
+  template <typename Func>
+  static void WritePipelineCache(Func F,
+                                 const uint8_t UUID[VK_UUID_SIZE]) noexcept {
+    if (std::FILE *File = ::_wfopen(GetFilename(UUID).c_str(), TEXT("wb"))) {
+      F([File](const uint8_t *Data, std::size_t Size) {
+        std::fwrite(Data, 1, Size, File);
+      });
+      std::fclose(File);
+    }
+  }
+};
+
+#else
+
+struct WsiConnection;
+struct WsiWindow {
+  WsiConnection &Connection;
+  xcb_window_t Window;
+  explicit WsiWindow(WsiConnection &Connection);
+  ~WsiWindow();
+};
+
+struct WsiConnection {
   xcb_connection_t *Connection;
   xcb_atom_t wmDeleteWin, wmProtocols;
 
   operator xcb_connection_t *() const { return Connection; }
 
-  XcbConnection() {
+  WsiConnection() {
     Connection = xcb_connect(nullptr, nullptr);
     assert(Connection);
 
@@ -47,7 +176,7 @@ struct XcbConnection {
     wmProtocols = wmProtocolsReply->atom;
   }
 
-  XcbWindow makeWindow() { return XcbWindow(*this); }
+  WsiWindow makeWindow() { return WsiWindow(*this); }
 
   void runloop(const std::function<bool()> &IdleFunc) {
     bool Running = true;
@@ -77,7 +206,7 @@ struct XcbConnection {
   }
 };
 
-XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
+WsiWindow::WsiWindow(WsiConnection &Connection) : Connection(Connection) {
   const struct xcb_setup_t *Setup = xcb_get_setup(Connection);
   xcb_screen_iterator_t Screen = xcb_setup_roots_iterator(Setup);
   assert(Screen.rem);
@@ -99,7 +228,7 @@ XcbWindow::XcbWindow(XcbConnection &Connection) : Connection(Connection) {
   xcb_flush(Connection);
 }
 
-XcbWindow::~XcbWindow() { xcb_destroy_window(Connection, Window); }
+WsiWindow::~WsiWindow() { xcb_destroy_window(Connection, Window); }
 
 struct PipelineCacheFileManager {
   static std::string GetFilename(const uint8_t UUID[VK_UUID_SIZE]) noexcept {
@@ -144,9 +273,15 @@ struct PipelineCacheFileManager {
   }
 };
 
+#endif
+
+#if _WIN32
+int wmain(int argc, wchar_t **argv) {
+#else
 int main(int argc, char **argv) {
-  XcbConnection Connection;
-  XcbWindow Window = Connection.makeWindow();
+#endif
+  WsiConnection Connection;
+  WsiWindow Window = Connection.makeWindow();
 
   auto Instance = hsh::create_vulkan_instance(
       AppName.data(), 0, "test-engine", 0,
@@ -225,7 +360,10 @@ int main(int argc, char **argv) {
   Connection.runloop([&]() {
     Device.enter_draw_context([&]() {
       if (!UFifo)
-        UFifo = hsh::create_uniform_fifo(256 + sizeof(MyNS::UniformData)); // Maximum alignment by vulkan spec is 256
+        UFifo = hsh::create_uniform_fifo(
+            256 +
+            sizeof(
+                MyNS::UniformData)); // Maximum alignment by vulkan spec is 256
       if (!VFifo)
         VFifo = hsh::create_vertex_fifo(sizeof(MyNS::MyFormat) * 3 * 2);
 
@@ -240,16 +378,23 @@ int main(int argc, char **argv) {
               UniData.xf[1][1] = 1.f;
               UniData.xf[2][2] = 1.f;
               UniData.xf[3][3] = 1.f;
-              //UniData.color = Rainbow[CurColor];
+              // UniData.color = Rainbow[CurColor];
               UniData.color = hsh::float4(1.f, 1.f, 1.f, 1.f);
             });
         auto VFifoBinding =
             VFifo.map<MyNS::MyFormat>(3, [&](MyNS::MyFormat *VertData) {
-              VertData[0] = MyNS::MyFormat{hsh::float3{-1.f, -1.f, 0.f}, {}, Rainbow[CurColor]};
-              VertData[1] = MyNS::MyFormat{hsh::float3{ 1.f, -1.f, 0.f}, {}, Rainbow[(CurColor + 1) % Rainbow.size()]};
-              VertData[2] = MyNS::MyFormat{hsh::float3{ 1.f,  1.f, 0.f}, {}, Rainbow[(CurColor + 2) % Rainbow.size()]};
+              VertData[0] = MyNS::MyFormat{
+                  hsh::float3{-1.f, -1.f, 0.f}, {}, Rainbow[CurColor]};
+              VertData[1] =
+                  MyNS::MyFormat{hsh::float3{1.f, -1.f, 0.f},
+                                 {},
+                                 Rainbow[(CurColor + 1) % Rainbow.size()]};
+              VertData[2] =
+                  MyNS::MyFormat{hsh::float3{1.f, 1.f, 0.f},
+                                 {},
+                                 Rainbow[(CurColor + 2) % Rainbow.size()]};
             });
-        //CurColor = (CurColor + 1) % Rainbow.size();
+        // CurColor = (CurColor + 1) % Rainbow.size();
         MyNS::BindPipeline(PipelineBind, UFifoBinding, VFifoBinding).draw(0, 3);
 
         RenderTexture.resolve_surface(Surface.get());

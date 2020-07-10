@@ -23,7 +23,7 @@ constexpr unsigned s_shaderStartOffset = 0x80 - sizeof(NvShaderHeader);
 
 StageBinaries UamStageCompiler::doCompile(ArrayRef<std::string> Sources) const {
   StageBinaries Binaries;
-  auto *OutIt = Binaries.begin();
+  auto OutIt = Binaries.begin();
   auto ProfileIt = ShaderProfiles.begin();
   int StageIt = 0;
   for (const auto &Stage : Sources) {

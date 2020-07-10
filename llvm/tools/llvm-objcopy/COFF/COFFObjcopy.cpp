@@ -329,14 +329,23 @@ static Error handleArgs(const CopyConfig &Config, Object &Obj,
       } else if (NewSectionBaseAddr != UINT32_MAX) {
         // Re-relocate sections after hsh sections
         moveSection(Sec, Obj, *Dbi, NewSectionBaseAddr, {});
-        Sec.Header.VirtualAddress = NewSectionBaseAddr;
 
-        if (Sec.Name == ".reloc") {
-          data_directory *Dir = &Obj.DataDirectories[BASE_RELOCATION_TABLE];
-          if (Dir->Size > 0)
-            Dir->RelativeVirtualAddress = NewSectionBaseAddr;
+        // Fix any shifted directory RVAs
+        for (auto &Dir : Obj.DataDirectories) {
+          if (Dir.Size > 0 &&
+              Dir.RelativeVirtualAddress >= Sec.Header.VirtualAddress &&
+              Dir.RelativeVirtualAddress <
+                  Sec.Header.VirtualAddress + Sec.Header.VirtualSize) {
+            Dir.RelativeVirtualAddress =
+                NewSectionBaseAddr +
+                (Dir.RelativeVirtualAddress - Sec.Header.VirtualAddress);
+          }
         }
 
+        // Assign new section RVA
+        Sec.Header.VirtualAddress = NewSectionBaseAddr;
+
+        // Next section
         NewSectionBaseAddr =
             alignTo(NewSectionBaseAddr + Sec.Header.VirtualSize,
                     Obj.PeHeader.SectionAlignment);

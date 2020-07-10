@@ -164,11 +164,15 @@ struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
   RenderPassBeginInfo() = default;
   RenderPassBeginInfo(vk::RenderPass RenderPass, vk::Framebuffer Framebuffer,
                       vk::Extent2D Extent) noexcept
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
       : vk::RenderPassBeginInfo(RenderPass, Framebuffer, vk::Rect2D({}, Extent),
                                 ClearValues.size(), ClearValues.data()),
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
         ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {
   }
 };
@@ -941,11 +945,15 @@ SurfaceAllocation::SurfaceAllocation(
           1, vk::ImageLayout::eDepthStencilAttachmentOptimal};
       constexpr RenderPassCreateInfo(vk::Format colorFormat,
                                      vk::SampleCountFlagBits samples) noexcept
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
           : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
                                      Subpasses.size(), Subpasses.data()),
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
             Attachments{
                 vk::AttachmentDescription(
                     {}, colorFormat, samples, vk::AttachmentLoadOp::eLoad,
@@ -981,11 +989,15 @@ SurfaceAllocation::SurfaceAllocation(
       vk::AttachmentReference ColorRef{
           0, vk::ImageLayout::eColorAttachmentOptimal};
       constexpr DirectRenderPassCreateInfo(vk::Format colorFormat) noexcept
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
           : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
                                      Subpasses.size(), Subpasses.data()),
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
             Attachments{vk::AttachmentDescription(
                 {}, colorFormat, vk::SampleCountFlagBits::e1,
                 vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
@@ -1160,12 +1172,16 @@ struct DescriptorPoolCreateInfo : vk::DescriptorPoolCreateInfo {
       vk::DescriptorPoolSize{vk::DescriptorType::eSampler,
                              MaxSamplers *MaxDescriptorPoolSets}};
   constexpr DescriptorPoolCreateInfo() noexcept
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
       : vk::DescriptorPoolCreateInfo({}, MaxDescriptorPoolSets,
                                      PoolSizes.size(), PoolSizes.data()) {
   }
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
 };
 struct UniqueDescriptorSet {
   vk::DescriptorSet Set;
@@ -1472,7 +1488,7 @@ inline TextureAllocation AllocateTexture(const SourceLocation &location,
     constexpr TextureAllocationCreateInfo(bool Dedicated) noexcept
         : VmaAllocationCreateInfo{
               Dedicated ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
-                        : VmaAllocationCreateFlagBits(0),
+                        : VmaAllocationCreateFlags(0),
               VMA_MEMORY_USAGE_GPU_ONLY,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               0,
@@ -1839,7 +1855,7 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vk::UniqueImageView ImageView;
     std::uint8_t NumMips : 7;
     std::uint8_t Integer : 1;
-    TextureOwner() noexcept = default;
+    TextureOwner() = default;
     TextureOwner(const TextureOwner &other) = delete;
     TextureOwner &operator=(const TextureOwner &other) = delete;
     TextureOwner(TextureOwner &&other) noexcept = default;

@@ -284,7 +284,7 @@ HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
 
 template <> struct ShaderObject<Target::VULKAN_SPIRV> {
   vk::UniqueShaderModule ShaderModule;
-  ShaderObject() noexcept = default;
+  ShaderObject() = default;
   vk::ShaderModule Get(const ShaderCode<Target::VULKAN_SPIRV> &Info,
                        const SourceLocation &Location) noexcept {
     if (!ShaderModule) {
@@ -301,7 +301,7 @@ template <> struct ShaderObject<Target::VULKAN_SPIRV> {
 
 template <> struct SamplerObject<Target::VULKAN_SPIRV> {
   std::array<std::array<vk::UniqueSampler, MaxMipCount - 1>, 2> Samplers;
-  SamplerObject() noexcept = default;
+  SamplerObject() = default;
   vk::Sampler Get(const vk::SamplerCreateInfo &Info, bool Int,
                   unsigned MipCount, const SourceLocation &Location) noexcept {
     assert(MipCount && MipCount < MaxMipCount);
@@ -362,14 +362,14 @@ template <typename Impl> struct DescriptorPoolWrites {
 
   struct Iterators {
     vk::DescriptorSet DstSet;
-    decltype(Writes)::iterator WriteBegin;
-    decltype(Uniforms)::iterator UniformBegin;
-    decltype(Images)::iterator ImageBegin;
-    decltype(Samplers)::iterator SamplerBegin;
-    decltype(Writes)::iterator WriteIt;
-    decltype(Uniforms)::iterator UniformIt;
-    decltype(Images)::iterator ImageIt;
-    decltype(Samplers)::iterator SamplerIt;
+    typename decltype(Writes)::iterator WriteBegin;
+    typename decltype(Uniforms)::iterator UniformBegin;
+    typename decltype(Images)::iterator ImageBegin;
+    typename decltype(Samplers)::iterator SamplerBegin;
+    typename decltype(Writes)::iterator WriteIt;
+    typename decltype(Uniforms)::iterator UniformIt;
+    typename decltype(Images)::iterator ImageIt;
+    typename decltype(Samplers)::iterator SamplerIt;
     constexpr explicit Iterators(vk::DescriptorSet DstSet,
                                  DescriptorPoolWrites &Writes) noexcept
         : DstSet(DstSet), WriteBegin(Writes.Writes.begin()),
@@ -419,7 +419,7 @@ template <typename Impl> struct DescriptorPoolWrites {
       auto SamplerIdx = SamplerIt - SamplerBegin;
       auto &Sampler = *SamplerIt++;
       Sampler = vk::DescriptorImageInfo(
-          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.Idx].get().Get(
+          Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.Idx]->Get(
               Impl::cdata_VULKAN_SPIRV.Samplers[sampler.Idx], sampler.Tex,
               Impl::cdata_VULKAN_SPIRV.Location.with_field("Sampler",
                                                            SamplerIdx)));
@@ -537,8 +537,8 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
       std::index_sequence<SSeq...>, std::index_sequence<BSeq...>,
       std::index_sequence<ASeq...>, std::index_sequence<SampSeq...>,
       std::index_sequence<AttSeq...>) noexcept
-      : StageCodes(S),
-        StageFlags{HshToVkShaderStage(std::get<SSeq>(S).Stage)...},
+      : StageCodes(S), StageFlags{HshToVkShaderStage(
+                           std::get<SSeq>(S).Stage)...},
         VertexBindingDescriptions{vk::VertexInputBindingDescription{
             BSeq, std::get<BSeq>(B).Stride,
             HshToVkInputRate(std::get<BSeq>(B).InputRate)}...},
@@ -633,7 +633,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
     for (std::size_t i = 0; i < NStages; ++i)
       StageInfos[i] = vk::PipelineShaderStageCreateInfo {
         {}, StageFlags[i],
-            B::data_VULKAN_SPIRV.ShaderObjects[i].get().Get(
+            B::data_VULKAN_SPIRV.ShaderObjects[i]->Get(
                 StageCodes[i],
 #if HSH_SOURCE_LOCATION_ENABLED
                 B::cdata_VULKAN_SPIRV.Location.with_field(
@@ -645,18 +645,37 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
             "main"
       };
 
+#if _MSC_VER
+    /* Thanks for screwing up inter-field constexpr references MS <3 */
+    static auto VertexInputStateTmp = VertexInputState;
+    VertexInputStateTmp.pVertexBindingDescriptions =
+        VertexBindingDescriptions.data();
+    VertexInputStateTmp.pVertexAttributeDescriptions =
+        VertexAttributeDescriptions.data();
+    static auto ColorBlendStateTmp = ColorBlendState;
+    ColorBlendStateTmp.pAttachments = TargetAttachments.data();
+#endif
+
     return vk::GraphicsPipelineCreateInfo{
         {},
         NStages,
         reinterpret_cast<vk::PipelineShaderStageCreateInfo *>(StageInfos),
+#if _MSC_VER
+        &VertexInputStateTmp,
+#else
         &VertexInputState,
+#endif
         &InputAssemblyState,
         &TessellationState,
         &ViewportState,
         &RasterizationState,
         &vulkan::Globals.MultisampleState,
         &DepthStencilState,
+#if _MSC_VER
+        &ColorBlendStateTmp,
+#else
         &ColorBlendState,
+#endif
         &DynamicState,
         vulkan::Globals.PipelineLayout,
         DirectRenderPass ? vulkan::Globals.GetDirectRenderPass()
@@ -666,10 +685,9 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
 
 template <std::uint32_t NStages, std::uint32_t NSamplers>
 struct ShaderData<Target::VULKAN_SPIRV, NStages, NSamplers> {
-  using ObjectRef = std::reference_wrapper<ShaderObject<Target::VULKAN_SPIRV>>;
+  using ObjectRef = ShaderObject<Target::VULKAN_SPIRV> *;
   std::array<ObjectRef, NStages> ShaderObjects;
-  using SamplerRef =
-      std::reference_wrapper<SamplerObject<Target::VULKAN_SPIRV>>;
+  using SamplerRef = SamplerObject<Target::VULKAN_SPIRV> *;
   std::array<SamplerRef, NSamplers> SamplerObjects;
   vk::UniquePipeline Pipeline;
   constexpr ShaderData(std::array<ObjectRef, NStages> S,
@@ -677,9 +695,9 @@ struct ShaderData<Target::VULKAN_SPIRV, NStages, NSamplers> {
       : ShaderObjects(S), SamplerObjects(Samps) {}
   void Destroy() noexcept {
     for (auto &Obj : ShaderObjects)
-      Obj.get().Destroy();
+      Obj->Destroy();
     for (auto &Obj : SamplerObjects)
-      Obj.get().Destroy();
+      Obj->Destroy();
     Pipeline.reset();
   }
 };
@@ -1276,6 +1294,9 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
     "VK_KHR_wayland_surface"sv,
 #endif
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+    "VK_KHR_win32_surface"sv,
+#endif
 #if !defined(NDEBUG)
     "VK_EXT_debug_utils"sv,
 #endif
@@ -1456,8 +1477,10 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
   constexpr MyDescriptorSetLayoutCreateInfo(
       std::index_sequence<USeq...>, std::index_sequence<ISeq...>,
       std::index_sequence<SSeq...>) noexcept
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
       : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
         Bindings{vk::DescriptorSetLayoutBinding(
                      USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
@@ -1471,7 +1494,9 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
                      vk::DescriptorType::eSampler, 1,
                      vk::ShaderStageFlagBits::eAllGraphics)...} {
   }
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
   constexpr MyDescriptorSetLayoutCreateInfo() noexcept
       : MyDescriptorSetLayoutCreateInfo(
             std::make_index_sequence<hsh::detail::MaxUniforms>(),
@@ -1481,12 +1506,16 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
 
 struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
   std::array<vk::DescriptorSetLayout, 1> Layouts;
+#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
   constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
       : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()),
         Layouts{layout} {}
+#ifndef _MSC_VER
 #pragma GCC diagnostic pop
+#endif
 };
 
 struct MyCommandPoolCreateInfo : vk::CommandPoolCreateInfo {
@@ -1506,7 +1535,7 @@ struct MyVmaAllocatorCreateInfo : VmaAllocatorCreateInfo {
   MyVmaAllocatorCreateInfo(VkInstance Instance, VkPhysicalDevice PhysDev,
                            VkDevice Device, bool HasExtMemoryBudget) noexcept
       : VmaAllocatorCreateInfo{
-            VmaAllocatorCreateFlagBits(
+            VmaAllocatorCreateFlags(
                 VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT |
                 (HasExtMemoryBudget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT
                                     : 0)),
@@ -1905,6 +1934,16 @@ public:
     return Data->Instance
         ->createWaylandSurfaceKHRUnique(
             vk::WaylandSurfaceCreateInfoKHR({}, Display, Surface))
+        .value;
+  }
+#endif
+
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+  vk::UniqueSurfaceKHR create_phys_surface(HINSTANCE Instance,
+                                           HWND Window) noexcept {
+    return Data->Instance
+        ->createWin32SurfaceKHRUnique(
+            vk::Win32SurfaceCreateInfoKHR({}, Instance, Window))
         .value;
   }
 #endif

@@ -195,10 +195,12 @@ struct float4x4 {
       : cols{c0, c1, c2, c3} {}
   float4 &operator[](std::size_t col) noexcept { return cols[col]; }
   const float4 &operator[](std::size_t col) const noexcept { return cols[col]; }
-  float4x4 operator*(const float4x4 &other) const noexcept {
+  constexpr float4x4 operator*(const float4x4 &other) const noexcept {
     return float4x4{};
   };
-  float4 operator*(const float4 &other) const noexcept { return float4{}; };
+  constexpr float4 operator*(const float4 &other) const noexcept {
+    return float4{};
+  };
 };
 struct float3x3 {
   std::array<float3, 3> cols;
@@ -209,10 +211,12 @@ struct float3x3 {
       : cols{other.cols[0].xyz(), other.cols[1].xyz(), other.cols[2].xyz()} {}
   float3 &operator[](std::size_t col) noexcept { return cols[col]; }
   const float3 &operator[](std::size_t col) const noexcept { return cols[col]; }
-  float3x3 operator*(const float3x3 &other) const noexcept {
+  constexpr float3x3 operator*(const float3x3 &other) const noexcept {
     return float3x3{};
   };
-  float3 operator*(const float3 &other) const noexcept { return float3{}; };
+  constexpr float3 operator*(const float3 &other) const noexcept {
+    return float3{};
+  };
 };
 struct aligned_float3x3 {
   aligned_float3x3() noexcept = default;
@@ -231,10 +235,12 @@ struct aligned_float3x3 {
   const float3 &operator[](std::size_t col) const noexcept {
     return cols[col].c;
   }
-  float3x3 operator*(const float3x3 &other) const noexcept {
+  constexpr float3x3 operator*(const float3x3 &other) const noexcept {
     return float3x3{};
   };
-  float3 operator*(const float3 &other) const noexcept { return float3{}; };
+  constexpr float3 operator*(const float3 &other) const noexcept {
+    return float3{};
+  };
 };
 
 enum Filter : std::uint8_t { Nearest, Linear };

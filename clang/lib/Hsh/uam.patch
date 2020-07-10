@@ -1,8 +1,132 @@
+diff --git a/mesa-imported/codegen/nv50_ir_print.cpp b/mesa-imported/codegen/nv50_ir_print.cpp
+index 5dcbf3c..9769720 100644
+--- a/mesa-imported/codegen/nv50_ir_print.cpp
++++ b/mesa-imported/codegen/nv50_ir_print.cpp
+@@ -384,16 +384,16 @@ static const char *gatherCompStr[4] =
+    "r", "g", "b", "a",
+ };
+ 
+-#define PRINT(args...)                                \
++#define PRINT(...)                                \
+    do {                                               \
+-      pos += snprintf(&buf[pos], size - pos, args);   \
++      pos += snprintf(&buf[pos], size - pos, __VA_ARGS__);   \
+    } while(0)
+ 
+-#define SPACE_PRINT(cond, args...)                      \
++#define SPACE_PRINT(cond, ...)                      \
+    do {                                                 \
+       if (cond)                                         \
+          buf[pos++] = ' ';                              \
+-      pos += snprintf(&buf[pos], size - pos, args);     \
++      pos += snprintf(&buf[pos], size - pos, __VA_ARGS__);     \
+    } while(0)
+ 
+ #define SPACE()                                    \
+diff --git a/mesa-imported/codegen/nv50_ir_util.h b/mesa-imported/codegen/nv50_ir_util.h
+index d6d5da7..7a5be48 100644
+--- a/mesa-imported/codegen/nv50_ir_util.h
++++ b/mesa-imported/codegen/nv50_ir_util.h
+@@ -36,46 +36,46 @@
+ #include "util/u_inlines.h"
+ #include "util/u_memory.h"
+ 
+-#define ERROR(args...) debug_printf("ERROR: " args)
+-#define WARN(args...) debug_printf("WARNING: " args)
+-#define INFO(args...) debug_printf(args)
++#define ERROR(...) debug_printf("ERROR: " __VA_ARGS__)
++#define WARN(...) debug_printf("WARNING: " __VA_ARGS__)
++#define INFO(...) debug_printf(__VA_ARGS__)
+ 
+-#define INFO_DBG(m, f, args...)          \
++#define INFO_DBG(m, f, ...)          \
+    do {                                  \
+       if (m & NV50_IR_DEBUG_##f)         \
+-         debug_printf(args);             \
++         debug_printf(__VA_ARGS__);             \
+    } while(0)
+ 
+-#define FATAL(args...)          \
++#define FATAL(...)          \
+    do {                         \
+-      fprintf(stderr, args);    \
++      fprintf(stderr, __VA_ARGS__);    \
+       abort();                  \
+    } while(0)
+ 
+ 
+-#define NV50_IR_FUNC_ALLOC_OBJ_DEF(obj, f, args...)               \
+-   new ((f)->getProgram()->mem_##obj.allocate()) obj(f, args)
++#define NV50_IR_FUNC_ALLOC_OBJ_DEF(obj, f, ...)               \
++   new ((f)->getProgram()->mem_##obj.allocate()) obj(f, __VA_ARGS__)
+ 
+-#define new_Instruction(f, args...)                      \
+-   NV50_IR_FUNC_ALLOC_OBJ_DEF(Instruction, f, args)
+-#define new_CmpInstruction(f, args...)                   \
+-   NV50_IR_FUNC_ALLOC_OBJ_DEF(CmpInstruction, f, args)
+-#define new_TexInstruction(f, args...)                   \
+-   NV50_IR_FUNC_ALLOC_OBJ_DEF(TexInstruction, f, args)
+-#define new_FlowInstruction(f, args...)                  \
+-   NV50_IR_FUNC_ALLOC_OBJ_DEF(FlowInstruction, f, args)
++#define new_Instruction(f, ...)                      \
++   NV50_IR_FUNC_ALLOC_OBJ_DEF(Instruction, f, __VA_ARGS__)
++#define new_CmpInstruction(f, ...)                   \
++   NV50_IR_FUNC_ALLOC_OBJ_DEF(CmpInstruction, f, __VA_ARGS__)
++#define new_TexInstruction(f, ...)                   \
++   NV50_IR_FUNC_ALLOC_OBJ_DEF(TexInstruction, f, __VA_ARGS__)
++#define new_FlowInstruction(f, ...)                  \
++   NV50_IR_FUNC_ALLOC_OBJ_DEF(FlowInstruction, f, __VA_ARGS__)
+ 
+-#define new_LValue(f, args...)                  \
+-   NV50_IR_FUNC_ALLOC_OBJ_DEF(LValue, f, args)
++#define new_LValue(f, ...)                  \
++   NV50_IR_FUNC_ALLOC_OBJ_DEF(LValue, f, __VA_ARGS__)
+ 
+ 
+-#define NV50_IR_PROG_ALLOC_OBJ_DEF(obj, p, args...)   \
+-   new ((p)->mem_##obj.allocate()) obj(p, args)
++#define NV50_IR_PROG_ALLOC_OBJ_DEF(obj, p, ...)   \
++   new ((p)->mem_##obj.allocate()) obj(p, __VA_ARGS__)
+ 
+-#define new_Symbol(p, args...)                           \
+-   NV50_IR_PROG_ALLOC_OBJ_DEF(Symbol, p, args)
+-#define new_ImmediateValue(p, args...)                   \
+-   NV50_IR_PROG_ALLOC_OBJ_DEF(ImmediateValue, p, args)
++#define new_Symbol(p, ...)                           \
++   NV50_IR_PROG_ALLOC_OBJ_DEF(Symbol, p, __VA_ARGS__)
++#define new_ImmediateValue(p, ...)                   \
++   NV50_IR_PROG_ALLOC_OBJ_DEF(ImmediateValue, p, __VA_ARGS__)
+ 
+ 
+ #define delete_Instruction(p, insn) (p)->releaseInstruction(insn)
 diff --git a/meson.build b/meson.build
-index 871cd20..34f8766 100644
+index 871cd20..fe77653 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -73,9 +73,8 @@ uam_incs = []
+@@ -26,7 +26,7 @@ pre_args = [
+ 	'-DPACKAGE_STRING="@0@ @1@"'.format(meson.project_name(), meson.project_version()),
+ 	'-DDESKTOP',
+ 	'-D_USE_MATH_DEFINES',
+-	'-Werror=implicit-function-declaration',
++	'-DNDEBUG',
+ ]
+ 
+ if host_machine.system() != 'windows'
+@@ -38,10 +38,11 @@ if host_machine.system() != 'windows'
+ 	endforeach
+ else
+ 	pre_args += [
+-		'-mno-ms-bitfields',
+-		'-Werror=format-extra-args',
++		'/Zc:__cplusplus',
++		'-DNOMINMAX=1',
+ 		'-D__STDC_FORMAT_MACROS',
+ 		'-D__USE_MINGW_ANSI_STDIO=1',
++		'-Dstrtok_r=strtok_s',
+ 	]
+ endif
+ 
+@@ -73,9 +74,8 @@ uam_incs = []
  subdir('source')
  subdir('mesa-imported')
  
@@ -25,3 +149,37 @@ index 63e1042..855b95b 100644
  	pipeline_stage m_stage;
  	glsl_program m_glsl;
  	const struct tgsi_token* m_tgsi;
+diff --git a/source/meson.build b/source/meson.build
+index ea60677..5c970ae 100644
+--- a/source/meson.build
++++ b/source/meson.build
+@@ -2,7 +2,6 @@
+ uam_files += files(
+ 	'compiler_iface.cpp',
+ 	'glsl_frontend.cpp',
+-	'main.cpp',
+ 	'mini-os.c',
+ 	'tgsi_support.cpp',
+ )
+diff --git a/source/nv_shader_header.h b/source/nv_shader_header.h
+index 013816a..8b92fc2 100644
+--- a/source/nv_shader_header.h
++++ b/source/nv_shader_header.h
+@@ -118,6 +118,7 @@ struct NvShaderHeader
+ 
+ 	union
+ 	{
++#pragma pack(push,1)
+ 		struct
+ 		{
+ 			uint8_t  imap_generic_vector[16];
+@@ -131,7 +132,8 @@ struct NvShaderHeader
+ 			uint16_t omap_sysvals_c;
+ 			uint8_t  omap_fixed_fnc_tex[5];
+ 			uint8_t  _reserved1;
+-		} __attribute__((packed)) vtg;
++		} vtg;
++#pragma pack(pop)
+ 
+ 		struct
+ 		{
