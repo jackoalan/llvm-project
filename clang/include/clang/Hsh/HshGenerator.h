@@ -23,7 +23,6 @@ enum HshTarget : int {
   HT_METAL,
   HT_METAL_BIN_MAC,
   HT_METAL_BIN_IOS,
-  HT_METAL_BIN_TVOS,
   HT_DEKO3D,
   HT_DEKO3D_CONTROL, // Pseudo-target for establishing control section
   HT_MAX
@@ -50,8 +49,6 @@ constexpr StringRef HshTargetToString(HshTarget Target) {
     return llvm::StringLiteral("metal-bin-mac");
   case HT_METAL_BIN_IOS:
     return llvm::StringLiteral("metal-bin-ios");
-  case HT_METAL_BIN_TVOS:
-    return llvm::StringLiteral("metal-bin-tvos");
   case HT_DEKO3D:
     return llvm::StringLiteral("deko3d");
   }

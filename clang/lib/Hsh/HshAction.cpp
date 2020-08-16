@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/Value.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_carray_ostream.h"
 #include "llvm/Support/raw_comment_ostream.h"
 #include "llvm/Support/xxhash.h"
@@ -159,7 +160,7 @@ class GenerateConsumer : public ASTConsumer {
     if (!Compiler)
       Compiler =
           MakeCompiler(Target, DebugInfo, CI.getHeaderSearchOpts().ResourceDir,
-                       Context.getDiagnostics(), Builtins);
+                       CI, Context.getDiagnostics(), Builtins);
     return *Compiler;
   }
 
@@ -414,8 +415,8 @@ public:
       // Dump sources directly for -source-dump
       if (SourceDump) {
         for (auto Target : Targets) {
-          auto Policy =
-              MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
+          auto Policy = MakePrintingPolicy(Builtins, Context, Target,
+                                           InShaderPipelineArgs);
           auto Sources = Builder.printResults(*Policy);
           for (auto &S : Sources) {
             if (!S.empty())
@@ -517,7 +518,7 @@ public:
             makeSectionAttributeString(Target, AttributeBeforeType);
 
         auto Policy =
-            MakePrintingPolicy(Builtins, Target, InShaderPipelineArgs);
+            MakePrintingPolicy(Builtins, Context, Target, InShaderPipelineArgs);
         auto Sources = Builder.printResults(*Policy);
         auto &Compiler = getCompiler(Target);
         if (Context.getDiagnostics().hasErrorOccurred())
@@ -1230,7 +1231,7 @@ public:
         return false;
 
       if (!Consumer.ProfilePath.empty()) {
-        if (auto FE = FM.getFile(Consumer.ProfilePath)) {
+        if (auto FE = FM.getFileRef(Consumer.ProfilePath)) {
           auto FID = SM.createFileID(*FE, {}, SrcMgr::C_User);
           PP.EnterSourceFile(FID, nullptr, {});
           PP.getDiagnostics().setSuppressFID(FID);

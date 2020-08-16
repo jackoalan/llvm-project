@@ -1,4 +1,4 @@
-//===--- HLSLPrintingPolicy.cpp - HLSL shader stage printing policy -------===//
+//===--- MetalPrintingPolicy.cpp - Metal shader stage printing policy -----===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,17 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "HLSLPrintingPolicy.h"
+#include "MetalPrintingPolicy.h"
 
 #include "llvm/Support/raw_ostream.h"
+
+#include "clang/AST/RecordLayout.h"
 
 using namespace llvm;
 
 namespace clang::hshgen {
 
 StringRef
-HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
-                                          CXXMemberCallExpr *C) const {
+MetalPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
+                                           CXXMemberCallExpr *C) const {
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
@@ -24,7 +26,7 @@ HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
     C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
-    OS << (HBM == HBM_sample_bias2d ? ".SampleBias" : ".Sample");
+    OS << ".sample";
     return OS.str();
   }
   default:
@@ -32,7 +34,7 @@ HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
   }
 }
 
-bool HLSLPrintingPolicy::overrideCXXMethodArguments(
+bool MetalPrintingPolicy::overrideCXXMethodArguments(
     HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
     const std::function<void(StringRef)> &StringArg,
     const std::function<void(Expr *)> &ExprArg,
@@ -52,7 +54,7 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
     StringArg(OS.str());
     ExprArg(C->getArg(0));
     if (HBM == HBM_sample_bias2d)
-      ExprArg(C->getArg(1));
+      WrappedExprArg("bias(", C->getArg(1), ")");
     return true;
   }
   default:
@@ -60,7 +62,7 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
   }
 }
 
-bool HLSLPrintingPolicy::overrideCXXOperatorCall(
+bool MetalPrintingPolicy::overrideCXXOperatorCall(
     CXXOperatorCallExpr *C, raw_ostream &OS,
     const std::function<void(Expr *)> &ExprArg) const {
   if (C->getNumArgs() == 1) {
@@ -70,25 +72,32 @@ bool HLSLPrintingPolicy::overrideCXXOperatorCall(
       return true;
     }
   } else if (C->getNumArgs() == 2) {
-    if (C->getOperator() == OO_Star) {
-      if (HshBuiltins::isMatrixType(
-              Builtins.identifyBuiltinType(C->getArg(0)->getType())) ||
-          HshBuiltins::isMatrixType(
-              Builtins.identifyBuiltinType(C->getArg(1)->getType()))) {
-        /* HLSL matrix math operation */
-        OS << "mul(";
-        ExprArg(C->getArg(0));
-        OS << ", ";
-        ExprArg(C->getArg(1));
-        OS << ")";
-        return true;
+    if (C->getOperator() == OO_Subscript) {
+      if (auto *ME = dyn_cast<MemberExpr>(C->getArg(0))) {
+        if (auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl())) {
+          if (Builtins.identifyBuiltinPipelineField(FD) == HPF_color_out) {
+            /* Remove subscripts from color out field */
+            ExprArg(C->getArg(0));
+            APSInt Result;
+            if (C->getArg(1)->isIntegerConstantExpr(Result, Context)) {
+              OS << Result;
+              return true;
+            } else {
+              auto &Diags =
+                  const_cast<DiagnosticsEngine &>(Context.getDiagnostics());
+              Diags.Report(Diags.getCustomDiagID(
+                  DiagnosticsEngine::Error, "Non-constexpr color_out indicies "
+                                            "are not permitted in metal"));
+            }
+          }
+        }
       }
     }
   }
   return false;
 }
 
-bool HLSLPrintingPolicy::overrideCXXTemporaryObjectExpr(
+bool MetalPrintingPolicy::overrideCXXTemporaryObjectExpr(
     CXXTemporaryObjectExpr *C, raw_ostream &OS,
     const std::function<void(Expr *)> &ExprArg) const {
   auto DTp = Builtins.identifyBuiltinType(C->getType());
@@ -130,33 +139,45 @@ bool HLSLPrintingPolicy::overrideCXXTemporaryObjectExpr(
   return false;
 }
 
-void HLSLPrintingPolicy::PrintAttributeFieldSpelling(raw_ostream &OS,
-                                                     QualType Tp,
-                                                     const Twine &FieldName,
-                                                     unsigned Location,
-                                                     unsigned Indent) const {
-  if (Target == HT_VULKAN_SPIRV)
-    OS.indent(Indent * 2) << "[[vk::location(" << Location << ")]] ";
-  else
-    OS.indent(Indent * 2);
+void MetalPrintingPolicy::PrintAttributeFieldSpelling(raw_ostream &OS,
+                                                      QualType Tp,
+                                                      const Twine &FieldName,
+                                                      unsigned Location,
+                                                      unsigned Indent) const {
+  OS.indent(Indent * 2);
   Tp.print(OS, *this);
-  OS << " " << FieldName << " : ATTR" << Location << ";\n";
+  OS << " " << FieldName << " [[attribute(" << Location << ")]];\n";
 }
 
-constexpr llvm::StringLiteral HLSLRuntimeSupport{
-    R"(static float3x3 float4x4_to_float3x3(float4x4 mtx) {
+constexpr llvm::StringLiteral MetalRuntimeSupport{
+    R"(#include <metal_stdlib>
+using namespace metal;
+static float3x3 float4x4_to_float3x3(float4x4 mtx) {
   return float3x3(mtx[0].xyz, mtx[1].xyz, mtx[2].xyz);
 }
 )"};
 
-void HLSLPrintingPolicy::printStage(
+constexpr StringRef HshStageToMetalFunction(HshStage Stage) {
+  switch (Stage) {
+  case HshVertexStage:
+    return "vertex";
+  case HshEvaluationStage:
+    return "patch";
+  case HshFragmentStage:
+    return "fragment";
+  default:
+    return "kernel";
+  }
+}
+
+void MetalPrintingPolicy::printStage(
     raw_ostream &OS, ArrayRef<FunctionRecord> FunctionRecords,
     ArrayRef<UniformRecord> UniformRecords, CXXRecordDecl *FromRecord,
     CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
     unsigned NumColorAttachments, CompoundStmt *Stmts, HshStage Stage,
     HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) {
-  OS << HLSLRuntimeSupport;
+  OS << MetalRuntimeSupport;
   ThisStmts = Stmts;
   ThisSampleCalls = SampleCalls;
 
@@ -192,15 +213,27 @@ void HLSLPrintingPolicy::printStage(
       GatherNestedPackoffsetFields(Record.Record);
   }
 
-  PrintNestedStructs<FieldPrinter>(OS);
+  PrintNestedStructs<FieldFloatPairer>(OS);
 
   unsigned Binding = 0;
   for (const auto &Record : UniformRecords) {
     if ((1u << Stage) & Record.UseStages) {
-      OS << "cbuffer b" << Binding << '_' << Record.Record->getName()
-         << " : register(b" << Binding << ") {\n";
-      PrintPackoffsetFields(OS, Record.Record, Record.Name);
+      OS << "struct b" << Binding << '_' << Record.Record->getName() << " {\n";
+      PrintPackoffsetFields(OS, Record.Record, Twine());
       OS << "};\n";
+
+      /* Add static_asserts of all fields to ensure layout consistency */
+      if (getArrayWaitType(Record.Record) == ArrayWaitType::NoArray) {
+        const ASTRecordLayout &RL = Context.getASTRecordLayout(Record.Record);
+        for (auto *FD : Record.Record->fields()) {
+          auto Offset = Context.toCharUnitsFromBits(
+              RL.getFieldOffset(FD->getFieldIndex()));
+          OS << "static_assert(__builtin_offsetof(b" << Binding << '_'
+             << Record.Record->getName() << ", " << FD->getName()
+             << ") == " << Offset.getQuantity()
+             << ", \"compiler does not align field correctly\");\n";
+        }
+      }
     }
     ++Binding;
   }
@@ -208,11 +241,10 @@ void HLSLPrintingPolicy::printStage(
   if (FromRecord) {
     OS << "struct " << HshStageToString(From) << "_to_"
        << HshStageToString(Stage) << " {\n";
-    uint32_t VarIdx = 0;
     for (auto *FD : FromRecord->fields()) {
       OS << "  ";
       FD->print(OS, *this, 1);
-      OS << " : VAR" << VarIdx++ << ";\n";
+      OS << ";\n";
     }
     OS << "};\n";
   }
@@ -220,12 +252,11 @@ void HLSLPrintingPolicy::printStage(
   if (ToRecord) {
     OS << "struct " << HshStageToString(Stage) << "_to_" << HshStageToString(To)
        << " {\n"
-       << "  float4 _position : SV_Position;\n";
-    uint32_t VarIdx = 0;
+       << "  float4 _position [[position]];\n";
     for (auto *FD : ToRecord->fields()) {
       OS << "  ";
       FD->print(OS, *this, 1);
-      OS << " : VAR" << VarIdx++ << ";\n";
+      OS << ";\n";
     }
     OS << "};\n";
   }
@@ -244,43 +275,25 @@ void HLSLPrintingPolicy::printStage(
     OS << "};\n";
   }
 
-  uint32_t TexBinding = 0;
-  for (const auto &Tex : Textures) {
-    if ((1u << Stage) & Tex.UseStages)
-      OS << HshBuiltins::getSpelling<SourceTarget>(
-                BuiltinTypeOfTexture(Tex.Kind))
-         << " " << Tex.TexParm->getName() << " : register(t" << TexBinding
-         << ");\n";
-    ++TexBinding;
-  }
-
-  uint32_t SamplerBinding = 0;
-  for (const auto &Samp : Samplers) {
-    if ((1u << Stage) & Samp.UseStages)
-      OS << "SamplerState _sampler" << SamplerBinding << " : register(s"
-         << SamplerBinding << ");\n";
-    ++SamplerBinding;
-  }
-
   if (Stage == HshFragmentStage) {
-    OS << "struct color_targets_out {\n"
-          "  float4 _color_out["
-       << NumColorAttachments << "] : SV_Target"
-       << ";\n"
-          "};\n";
+    OS << "struct color_targets_out {\n";
+    for (unsigned A = 0; A < NumColorAttachments; ++A)
+      OS << "  float4 _color_out" << A << " [[color(" << A << ")]];\n";
+    OS << "};\n";
   }
 
   if (Stage == HshFragmentStage) {
     if (EarlyDepthStencil)
-      OS << "[earlydepthstencil]\n";
-    OS << "color_targets_out main(";
+      OS << "[[early_fragment_tests]]\n";
+    OS << "fragment color_targets_out shader_main(";
     BeforeStatements = "color_targets_out _targets_out;\n";
     AfterStatements = "return _targets_out;\n";
   } else if (ToRecord) {
     VertexPositionIdentifier.clear();
     raw_string_ostream PIO(VertexPositionIdentifier);
     PIO << "_to_" << HshStageToString(To) << "._position";
-    OS << HshStageToString(Stage) << "_to_" << HshStageToString(To) << " main(";
+    OS << HshStageToMetalFunction(Stage) << ' ' << HshStageToString(Stage)
+       << "_to_" << HshStageToString(To) << " shader_main(";
     BeforeStatements.clear();
     raw_string_ostream BO(BeforeStatements);
     BO << HshStageToString(Stage) << "_to_" << HshStageToString(To) << " _to_"
@@ -290,10 +303,40 @@ void HLSLPrintingPolicy::printStage(
     AO << "return _to_" << HshStageToString(To) << ";\n";
   }
   if (Stage == HshVertexStage)
-    OS << "in host_vert_data _vert_data";
+    OS << "host_vert_data _vert_data [[stage_in]]";
   else if (FromRecord)
-    OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
-       << " _from_" << HshStageToString(From);
+    OS << HshStageToString(From) << "_to_" << HshStageToString(Stage)
+       << " _from_" << HshStageToString(From) << " [[stage_in]]";
+
+  Binding = 0;
+  for (const auto &Record : UniformRecords) {
+    if ((1u << Stage) & Record.UseStages) {
+      OS << ", constant b" << Binding << '_' << Record.Record->getName() << " &"
+         << Record.Name << " [[buffer("
+         << Binding + Builtins.getMaxVertexBuffers() << ")]]";
+    }
+    ++Binding;
+  }
+
+  uint32_t TexBinding = 0;
+  for (const auto &Tex : Textures) {
+    if ((1u << Stage) & Tex.UseStages)
+      OS << ", "
+         << HshBuiltins::getSpelling<SourceTarget>(
+                BuiltinTypeOfTexture(Tex.Kind))
+         << ' ' << Tex.TexParm->getName() << " [[texture(" << TexBinding
+         << ")]]";
+    ++TexBinding;
+  }
+
+  uint32_t SamplerBinding = 0;
+  for (const auto &Samp : Samplers) {
+    if ((1u << Stage) & Samp.UseStages)
+      OS << ", sampler _sampler" << SamplerBinding << " [[sampler("
+         << SamplerBinding << ")]]";
+    ++SamplerBinding;
+  }
+
   OS << ") ";
   Stmts->printPretty(OS, nullptr, *this);
 }

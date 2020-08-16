@@ -74,8 +74,7 @@ vec4 saturate(vec4 val) {
 )"};
 
 void GLSLPrintingPolicy::printStage(
-    raw_ostream &OS, ASTContext &Context,
-    ArrayRef<FunctionRecord> FunctionRecords,
+    raw_ostream &OS, ArrayRef<FunctionRecord> FunctionRecords,
     ArrayRef<UniformRecord> UniformRecords, CXXRecordDecl *FromRecord,
     CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
@@ -111,17 +110,17 @@ void GLSLPrintingPolicy::printStage(
   NestedRecords.clear();
   for (const auto &Record : UniformRecords) {
     if ((1u << Stage) & Record.UseStages)
-      GatherNestedPackoffsetFields(Context, Record.Record);
+      GatherNestedPackoffsetFields(Record.Record);
   }
 
-  PrintNestedStructs(OS, Context);
+  PrintNestedStructs<FieldPrinter>(OS);
 
   unsigned Binding = 0;
   for (const auto &Record : UniformRecords) {
     if ((1u << Stage) & Record.UseStages) {
       OS << "layout(std140, binding = " << Binding << ") uniform b" << Binding
          << '_' << Record.Record->getName() << " {\n";
-      PrintPackoffsetFields(OS, Context, Record.Record, Record.Name);
+      PrintPackoffsetFields(OS, Record.Record, Record.Name);
       OS << "};\n";
     }
     ++Binding;
@@ -155,8 +154,8 @@ void GLSLPrintingPolicy::printStage(
       for (const auto *FD : Attribute.Record->fields()) {
         QualType Tp = FD->getType().getUnqualifiedType();
         Twine Tw1 = Twine(Attribute.Name) + Twine('_');
-        PrintAttributeField(OS, Context, Tp, Tw1 + FD->getName(),
-                            ArrayWaitType::NoArray, 0, Location, 1);
+        PrintAttributeField(OS, Tp, Tw1 + FD->getName(), ArrayWaitType::NoArray,
+                            0, Location, 1);
       }
     }
   }

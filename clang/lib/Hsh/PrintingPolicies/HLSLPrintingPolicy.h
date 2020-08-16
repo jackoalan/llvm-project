@@ -12,10 +12,13 @@
 
 namespace clang::hshgen {
 
-struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
-  HLSLPrintingPolicy(HshBuiltins &Builtins, HshTarget Target,
+struct HLSLPrintingPolicy
+    : ShaderPrintingPolicy<HLSLPrintingPolicy,
+                           ShaderPrintingPolicyBase::FieldPrinter> {
+  HLSLPrintingPolicy(HshBuiltins &Builtins, ASTContext &Context,
+                     HshTarget Target,
                      InShaderPipelineArgsType InShaderPipelineArgs)
-      : ShaderPrintingPolicy(Builtins, Target, InShaderPipelineArgs) {
+      : ShaderPrintingPolicy(Builtins, Context, Target, InShaderPipelineArgs) {
     NoLoopInitVar = true;
   }
 
@@ -41,10 +44,12 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
                                   CXXMemberCallExpr *C) const;
 
   ArrayRef<SampleCall> ThisSampleCalls;
-  bool
-  overrideCXXMethodArguments(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
-                             const std::function<void(StringRef)> &StringArg,
-                             const std::function<void(Expr *)> &ExprArg) const;
+  bool overrideCXXMethodArguments(
+      HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
+      const std::function<void(StringRef)> &StringArg,
+      const std::function<void(Expr *)> &ExprArg,
+      const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg)
+      const;
 
   bool overrideCXXOperatorCall(
       CXXOperatorCallExpr *C, raw_ostream &OS,
@@ -70,13 +75,13 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
       Indent() << AfterStatements;
   }
 
-  static void PrintBeforePackoffset(raw_ostream &OS, CharUnits Offset) {}
+  static void PrintBeforePackoffset(FieldPrinter &FH, CharUnits Offset) {}
 
-  static void PrintAfterPackoffset(raw_ostream &OS, CharUnits Offset) {
+  static void PrintAfterPackoffset(FieldPrinter &FH, CharUnits Offset) {
     auto Words = Offset.getQuantity() / 4;
     auto Vectors = Words / 4;
     auto Rem = Words % 4;
-    OS << " : packoffset(c" << Vectors << '.' << VectorComponents[Rem]
+    FH << " : packoffset(c" << Vectors << '.' << VectorComponents[Rem]
        << ");\n";
   }
 
@@ -84,8 +89,7 @@ struct HLSLPrintingPolicy : ShaderPrintingPolicy<HLSLPrintingPolicy> {
                                    const Twine &FieldName, unsigned Location,
                                    unsigned Indent) const;
 
-  void printStage(raw_ostream &OS, ASTContext &Context,
-                  ArrayRef<FunctionRecord> FunctionRecords,
+  void printStage(raw_ostream &OS, ArrayRef<FunctionRecord> FunctionRecords,
                   ArrayRef<UniformRecord> UniformRecords,
                   CXXRecordDecl *FromRecord, CXXRecordDecl *ToRecord,
                   ArrayRef<AttributeRecord> Attributes,

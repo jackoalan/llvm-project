@@ -64,10 +64,11 @@ public:
 
   /// Incrementally build call arguments using either supplied lambda.
   /// Returning false will apply default arguments instead.
-  virtual bool
-  overrideCallArguments(CallExpr *C,
-                        const std::function<void(StringRef)> &StringArg,
-                        const std::function<void(Expr *)> &ExprArg) const {
+  virtual bool overrideCallArguments(
+      CallExpr *C, const std::function<void(StringRef)> &StringArg,
+      const std::function<void(Expr *)> &ExprArg,
+      const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg)
+      const {
     return false;
   }
 

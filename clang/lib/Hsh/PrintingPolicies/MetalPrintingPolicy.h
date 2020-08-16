@@ -1,4 +1,4 @@
-//===--- GLSLPrintingPolicy.h - GLSL shader stage printing policy ---------===//
+//===--- MetalPrintingPolicy.h - Metal shader stage printing policy -------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,58 +12,44 @@
 
 namespace clang::hshgen {
 
-struct GLSLPrintingPolicy
-    : ShaderPrintingPolicy<GLSLPrintingPolicy,
-                           ShaderPrintingPolicyBase::FieldPrinter> {
-  using base = ShaderPrintingPolicy<GLSLPrintingPolicy,
-                                    ShaderPrintingPolicyBase::FieldPrinter>;
-  static constexpr HshTarget SourceTarget = HT_GLSL;
-  static constexpr bool NoUniformVarDecl = true;
+struct MetalPrintingPolicy
+    : ShaderPrintingPolicy<MetalPrintingPolicy,
+                           ShaderPrintingPolicyBase::FieldFloatPairer> {
+  MetalPrintingPolicy(HshBuiltins &Builtins, ASTContext &Context,
+                      HshTarget Target,
+                      InShaderPipelineArgsType InShaderPipelineArgs)
+      : ShaderPrintingPolicy(Builtins, Context, Target, InShaderPipelineArgs) {
+    NoLoopInitVar = true;
+  }
+
+  static constexpr HshTarget SourceTarget = HT_METAL;
+  static constexpr bool NoUniformVarDecl = false;
   static constexpr llvm::StringLiteral SignedInt32Spelling{"int"};
   static constexpr llvm::StringLiteral UnsignedInt32Spelling{"uint"};
   static constexpr llvm::StringLiteral Float32Spelling{"float"};
   static constexpr llvm::StringLiteral Float64Spelling{"double"};
-  static constexpr llvm::StringLiteral VertexBufferBase{""};
+  static constexpr llvm::StringLiteral VertexBufferBase{"_vert_data."};
 
-  static constexpr StringRef identifierOfVertexPosition(FieldDecl *FD) {
-    return "gl_Position";
+  std::string VertexPositionIdentifier;
+  StringRef identifierOfVertexPosition(FieldDecl *FD) const {
+    return VertexPositionIdentifier;
   }
 
   static constexpr StringRef identifierOfColorAttachment(FieldDecl *FD) {
-    return "_color_out";
+    return "_targets_out._color_out";
   }
 
-  static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
-                                                   CXXMemberCallExpr *C) {
-    switch (HBM) {
-    case HBM_sample2d:
-    case HBM_render_sample2d:
-    case HBM_sample_bias2d:
-      return "texture";
-    default:
-      return {};
-    }
-  }
+  mutable std::string CXXMethodIdentifier;
+  StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
+                                  CXXMemberCallExpr *C) const;
 
-  static constexpr bool overrideCXXMethodArguments(
+  ArrayRef<SampleCall> ThisSampleCalls;
+  bool overrideCXXMethodArguments(
       HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
       const std::function<void(StringRef)> &StringArg,
       const std::function<void(Expr *)> &ExprArg,
-      const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg) {
-    switch (HBM) {
-    case HBM_sample2d:
-    case HBM_render_sample2d:
-    case HBM_sample_bias2d: {
-      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
-      ExprArg(C->getArg(0));
-      if (HBM == HBM_sample_bias2d)
-        ExprArg(C->getArg(1));
-      return true;
-    }
-    default:
-      return false;
-    }
-  }
+      const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg)
+      const;
 
   bool overrideCXXOperatorCall(
       CXXOperatorCallExpr *C, raw_ostream &OS,
@@ -73,13 +59,25 @@ struct GLSLPrintingPolicy
       CXXTemporaryObjectExpr *C, raw_ostream &OS,
       const std::function<void(Expr *)> &ExprArg) const override;
 
-  static void PrintBeforePackoffset(FieldPrinter &FH, CharUnits Offset) {
-    FH.indent(2) << "layout(offset = " << Offset.getQuantity() << ")\n";
+  CompoundStmt *ThisStmts = nullptr;
+  std::string BeforeStatements;
+  void
+  printCompoundStatementBefore(const std::function<raw_ostream &()> &Indent,
+                               CompoundStmt *CS) const override {
+    if (CS == ThisStmts)
+      Indent() << BeforeStatements;
   }
 
-  static void PrintAfterPackoffset(FieldPrinter &FH, CharUnits Offset) {
-    FH << ";\n";
+  std::string AfterStatements;
+  void printCompoundStatementAfter(const std::function<raw_ostream &()> &Indent,
+                                   CompoundStmt *CS) const override {
+    if (CS == ThisStmts)
+      Indent() << AfterStatements;
   }
+
+  static void PrintBeforePackoffset(FieldFloatPairer &FH, CharUnits Offset) {}
+
+  static void PrintAfterPackoffset(FieldFloatPairer &FH, CharUnits Offset) {}
 
   void PrintAttributeFieldSpelling(raw_ostream &OS, QualType Tp,
                                    const Twine &FieldName, unsigned Location,
@@ -94,8 +92,6 @@ struct GLSLPrintingPolicy
                   unsigned NumColorAttachments, CompoundStmt *Stmts,
                   HshStage Stage, HshStage From, HshStage To,
                   ArrayRef<SampleCall> SampleCalls) override;
-
-  using base::ShaderPrintingPolicy;
 };
 
 } // namespace clang::hshgen

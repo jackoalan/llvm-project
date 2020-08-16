@@ -39,6 +39,7 @@ public:
 
 std::unique_ptr<StageCompiler> MakeCompiler(HshTarget Target, bool DebugInfo,
                                             StringRef ResourceDir,
+                                            CompilerInstance &CI,
                                             DiagnosticsEngine &Diags,
                                             HshBuiltins &Builtins);
 

@@ -5,6 +5,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 /*
@@ -88,6 +91,14 @@ inline std::string get_exe_path() noexcept {
     }
     LinkSize *= 2;
   } while (true);
+}
+#elif defined(__APPLE__)
+inline std::string get_exe_path() noexcept {
+  uint32_t ExeSize = 0;
+  _NSGetExecutablePath(nullptr, &ExeSize);
+  std::string ExePath(ExeSize - 1, '\0');
+  _NSGetExecutablePath(&ExePath[0], &ExeSize);
+  return ExePath;
 }
 #endif
 

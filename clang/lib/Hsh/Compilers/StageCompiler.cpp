@@ -8,6 +8,7 @@
 
 #include "StageCompiler.h"
 #include "DxcStageCompiler.h"
+#include "MetalStageCompiler.h"
 #include "UamStageCompiler.h"
 
 #include "llvm/Support/xxhash.h"
@@ -42,6 +43,7 @@ TextStageCompiler::doCompile(ArrayRef<std::string> Sources) const {
 
 std::unique_ptr<StageCompiler> MakeCompiler(HshTarget Target, bool DebugInfo,
                                             StringRef ResourceDir,
+                                            CompilerInstance &CI,
                                             DiagnosticsEngine &Diags,
                                             HshBuiltins &Builtins) {
   switch (Target) {
@@ -55,10 +57,10 @@ std::unique_ptr<StageCompiler> MakeCompiler(HshTarget Target, bool DebugInfo,
     return DxcStageCompiler::Create(Target, DebugInfo, ResourceDir, Diags,
                                     Builtins);
   case HT_METAL:
+    return std::make_unique<TextStageCompiler>(Target);
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
-  case HT_METAL_BIN_TVOS:
-    return std::make_unique<TextStageCompiler>(Target);
+    return std::make_unique<MetalStageCompiler>(Target, DebugInfo, CI, Diags);
   case HT_DEKO3D:
     return std::make_unique<UamStageCompiler>(Target, Diags);
   }

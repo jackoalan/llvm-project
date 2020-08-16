@@ -19,6 +19,7 @@ unset(HSH_TARGETS_FOUND)
 unset(HSH_EXTRA_INCLUDE_DIRS)
 unset(HSH_EXTRA_COMPILE_DEFINES)
 unset(HSH_EXTRA_LIBS)
+unset(HSH_EXTRA_COMPILE_OPTIONS)
 
 #
 # Configuration macro variables
@@ -54,6 +55,42 @@ if(WIN32)
     list(GET VULKAN_SDK_DIRS 0 VULKAN_SDK_DIR)
     list(APPEND HSH_EXTRA_INCLUDE_DIRS "${VULKAN_SDK_DIR}/Include")
     list(APPEND HSH_EXTRA_COMPILE_DEFINES VK_USE_PLATFORM_WIN32_KHR=1)
+  endif()
+elseif(APPLE)
+  if(NOT CMAKE_OSX_SYSROOT)
+    message(WARNING "[hsh]: CMAKE_OSX_SYSROOT not set; assuming macosx")
+    list(APPEND HSH_TARGETS_FOUND metal-bin-mac)
+  else()
+    # Read PLATFORM_NAME from SDKSettings.plist to determine the type of apple platform
+    execute_process(COMMAND /usr/libexec/PlistBuddy -c
+            "print :DefaultProperties:PLATFORM_NAME"
+            "${CMAKE_OSX_SYSROOT}/SDKSettings.plist"
+            OUTPUT_VARIABLE PLATFORM_NAME
+            RESULT_VARIABLE HAD_ERROR
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if (NOT HAD_ERROR)
+      if(PLATFORM_NAME STREQUAL "macosx")
+        message(STATUS "[hsh]: macosx SDK in use")
+        list(APPEND HSH_TARGETS_FOUND metal-bin-mac)
+      elseif(PLATFORM_NAME STREQUAL "iphoneos")
+        message(STATUS "[hsh]: iphoneos SDK in use")
+        list(APPEND HSH_TARGETS_FOUND metal-bin-ios)
+      elseif(PLATFORM_NAME STREQUAL "appletvos")
+        message(STATUS "[hsh]: appletvos SDK in use")
+        list(APPEND HSH_TARGETS_FOUND metal-bin-ios)
+      else()
+        message(WARNING "[hsh]: Unknown SDK platform ${PLATFORM_NAME}; assuming macosx")
+        list(APPEND HSH_TARGETS_FOUND metal-bin-mac)
+      endif()
+    else()
+      message(WARNING "[hsh]: unable to read SDKSettings.plist; assuming macosx")
+      list(APPEND HSH_TARGETS_FOUND metal-bin-mac)
+    endif()
+    find_library(QUARTZCORE_LIB QuartzCore)
+    find_library(METAL_LIB Metal)
+    list(APPEND HSH_EXTRA_LIBS ${QUARTZCORE_LIB} ${METAL_LIB})
+    list(APPEND HSH_EXTRA_INCLUDE_DIRS ${QUARTZCORE_LIB} ${METAL_LIB})
   endif()
 elseif(NX)
   find_path(LIBNX_INCLUDE_DIR NAMES deko3d.hpp)
@@ -92,6 +129,18 @@ if(deko3d IN_LIST HSH_TARGETS)
   message(STATUS "[hsh]: Enabling deko3d hsh target")
 endif()
 
+if(metal-bin-mac IN_LIST HSH_TARGETS)
+  list(APPEND HSH_EXTRA_COMPILE_DEFINES HSH_ENABLE_METAL=1 HSH_ENABLE_METAL_BIN_MAC=1)
+  list(APPEND HSH_EXTRA_COMPILE_OPTIONS -xobjective-c++ -fobjc-arc)
+  message(STATUS "[hsh]: Enabling metal-bin-mac hsh target")
+endif()
+
+if(metal-bin-ios IN_LIST HSH_TARGETS)
+  list(APPEND HSH_EXTRA_COMPILE_DEFINES HSH_ENABLE_METAL=1 HSH_ENABLE_METAL_BIN_IOS=1)
+  list(APPEND HSH_EXTRA_COMPILE_OPTIONS -xobjective-c++ -fobjc-arc)
+  message(STATUS "[hsh]: Enabling metal-bin-ios hsh target")
+endif()
+
 #
 # Assemble includes and defines into interface library
 #
@@ -100,6 +149,7 @@ add_library(hsh INTERFACE)
 target_include_directories(hsh INTERFACE "${HSH_INCLUDE_DIR}" ${HSH_EXTRA_INCLUDE_DIRS})
 target_compile_definitions(hsh INTERFACE ${HSH_EXTRA_COMPILE_DEFINES})
 target_link_libraries(hsh INTERFACE ${HSH_EXTRA_LIBS})
+target_compile_options(hsh INTERFACE ${HSH_EXTRA_COMPILE_OPTIONS})
 
 #
 # target_hsh makes all sources of a target individually depend on
@@ -124,6 +174,21 @@ function(target_hsh target)
     list(APPEND _hsh_args "--${target}")
   endforeach()
   list(REMOVE_DUPLICATES _hsh_targets)
+
+  # Ensure hsh has access to the active apple sdk and C++ standard library
+  if(APPLE AND CMAKE_OSX_SYSROOT)
+    get_filename_component(COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    list(APPEND _hsh_args -isysroot "${CMAKE_OSX_SYSROOT}"
+         -stdlib++-isystem "${COMPILER_DIR}/../include/c++/v1")
+
+    # Make a best-effort attempt to mark all target's sources as Objective C++.
+    # This is mainly to benefit IDEs that depend on CMake's understanding of the source files to set up syntax parsing.
+    get_target_property(target_sources ${target} SOURCES)
+    set_source_files_properties(${target_sources} TARGET_DIRECTORY ${target} PROPERTIES LANGUAGE OBJCXX)
+    if(NOT CMAKE_OBJCXX_COMPILER)
+      message(FATAL_ERROR "OBJCXX language is not enabled. Please add it to the project command for APPLE builds.")
+    endif()
+  endif()
 
   # Set includes and defines for CMake target tree
   target_link_libraries(${target} PUBLIC hsh)

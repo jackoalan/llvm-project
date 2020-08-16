@@ -120,6 +120,7 @@ private:
   llvm::APSInt MaxUniforms;
   llvm::APSInt MaxImages;
   llvm::APSInt MaxSamplers;
+  llvm::APSInt MaxVertexBuffers;
   std::array<const TagDecl *, HBT_Max> Types{};
   std::array<const TagDecl *, HBT_Max> AlignedTypes{};
   std::array<const FunctionDecl *, HBF_Max> Functions{};
@@ -497,6 +498,9 @@ public:
   unsigned getMaxUniforms() const { return MaxUniforms.getZExtValue(); }
   unsigned getMaxImages() const { return MaxImages.getZExtValue(); }
   unsigned getMaxSamplers() const { return MaxSamplers.getZExtValue(); }
+  unsigned getMaxVertexBuffers() const {
+    return MaxVertexBuffers.getZExtValue();
+  }
 };
 
 template <>

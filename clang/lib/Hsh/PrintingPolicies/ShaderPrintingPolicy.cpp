@@ -9,6 +9,7 @@
 #include "ShaderPrintingPolicy.h"
 #include "GLSLPrintingPolicy.h"
 #include "HLSLPrintingPolicy.h"
+#include "MetalPrintingPolicy.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -36,11 +37,11 @@ void ShaderPrintingPolicyBase::PrintNExprs(
   }
 }
 
-template <typename ImplClass>
-ShaderPrintingPolicy<ImplClass>::ShaderPrintingPolicy(
-    HshBuiltins &Builtins, HshTarget Target,
+template <typename ImplClass, typename PackoffsetFieldHandler>
+ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::ShaderPrintingPolicy(
+    HshBuiltins &Builtins, ASTContext &Context, HshTarget Target,
     InShaderPipelineArgsType InShaderPipelineArgs)
-    : ShaderPrintingPolicyBase(Builtins, Target) {
+    : ShaderPrintingPolicyBase(Builtins, Context, Target) {
   Callbacks = this;
   Indentation = 1;
   IncludeTagDefinition = false;
@@ -63,9 +64,9 @@ ShaderPrintingPolicy<ImplClass>::ShaderPrintingPolicy(
   }
 }
 
-template <typename ImplClass>
-StringRef ShaderPrintingPolicy<ImplClass>::overrideBuiltinTypeName(
-    const BuiltinType *T) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+StringRef ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    overrideBuiltinTypeName(const BuiltinType *T) const {
   if (T->isSignedIntegerOrEnumerationType()) {
     return ImplClass::SignedInt32Spelling;
   } else if (T->isUnsignedIntegerOrEnumerationType()) {
@@ -78,9 +79,9 @@ StringRef ShaderPrintingPolicy<ImplClass>::overrideBuiltinTypeName(
   return {};
 }
 
-template <typename ImplClass>
-StringRef
-ShaderPrintingPolicy<ImplClass>::overrideTagDeclIdentifier(TagDecl *D) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+StringRef ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    overrideTagDeclIdentifier(TagDecl *D) const {
   const auto *Tp = D->getTypeForDecl();
   auto HBT = Builtins.identifyBuiltinType(Tp);
   if (HBT == HBT_None) {
@@ -93,9 +94,9 @@ ShaderPrintingPolicy<ImplClass>::overrideTagDeclIdentifier(TagDecl *D) const {
   return HshBuiltins::getSpelling<ImplClass::SourceTarget>(HBT);
 }
 
-template <typename ImplClass>
-StringRef ShaderPrintingPolicy<ImplClass>::overrideBuiltinFunctionIdentifier(
-    CallExpr *C) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+StringRef ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    overrideBuiltinFunctionIdentifier(CallExpr *C) const {
   if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
     auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
     if (HBM == HBM_None)
@@ -115,23 +116,26 @@ StringRef ShaderPrintingPolicy<ImplClass>::overrideBuiltinFunctionIdentifier(
   return {};
 }
 
-template <typename ImplClass>
-bool ShaderPrintingPolicy<ImplClass>::overrideCallArguments(
-    CallExpr *C, const std::function<void(StringRef)> &StringArg,
-    const std::function<void(Expr *)> &ExprArg) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+bool ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    overrideCallArguments(
+        CallExpr *C, const std::function<void(StringRef)> &StringArg,
+        const std::function<void(Expr *)> &ExprArg,
+        const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg)
+        const {
   if (auto *MemberCall = dyn_cast<CXXMemberCallExpr>(C)) {
     auto HBM = Builtins.identifyBuiltinMethod(MemberCall->getMethodDecl());
     if (HBM == HBM_None)
       return {};
     return static_cast<const ImplClass &>(*this).overrideCXXMethodArguments(
-        HBM, MemberCall, StringArg, ExprArg);
+        HBM, MemberCall, StringArg, ExprArg, WrappedExprArg);
   }
   return false;
 }
 
-template <typename ImplClass>
-StringRef ShaderPrintingPolicy<ImplClass>::overrideDeclRefIdentifier(
-    DeclRefExpr *DR) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+StringRef ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    overrideDeclRefIdentifier(DeclRefExpr *DR) const {
   if (auto *ECD = dyn_cast<EnumConstantDecl>(DR->getDecl())) {
     EnumValStr.clear();
     raw_string_ostream OS(EnumValStr);
@@ -141,9 +145,10 @@ StringRef ShaderPrintingPolicy<ImplClass>::overrideDeclRefIdentifier(
   return {};
 }
 
-template <typename ImplClass>
+template <typename ImplClass, typename PackoffsetFieldHandler>
 StringRef
-ShaderPrintingPolicy<ImplClass>::overrideMemberExpr(MemberExpr *ME) const {
+ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::overrideMemberExpr(
+    MemberExpr *ME) const {
   if (auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl())) {
     auto HPF = Builtins.identifyBuiltinPipelineField(FD);
     switch (HPF) {
@@ -169,8 +174,9 @@ DeclRefExpr *ShaderPrintingPolicyBase::GetMemberExprBase(MemberExpr *ME) {
   return dyn_cast<DeclRefExpr>(E);
 }
 
-template <typename ImplClass>
-StringRef ShaderPrintingPolicy<ImplClass>::prependMemberExprBase(
+template <typename ImplClass, typename PackoffsetFieldHandler>
+StringRef
+ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::prependMemberExprBase(
     MemberExpr *ME, bool &ReplaceBase) const {
   if (auto *DRE = GetMemberExprBase(ME)) {
     if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
@@ -188,32 +194,38 @@ StringRef ShaderPrintingPolicy<ImplClass>::prependMemberExprBase(
   return {};
 }
 
-template <typename ImplClass>
-bool ShaderPrintingPolicy<ImplClass>::shouldPrintMemberExprUnderscore(
-    MemberExpr *ME) const {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+bool ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    shouldPrintMemberExprUnderscore(MemberExpr *ME) const {
   if (auto *DRE = GetMemberExprBase(ME)) {
     if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
       if (Builtins.getVertexAttributeRecord(PVD) ||
-          Builtins.getUniformRecord(PVD))
+          (ImplClass::NoUniformVarDecl && Builtins.getUniformRecord(PVD)))
         return true;
     }
   }
   return false;
 }
 
-void ShaderPrintingPolicyBase::PrintNestedStructs(raw_ostream &OS,
-                                                  ASTContext &Context) {
+template <typename FieldHandler>
+void ShaderPrintingPolicyBase::PrintNestedStructs(raw_ostream &OS) {
   unsigned Idx = 0;
   for (const auto *Record : NestedRecords) {
     OS << "struct __Struct" << Idx++ << " {\n";
+    FieldHandler FH(*this, OS);
     for (auto *FD : Record->fields()) {
-      PrintStructField(OS, Context, FD->getType(), FD->getName(),
+      PrintStructField(FH, FD->getType(), FD->getName(), false,
                        ArrayWaitType::NoArray, 1);
-      OS << ";\n";
+      FH << ";\n";
     }
+    FH.Flush();
     OS << "};\n";
   }
 }
+template void ShaderPrintingPolicyBase::PrintNestedStructs<
+    ShaderPrintingPolicyBase::FieldPrinter>(raw_ostream &OS);
+template void ShaderPrintingPolicyBase::PrintNestedStructs<
+    ShaderPrintingPolicyBase::FieldFloatPairer>(raw_ostream &OS);
 
 ShaderPrintingPolicyBase::ArrayWaitType
 ShaderPrintingPolicyBase::getArrayWaitType(const CXXRecordDecl *RD) const {
@@ -225,10 +237,10 @@ ShaderPrintingPolicyBase::getArrayWaitType(const CXXRecordDecl *RD) const {
 }
 
 void ShaderPrintingPolicyBase::GatherNestedStructField(
-    ASTContext &Context, QualType Tp, ArrayWaitType WaitingForArray) {
+    QualType Tp, ArrayWaitType WaitingForArray) {
   if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
     if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
-      GatherNestedStructFields(Context, SubRecord, WaitingForArray);
+      GatherNestedStructFields(SubRecord, WaitingForArray);
       return;
     }
   }
@@ -242,28 +254,27 @@ void ShaderPrintingPolicyBase::GatherNestedStructField(
 
     if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
       if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
-        GatherNestedStructFields(Context, SubRecord, ArrayWaitType::NoArray);
+        GatherNestedStructFields(SubRecord, ArrayWaitType::NoArray);
         return;
       }
     }
 
-    GatherNestedStructField(Context, ElemType, ArrayWaitType::NoArray);
+    GatherNestedStructField(ElemType, ArrayWaitType::NoArray);
     return;
   }
 }
 
 void ShaderPrintingPolicyBase::GatherNestedStructFields(
-    ASTContext &Context, const CXXRecordDecl *Record,
-    ArrayWaitType WaitingForArray) {
+    const CXXRecordDecl *Record, ArrayWaitType WaitingForArray) {
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {
     for (auto *FD : Record->fields()) {
-      GatherNestedStructField(Context, FD->getType(), WaitingForArray);
+      GatherNestedStructField(FD->getType(), WaitingForArray);
     }
   } else {
     for (auto *FD : Record->fields()) {
-      GatherNestedStructField(Context, FD->getType(), ArrayWaitType::NoArray);
+      GatherNestedStructField(FD->getType(), ArrayWaitType::NoArray);
     }
     if (std::find(NestedRecords.begin(), NestedRecords.end(), Record) ==
         NestedRecords.end())
@@ -272,20 +283,23 @@ void ShaderPrintingPolicyBase::GatherNestedStructFields(
 }
 
 void ShaderPrintingPolicyBase::GatherNestedPackoffsetFields(
-    ASTContext &Context, const CXXRecordDecl *Record, CharUnits BaseOffset) {
+    const CXXRecordDecl *Record, CharUnits BaseOffset) {
   ArrayWaitType WaitingForArray = getArrayWaitType(Record);
 
   for (auto *FD : Record->fields()) {
-    GatherNestedStructField(Context, FD->getType(), WaitingForArray);
+    GatherNestedStructField(FD->getType(), WaitingForArray);
   }
 }
 
-void ShaderPrintingPolicyBase::PrintStructField(
-    raw_ostream &OS, ASTContext &Context, QualType Tp, const Twine &FieldName,
-    ArrayWaitType WaitingForArray, unsigned Indent) {
+template <typename FieldHandler>
+void ShaderPrintingPolicyBase::PrintStructField(FieldHandler &FH, QualType Tp,
+                                                const Twine &FieldName,
+                                                bool ArrayField,
+                                                ArrayWaitType WaitingForArray,
+                                                unsigned Indent) {
   if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
     if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
-      PrintStructFields(OS, Context, SubRecord, FieldName, WaitingForArray,
+      PrintStructFields(FH, SubRecord, FieldName, ArrayField, WaitingForArray,
                         Indent);
       return;
     }
@@ -305,80 +319,90 @@ void ShaderPrintingPolicyBase::PrintStructField(
 
     if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
       if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
-        PrintStructFields(OS, Context, SubRecord, ArrayFieldName,
+        PrintStructFields(FH, SubRecord, ArrayFieldName, true,
                           ArrayWaitType::NoArray, Indent);
         return;
       }
     }
 
-    PrintStructField(OS, Context, ElemType, ArrayFieldName,
-                     ArrayWaitType::NoArray, Indent);
+    PrintStructField(FH, ElemType, ArrayFieldName, true, ArrayWaitType::NoArray,
+                     Indent);
     return;
   }
 
   if (WaitingForArray == ArrayWaitType::NoArray) {
-    OS.indent(Indent * 2);
-    Tp.print(OS, *this, FieldName, Indent);
+    FH.Field(Tp, FieldName, ArrayField, Indent);
+    // OS.emplace_back(Tp, FieldName, Indent);
+    // OS.indent(Indent * 2);
+    // Tp.print(OS, *this, FieldName, Indent);
   }
 }
 
+template <typename FieldHandler>
 void ShaderPrintingPolicyBase::PrintStructFields(
-    raw_ostream &OS, ASTContext &Context, const CXXRecordDecl *Record,
-    const Twine &FieldName, ArrayWaitType WaitingForArray, unsigned Indent) {
+    FieldHandler &FH, const CXXRecordDecl *Record, const Twine &FieldName,
+    bool ArrayField, ArrayWaitType WaitingForArray, unsigned Indent) {
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {
     for (auto *FD : Record->fields()) {
-      PrintStructField(OS, Context, FD->getType(), FieldName, WaitingForArray,
-                       Indent);
+      PrintStructField(FH, FD->getType(), FieldName, ArrayField,
+                       WaitingForArray, Indent);
     }
   } else {
     auto *Search =
         std::find(NestedRecords.begin(), NestedRecords.end(), Record);
     assert(Search != NestedRecords.end());
-    OS.indent(Indent * 2) << "__Struct" << Search - NestedRecords.begin() << ' '
-                          << FieldName;
+    FH.NestedField(Search - NestedRecords.begin(), FieldName, Indent);
+    // OS.emplace_back(Search - NestedRecords.begin(), FieldName, Indent);
+    // OS.indent(Indent * 2) << "__Struct" << Search - NestedRecords.begin() <<
+    // ' '
+    //                      << FieldName;
   }
 }
 
-template <typename ImplClass>
-void ShaderPrintingPolicy<ImplClass>::PrintPackoffsetField(
-    raw_ostream &OS, ASTContext &Context, QualType Tp, const Twine &FieldName,
-    ArrayWaitType WaitingForArray, CharUnits Offset) {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    PrintPackoffsetField(PackoffsetFieldHandler &FH, QualType Tp,
+                         const Twine &FieldName, ArrayWaitType WaitingForArray,
+                         CharUnits Offset) {
   assert(Offset.getQuantity() % 4 == 0);
-  ImplClass::PrintBeforePackoffset(OS, Offset);
-  PrintStructField(OS, Context, Tp, FieldName, WaitingForArray, 1);
-  ImplClass::PrintAfterPackoffset(OS, Offset);
+  ImplClass::PrintBeforePackoffset(FH, Offset);
+  PrintStructField(FH, Tp, FieldName, false, WaitingForArray, 1);
+  ImplClass::PrintAfterPackoffset(FH, Offset);
 }
 
-template <typename ImplClass>
-void ShaderPrintingPolicy<ImplClass>::PrintPackoffsetFields(
-    raw_ostream &OS, ASTContext &Context, const CXXRecordDecl *Record,
-    const Twine &PrefixName, CharUnits BaseOffset) {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    PrintPackoffsetFields(raw_ostream &OS, const CXXRecordDecl *Record,
+                          const Twine &PrefixName, CharUnits BaseOffset) {
   ArrayWaitType WaitingForArray = getArrayWaitType(Record);
 
   const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
+  PackoffsetFieldHandler FH(*this, OS);
   for (auto *FD : Record->fields()) {
     auto Offset = BaseOffset + Context.toCharUnitsFromBits(
                                    RL.getFieldOffset(FD->getFieldIndex()));
-    Twine Tw1 = PrefixName + Twine('_');
-    PrintPackoffsetField(OS, Context, FD->getType(),
+    Twine Tw1 =
+        PrefixName.isTriviallyEmpty() ? PrefixName : PrefixName + Twine('_');
+    PrintPackoffsetField(FH, FD->getType(),
                          WaitingForArray != ArrayWaitType::NoArray
                              ? PrefixName
                              : Tw1 + FD->getName(),
                          WaitingForArray, Offset);
   }
+  FH.Flush();
 }
 
-template <typename ImplClass>
-void ShaderPrintingPolicy<ImplClass>::PrintAttributeField(
-    raw_ostream &OS, ASTContext &Context, QualType Tp, const Twine &FieldName,
-    ArrayWaitType WaitingForArray, unsigned Indent, unsigned &Location,
-    unsigned ArraySize) {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    PrintAttributeField(raw_ostream &OS, QualType Tp, const Twine &FieldName,
+                        ArrayWaitType WaitingForArray, unsigned Indent,
+                        unsigned &Location, unsigned ArraySize) {
   if (Builtins.identifyBuiltinType(Tp) == HBT_None) {
     if (auto *SubRecord = Tp->getAsCXXRecordDecl()) {
-      PrintAttributeFields(OS, Context, SubRecord, FieldName, WaitingForArray,
-                           Indent, Location);
+      PrintAttributeFields(OS, SubRecord, FieldName, WaitingForArray, Indent,
+                           Location);
       return;
     }
   }
@@ -397,14 +421,14 @@ void ShaderPrintingPolicy<ImplClass>::PrintAttributeField(
 
     if (Builtins.identifyBuiltinType(ElemType) == HBT_None) {
       if (auto *SubRecord = ElemType->getAsCXXRecordDecl()) {
-        PrintAttributeFields(OS, Context, SubRecord, ArrayFieldName,
+        PrintAttributeFields(OS, SubRecord, ArrayFieldName,
                              ArrayWaitType::NoArray, Indent, Location);
         return;
       }
     }
 
-    PrintAttributeField(OS, Context, ElemType, ArrayFieldName,
-                        ArrayWaitType::NoArray, Indent, Location, Size);
+    PrintAttributeField(OS, ElemType, ArrayFieldName, ArrayWaitType::NoArray,
+                        Indent, Location, Size);
     return;
   }
 
@@ -433,43 +457,48 @@ void ShaderPrintingPolicy<ImplClass>::PrintAttributeField(
   }
 }
 
-template <typename ImplClass>
-void ShaderPrintingPolicy<ImplClass>::PrintAttributeFields(
-    raw_ostream &OS, ASTContext &Context, const CXXRecordDecl *Record,
-    const Twine &FieldName, ArrayWaitType WaitingForArray, unsigned Indent,
-    unsigned &Location) {
+template <typename ImplClass, typename PackoffsetFieldHandler>
+void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
+    PrintAttributeFields(raw_ostream &OS, const CXXRecordDecl *Record,
+                         const Twine &FieldName, ArrayWaitType WaitingForArray,
+                         unsigned Indent, unsigned &Location) {
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {
     for (auto *FD : Record->fields()) {
-      PrintAttributeField(OS, Context, FD->getType(), FieldName,
-                          WaitingForArray, Indent, Location, 1);
+      PrintAttributeField(OS, FD->getType(), FieldName, WaitingForArray, Indent,
+                          Location, 1);
     }
   }
 }
 
-template struct ShaderPrintingPolicy<GLSLPrintingPolicy>;
-template struct ShaderPrintingPolicy<HLSLPrintingPolicy>;
+template struct ShaderPrintingPolicy<GLSLPrintingPolicy,
+                                     ShaderPrintingPolicyBase::FieldPrinter>;
+template struct ShaderPrintingPolicy<HLSLPrintingPolicy,
+                                     ShaderPrintingPolicyBase::FieldPrinter>;
+template struct ShaderPrintingPolicy<
+    MetalPrintingPolicy, ShaderPrintingPolicyBase::FieldFloatPairer>;
 
 std::unique_ptr<ShaderPrintingPolicyBase>
-MakePrintingPolicy(HshBuiltins &Builtins, HshTarget Target,
+MakePrintingPolicy(HshBuiltins &Builtins, ASTContext &Context, HshTarget Target,
                    InShaderPipelineArgsType InShaderPipelineArgs) {
   switch (Target) {
   default:
   case HT_GLSL:
   case HT_DEKO3D:
-    return std::make_unique<GLSLPrintingPolicy>(Builtins, Target,
+    return std::make_unique<GLSLPrintingPolicy>(Builtins, Context, Target,
                                                 InShaderPipelineArgs);
   case HT_HLSL:
   case HT_DXBC:
   case HT_DXIL:
   case HT_VULKAN_SPIRV:
+    return std::make_unique<HLSLPrintingPolicy>(Builtins, Context, Target,
+                                                InShaderPipelineArgs);
   case HT_METAL:
   case HT_METAL_BIN_MAC:
   case HT_METAL_BIN_IOS:
-  case HT_METAL_BIN_TVOS:
-    return std::make_unique<HLSLPrintingPolicy>(Builtins, Target,
-                                                InShaderPipelineArgs);
+    return std::make_unique<MetalPrintingPolicy>(Builtins, Context, Target,
+                                                 InShaderPipelineArgs);
   }
 }
 

@@ -18,21 +18,45 @@
 #include <map>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "bits/builtin_types.h"
 #include "bits/common.h"
 #include "bits/source_location.h"
 
 #include "bits/deko.h"
+#include "bits/metal.h"
 #include "bits/vulkan.h"
 
 namespace hsh {
+
+#if HSH_ENABLE_METAL
+constexpr bool operator==(const MTLSize &a, const MTLSize &b) noexcept {
+  return a.width == b.width && a.height == b.height && a.depth == b.depth;
+}
+constexpr bool operator==(const MTLOrigin &a, const MTLOrigin &b) noexcept {
+  return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+#endif
+
 struct offset2d {
   int32_t x, y;
   constexpr offset2d(int32_t x = {}, int32_t y = {}) noexcept : x(x), y(y) {}
 #if HSH_ENABLE_VULKAN
   constexpr offset2d(vk::Offset2D off) noexcept : x(off.x), y(off.y) {}
   operator vk::Offset2D() const noexcept { return vk::Offset2D(x, y); }
+#endif
+#if HSH_ENABLE_METAL
+  constexpr offset2d(MTLOrigin origin) noexcept
+      : x(int32_t(origin.x)), y(int32_t(origin.y)) {}
+  operator MTLOrigin() const noexcept {
+    return MTLOrigin{NSUInteger(x), NSUInteger(y), 0};
+  }
+  constexpr offset2d(CGPoint origin) noexcept
+      : x(int32_t(origin.x)), y(int32_t(origin.y)) {}
+  operator CGPoint() const noexcept {
+    return CGPoint{CGFloat(x), CGFloat(y)};
+  }
 #endif
   offset2d operator+(const offset2d &other) const noexcept {
     return {x + other.x, y + other.y};
@@ -76,8 +100,19 @@ struct extent2d {
   constexpr extent2d(vk::Extent2D ext) noexcept : w(ext.width), h(ext.height) {}
   operator vk::Extent2D() const noexcept { return vk::Extent2D(w, h); }
 #endif
+#if HSH_ENABLE_METAL
+  constexpr extent2d(MTLSize ext) noexcept
+      : w(uint32_t(ext.width)), h(uint32_t(ext.height)) {}
+  operator MTLSize() const noexcept { return MTLSize{w, h, 1}; }
+  constexpr extent2d(CGSize size) noexcept
+      : w(uint32_t(size.width)), h(uint32_t(size.height)) {}
+  operator CGSize() const noexcept { return CGSize{CGFloat(w), CGFloat(h)}; }
+#endif
   bool operator==(const extent2d &other) const noexcept {
     return w == other.w && h == other.h;
+  }
+  bool operator!=(const extent2d &other) const noexcept {
+    return w != other.w || h != other.h;
   }
 };
 struct rect2d {
@@ -89,6 +124,11 @@ struct rect2d {
   constexpr rect2d(vk::Rect2D rect) noexcept
       : offset(rect.offset), extent(rect.extent) {}
   operator vk::Rect2D() const noexcept { return vk::Rect2D(offset, extent); }
+#endif
+#if HSH_ENABLE_METAL
+  constexpr rect2d(CGRect rect) noexcept
+  : offset(rect.origin), extent(rect.size) {}
+  operator CGRect() const noexcept { return CGRect{offset, extent}; }
 #endif
 };
 struct extent3d {
@@ -102,6 +142,12 @@ struct extent3d {
   constexpr extent3d(vk::Extent3D ext) noexcept
       : w(ext.width), h(ext.height), d(ext.depth) {}
   operator vk::Extent3D() const noexcept { return vk::Extent3D(w, h, d); }
+#endif
+#if HSH_ENABLE_METAL
+  constexpr extent3d(MTLSize ext) noexcept
+      : w(uint32_t(ext.width)), h(uint32_t(ext.height)),
+        d(uint32_t(ext.depth)) {}
+  operator MTLSize() const noexcept { return MTLSize{w, h, d}; }
 #endif
 };
 struct viewport {
@@ -123,12 +169,14 @@ struct scissor : rect2d {
 } // namespace hsh
 
 #include "bits/deko_impl.h"
+#include "bits/metal_impl.h"
 #include "bits/vulkan_impl.h"
 
 #include "bits/select_target_traits.h"
 
 #include "bits/common_resources.h"
 #include "bits/deko_resources.h"
+#include "bits/metal_resources.h"
 #include "bits/vulkan_resources.h"
 
 namespace hsh {
@@ -861,6 +909,21 @@ inline owner<surface> create_surface(
     const SourceLocation &location = SourceLocation::current()) noexcept {
   return create_resource<surface>(location, Surface, std::move(DeleterLambda),
                                   RequestExtent);
+}
+#endif
+
+#if HSH_ENABLE_METAL
+inline owner<surface> create_surface(
+    CAMetalLayer *Surface,
+    std::function<void(const hsh::extent2d &, const hsh::extent2d &)>
+        &&ResizeLambda = {},
+    std::function<void()> &&DeleterLambda = {},
+    const hsh::extent2d &RequestExtent = {}, int32_t L = 0, int32_t R = 0,
+    int32_t T = 0, int32_t B = 0,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_resource<surface>(
+      location, std::move(Surface), std::move(ResizeLambda),
+      std::move(DeleterLambda), RequestExtent, L, R, T, B);
 }
 #endif
 

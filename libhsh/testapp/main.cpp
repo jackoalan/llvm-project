@@ -1,8 +1,5 @@
 #define HSH_IMPLEMENTATION
-#if _WIN32
-#define NOMINMAX
-#include <Windows.h>
-#endif
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +16,9 @@ constexpr std::string_view AppName = "Hello Triangle"sv;
 #if !HSH_PROFILE_MODE
 
 #if _WIN32
+
+#define NOMINMAX
+#include <Windows.h>
 
 struct WsiConnection;
 struct WsiWindow {
@@ -139,6 +139,153 @@ struct PipelineCacheFileManager {
       });
       std::fclose(File);
     }
+  }
+};
+
+#elif defined(__APPLE__)
+
+#include <AppKit/AppKit.h>
+#include <QuartzCore/CoreAnimation.h>
+
+@interface MetalView : NSView
+- (id)initWithFrame:(NSRect)frameRect;
+- (CALayer *)makeBackingLayer;
+@end
+
+@implementation MetalView
+- (id)initWithFrame:(NSRect)frameRect {
+  self = [super initWithFrame:frameRect];
+  self.wantsLayer = YES;
+  return self;
+}
+- (CALayer *)makeBackingLayer {
+  CAMetalLayer *Layer = [CAMetalLayer layer];
+  Layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  return Layer;
+}
+- (BOOL)layer:(CALayer *)layer
+    shouldInheritContentsScale:(CGFloat)newScale
+                    fromWindow:(NSWindow *)window {
+  return YES;
+}
+@end
+
+@interface CocoaWindow : NSWindow
+- (id)init;
+@end
+
+@implementation CocoaWindow
+- (id)init {
+  NSRect ContentRect = NSMakeRect(0, 0, 512, 512);
+  self = [super
+      initWithContentRect:ContentRect
+                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                          NSWindowStyleMaskMiniaturizable |
+                          NSWindowStyleMaskResizable /*|
+                          NSWindowStyleMaskFullSizeContentView*/
+                  backing:NSBackingStoreBuffered
+                    defer:NO];
+  self.contentView = [[MetalView alloc] initWithFrame:ContentRect];
+  return self;
+}
+@end
+
+struct WsiConnection;
+struct WsiWindow {
+  WsiConnection &Connection;
+  CocoaWindow *Window;
+  explicit WsiWindow(WsiConnection &Connection);
+  ~WsiWindow();
+};
+
+@interface Application : NSApplication <NSApplicationDelegate>
+@end
+
+@implementation Application
+- (id)init {
+  self = [super init];
+  self.activationPolicy = NSApplicationActivationPolicyRegular;
+  self.delegate = self;
+
+  NSMenu *Menu = [NSMenu new];
+  NSMenuItem *MenuItem = [NSMenuItem new];
+  [Menu addItem:MenuItem];
+  NSMenu *AppMenu = [NSMenu new];
+  NSString *AppName = [[NSProcessInfo processInfo] processName];
+  NSString *QuitTitle = [@"Quit " stringByAppendingString:AppName];
+  NSMenuItem *QuitMenuItem =
+      [[NSMenuItem alloc] initWithTitle:QuitTitle
+                                 action:@selector(terminate:)
+                          keyEquivalent:@"q"];
+  [AppMenu addItem:QuitMenuItem];
+  [MenuItem setSubmenu:AppMenu];
+  self.mainMenu = Menu;
+
+  return self;
+}
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:
+    (NSApplication *)sender {
+  return YES;
+}
+- (void)terminate:(id)sender {
+  /* Use -stop in place of -terminate so -run returns */
+  [self stop:sender];
+}
+@end
+
+struct WsiConnection {
+  Application *App;
+
+  operator NSApplication *() const { return App; }
+
+  WsiConnection() { App = [Application sharedApplication]; }
+
+  WsiWindow makeWindow() { return WsiWindow(*this); }
+
+  const std::function<bool()> *IdleFuncPtr = nullptr;
+
+  void idle() {
+    if (!(*IdleFuncPtr)())
+      [App stop:nil];
+    if (App.isRunning)
+      dispatch_async_f(dispatch_get_main_queue(), this,
+                       dispatch_function_t(_idle));
+  }
+  static void _idle(WsiConnection *Self) { Self->idle(); }
+
+  void runloop(const std::function<bool()> &IdleFunc) {
+    IdleFuncPtr = &IdleFunc;
+    dispatch_async_f(dispatch_get_main_queue(), this,
+                     dispatch_function_t(_idle));
+    [App run];
+    IdleFuncPtr = nullptr;
+  }
+};
+
+WsiWindow::WsiWindow(WsiConnection &Connection) : Connection(Connection) {
+  Window = [CocoaWindow new];
+  [Window makeKeyAndOrderFront:nil];
+}
+
+WsiWindow::~WsiWindow() { [Window close]; }
+
+struct PipelineCacheFileManager {
+  static NSURL *GetFilename() noexcept {
+    std::ostringstream FileName;
+    // TODO: make this more portable
+    if (const char *home = std::getenv("HOME")) {
+      FileName << home;
+      FileName << "/Library/Caches/hsh-test-pipeline-cache.bin";
+    }
+    return [NSURL fileURLWithPath:@(FileName.str().c_str())];
+  }
+
+  template <typename Func> static void ReadPipelineCache(Func F) noexcept {
+    F(GetFilename());
+  }
+
+  template <typename Func> static void WritePipelineCache(Func F) noexcept {
+    F(GetFilename());
   }
 };
 
@@ -283,6 +430,8 @@ int main(int argc, char **argv) {
   WsiConnection Connection;
   WsiWindow Window = Connection.makeWindow();
 
+#ifndef __APPLE__
+
   auto Instance = hsh::create_vulkan_instance(
       AppName.data(), 0, "test-engine", 0,
       [](vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -305,7 +454,7 @@ int main(int argc, char **argv) {
 
   auto PhysSurface = Instance.create_phys_surface(Connection, Window.Window);
   if (!PhysSurface) {
-    std::cerr << "Unable to create XCB surface\n";
+    std::cerr << "Unable to create PhysSurface\n";
     return 1;
   }
 
@@ -319,6 +468,33 @@ int main(int argc, char **argv) {
     std::cerr << "No vulkan devices found\n";
     return 1;
   }
+
+#else
+
+  auto Instance = hsh::create_metal_instance(
+      [](NSError *Err) { std::cerr << Err.localizedDescription.UTF8String; });
+  if (!Instance)
+    return 1;
+
+  Instance.enumerate_metal_devices(
+      [](id<MTLDevice> Device, bool NativeForPhysSurface) {
+        std::cerr << "name: " << Device.name.UTF8String << "\n";
+        return false;
+      });
+
+  CAMetalLayer *PhysSurface = (CAMetalLayer *)Window.Window.contentView.layer;
+
+  auto Device = Instance.enumerate_metal_devices(
+      [&](id<MTLDevice> Device, bool NativeForPhysSurface) {
+        return NativeForPhysSurface;
+      },
+      PhysSurface);
+  if (!Device) {
+    std::cerr << "No metal devices found\n";
+    return 1;
+  }
+
+#endif
 
   auto Surface = hsh::create_surface(std::move(PhysSurface));
   if (!Surface) {

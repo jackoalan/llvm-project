@@ -21,8 +21,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#include <unknwn.h>
 #include <atlcomcli.h>
+#include <unknwn.h>
 #endif
 #include "dxc/dxcapi.h"
 
@@ -54,20 +54,22 @@ public:
 
 #ifdef __EMULATE_UUID
   struct ImportedUUIDs {
-    void *_IUnknown = nullptr;
-    void *_IDxcBlob = nullptr;
-    void *_IDxcBlobUtf8 = nullptr;
-    void *_IDxcResult = nullptr;
-    void *_IDxcCompiler3 = nullptr;
+    size_t _IUnknown = 0;
+    size_t _IDxcBlob = 0;
+    size_t _IDxcBlobUtf8 = 0;
+    size_t _IDxcResult = 0;
+    size_t _IDxcCompiler3 = 0;
     void import(sys::DynamicLibrary &Library) {
-      _IUnknown = Library.getAddressOfSymbol("_ZN8IUnknown11IUnknown_IDE");
-      _IDxcBlob = Library.getAddressOfSymbol("_ZN8IDxcBlob11IDxcBlob_IDE");
-      _IDxcBlobUtf8 =
-          Library.getAddressOfSymbol("_ZN12IDxcBlobUtf815IDxcBlobUtf8_IDE");
-      _IDxcResult =
-          Library.getAddressOfSymbol("_ZN10IDxcResult13IDxcResult_IDE");
-      _IDxcCompiler3 =
-          Library.getAddressOfSymbol("_ZN13IDxcCompiler316IDxcCompiler3_IDE");
+      _IUnknown = *reinterpret_cast<size_t *>(
+          Library.getAddressOfSymbol("_ZN8IUnknown11IUnknown_IDE"));
+      _IDxcBlob = *reinterpret_cast<size_t *>(
+          Library.getAddressOfSymbol("_ZN8IDxcBlob11IDxcBlob_IDE"));
+      _IDxcBlobUtf8 = *reinterpret_cast<size_t *>(
+          Library.getAddressOfSymbol("_ZN12IDxcBlobUtf815IDxcBlobUtf8_IDE"));
+      _IDxcResult = *reinterpret_cast<size_t *>(
+          Library.getAddressOfSymbol("_ZN10IDxcResult13IDxcResult_IDE"));
+      _IDxcCompiler3 = *reinterpret_cast<size_t *>(
+          Library.getAddressOfSymbol("_ZN13IDxcCompiler316IDxcCompiler3_IDE"));
     }
     template <typename T> REFIID get();
   } UUIDs;
@@ -107,19 +109,19 @@ llvm::Optional<DxcLibrary> DxcLibrary::SharedInstance;
 
 #ifdef __EMULATE_UUID
 template <> REFIID DxcLibrary::ImportedUUIDs::get<IUnknown>() {
-  return _IUnknown;
+  return reinterpret_cast<REFIID>(_IUnknown);
 }
 template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcBlob>() {
-  return _IDxcBlob;
+  return reinterpret_cast<REFIID>(_IDxcBlob);
 }
 template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcBlobUtf8>() {
-  return _IDxcBlobUtf8;
+  return reinterpret_cast<REFIID>(_IDxcBlobUtf8);
 }
 template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcResult>() {
-  return _IDxcResult;
+  return reinterpret_cast<REFIID>(_IDxcResult);
 }
 template <> REFIID DxcLibrary::ImportedUUIDs::get<IDxcCompiler3>() {
-  return _IDxcCompiler3;
+  return reinterpret_cast<REFIID>(_IDxcCompiler3);
 }
 #endif
 

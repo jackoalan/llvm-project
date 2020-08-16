@@ -7,6 +7,38 @@
 #elif __has_include(<experimental/source_location>)
 #include <experimental/source_location>
 #define HSH_SOURCE_LOCATION_REP std::experimental::source_location
+#elif __APPLE__ && __clang__
+namespace std {
+namespace experimental {
+struct source_location {
+private:
+  unsigned int __m_line = 0;
+  unsigned int __m_col = 0;
+  const char *__m_file = nullptr;
+  const char *__m_func = nullptr;
+public:
+  static constexpr source_location current(
+      const char *__file = __builtin_FILE(),
+      const char *__func = __builtin_FUNCTION(),
+      unsigned int __line = __builtin_LINE(),
+      unsigned int __col = __builtin_COLUMN()) noexcept {
+    source_location __loc;
+    __loc.__m_line = __line;
+    __loc.__m_col = __col;
+    __loc.__m_file = __file;
+    __loc.__m_func = __func;
+    return __loc;
+  }
+  constexpr source_location() = default;
+  constexpr source_location(source_location const &) = default;
+  constexpr unsigned int line() const noexcept { return __m_line; }
+  constexpr unsigned int column() const noexcept { return __m_col; }
+  constexpr const char *file_name() const noexcept { return __m_file; }
+  constexpr const char *function_name() const noexcept { return __m_func; }
+};
+} // namespace experimental
+} // namespace std
+#define HSH_SOURCE_LOCATION_REP std::experimental::source_location
 #endif
 #endif
 #ifdef HSH_SOURCE_LOCATION_REP

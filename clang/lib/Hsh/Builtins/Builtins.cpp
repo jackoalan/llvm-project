@@ -576,6 +576,8 @@ void HshBuiltins::findBuiltinDecls(ASTContext &Context) {
   MaxUniforms = findICEVar("MaxUniforms", HshDetailNamespace, Context);
   MaxImages = findICEVar("MaxImages", HshDetailNamespace, Context);
   MaxSamplers = findICEVar("MaxSamplers", HshDetailNamespace, Context);
+  MaxVertexBuffers =
+      findICEVar("MaxVertexBuffers", HshDetailNamespace, Context);
 
 #define BUILTIN_VECTOR_TYPE(Name, GLSL, HLSL, Metal)                           \
   addType(Context, HshNamespace, HBT_##Name, #Name);

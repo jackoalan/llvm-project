@@ -75,6 +75,16 @@ int main(int argc, const char **argv) {
       "g", cl::desc("Embed debug information in compiled shaders"),
       cl::cat(llvm::cl::GeneralCategory));
 
+  static cl::opt<std::string, false, cl::dir_parser> IStdlibDir(
+      "stdlib++-isystem", cl::Optional, cl::Prefix,
+      cl::desc("Specify directory as C++ standard library include path"),
+      cl::cat(llvm::cl::GeneralCategory));
+
+  static cl::opt<std::string, false, cl::dir_parser> ISysrootDir(
+      "isysroot", cl::Optional, cl::Prefix,
+      cl::desc("Specify directory as system include path"),
+      cl::cat(llvm::cl::GeneralCategory));
+
   static cl::list<std::string, bool, cl::dir_parser> IncludeDirs(
       "I", cl::ZeroOrMore, cl::Prefix,
       cl::desc("Add directory to include search path"),
@@ -136,28 +146,37 @@ int main(int argc, const char **argv) {
       {hshgen::HT_METAL, "Metal Source Target"},
       {hshgen::HT_METAL_BIN_MAC, "Metal Binary macOS Target (requires Xcode)"},
       {hshgen::HT_METAL_BIN_IOS, "Metal Binary iOS Target (requires Xcode)"},
-      {hshgen::HT_METAL_BIN_TVOS, "Metal Binary tvOS Target (requires Xcode)"},
       {hshgen::HT_DEKO3D, "Deko Binary Target"},
   };
 
   if (!cl::ParseCommandLineOptions(argc, argv, "Hsh Codegen Tool"))
     return 1;
 
-  std::vector<std::string> args = {argv[0],
+  std::vector<std::string> args = {
+      argv[0],
 #ifdef __linux__
-                                   "--gcc-toolchain=/usr",
+      /* TODO: have cmake deal with resolving this (pkgconfig?) */
+      "--gcc-toolchain=/usr",
 #endif
-                                   "-c",
-                                   "-std=c++17",
-                                   "-D__hsh__=1",
-                                   "-Wno-expansion-to-defined",
-                                   "-Wno-nullability-completeness",
-                                   "-Wno-unused-value",
-                                   "-Wno-undefined-inline"};
+#ifdef __APPLE__
+      /* Implicitly enable Obj-C++ semantics with ARC */
+      "-xobjective-c++", "-fobjc-arc",
+#endif
+      "-c", "-std=c++17", "-D__hsh__=1", "-Wno-expansion-to-defined",
+      "-Wno-nullability-completeness", "-Wno-unused-value",
+      "-Wno-undefined-inline"};
   if (Verbose)
     args.emplace_back("-v");
   if (WithColor(llvm::errs()).colorsEnabled())
     args.emplace_back("-fcolor-diagnostics");
+  if (!IStdlibDir.empty()) {
+    args.emplace_back("-stdlib++-isystem");
+    args.push_back(IStdlibDir);
+  }
+  if (!ISysrootDir.empty()) {
+    args.emplace_back("-isysroot");
+    args.push_back(ISysrootDir);
+  }
   for (const auto &Dir : IncludeDirs) {
     args.emplace_back("-I");
     args.push_back(Dir);

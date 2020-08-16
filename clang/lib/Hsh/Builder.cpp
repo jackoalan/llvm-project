@@ -586,8 +586,7 @@ StageSources Builder::printResults(ShaderPrintingPolicyBase &Policy) {
       raw_string_ostream OS(Sources[S]);
       HshStage NextStage = nextUsedStage(HshStage(S));
       Policy.printStage(
-          OS, Context, FunctionRecords, UniformRecords,
-          InterStageRecords[S].getRecord(),
+          OS, FunctionRecords, UniformRecords, InterStageRecords[S].getRecord(),
           NextStage != HshNoStage ? InterStageRecords[NextStage].getRecord()
                                   : nullptr,
           AttributeRecords, Textures, SamplerBindings, NumColorAttachments,

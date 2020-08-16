@@ -4,11 +4,19 @@ include(ExternalProject)
 set(lib_destination "${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}")
 set(lib_install_destination "lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}")
 
+if(WIN32)
+  set(DXCOMPILER_SHLIB libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX})
+elseif(APPLE)
+  set(DXCOMPILER_SHLIB libdxcompiler.3.7${CMAKE_SHARED_LIBRARY_SUFFIX})
+else()
+  set(DXCOMPILER_SHLIB libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7)
+endif()
+
 if(CMAKE_HOST_UNIX)
   set(INTERN_COPY COMMAND "${CMAKE_COMMAND}" -E copy
-          lib/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7 "${lib_destination}")
+          lib/${DXCOMPILER_SHLIB} "${lib_destination}")
   set(LINK_OR_COPY COMMAND "${CMAKE_COMMAND}" -E create_symlink
-          libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7
+          ${DXCOMPILER_SHLIB}
           "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}")
 else()
   set(INTERN_COPY COMMAND "${CMAKE_COMMAND}" -E copy
@@ -117,10 +125,12 @@ add_clang_library(clangHsh
         Builtins/Builtins.cpp
         Builtins/NonConstExpr.cpp
         Compilers/DxcStageCompiler.cpp
+        Compilers/MetalStageCompiler.cpp
         Compilers/UamStageCompiler.cpp
         Compilers/StageCompiler.cpp
         PrintingPolicies/GLSLPrintingPolicy.cpp
         PrintingPolicies/HLSLPrintingPolicy.cpp
+        PrintingPolicies/MetalPrintingPolicy.cpp
         PrintingPolicies/ShaderPrintingPolicy.cpp
         HshAction.cpp
         Partitioner.cpp
@@ -142,7 +152,7 @@ set_target_properties(DirectXShaderCompiler-libs PROPERTIES
 
 install(FILES
         "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}.3.7"
+        "${lib_destination}/${DXCOMPILER_SHLIB}"
         COMPONENT DirectXShaderCompiler-libs
         DESTINATION "${lib_install_destination}")
 
