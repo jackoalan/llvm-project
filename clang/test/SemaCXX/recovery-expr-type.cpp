@@ -62,3 +62,16 @@ constexpr auto x2 = AA<int>::foo2(); // expected-error {{be initialized by a con
                                      // expected-note {{in instantiation of member function}} \
                                      // expected-note {{in call to}}
 }
+
+// verify no assertion failure on violating value category.
+namespace test4 {
+int &&f(int);  // expected-note {{candidate function not viable}}
+int &&k = f(); // expected-error {{no matching function for call}}
+}
+
+// verify that "type 'double' cannot bind to a value of unrelated type 'int'" diagnostic is suppressed.
+namespace test5 {
+  template<typename T> using U = T; // expected-note {{template parameter is declared here}}
+  template<typename...Ts> U<Ts...>& f(); // expected-error {{pack expansion used as argument for non-pack parameter of alias template}}
+  double &s1 = f(); // expected-error {{no matching function}}
+}

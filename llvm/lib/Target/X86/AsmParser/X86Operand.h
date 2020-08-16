@@ -315,6 +315,11 @@ struct X86Operand final : public MCParsedAsmOperand {
   bool isMem512() const {
     return Kind == Memory && (!Mem.Size || Mem.Size == 512);
   }
+
+  bool isSibMem() const {
+    return isMem() && Mem.BaseReg != X86::RIP && Mem.BaseReg != X86::EIP;
+  }
+
   bool isMemIndexReg(unsigned LowR, unsigned HighR) const {
     assert(Kind == Memory && "Invalid access!");
     return Mem.IndexReg >= LowR && Mem.IndexReg <= HighR;
@@ -458,7 +463,14 @@ struct X86Operand final : public MCParsedAsmOperand {
   bool isGR32orGR64() const {
     return Kind == Register &&
       (X86MCRegisterClasses[X86::GR32RegClassID].contains(getReg()) ||
-      X86MCRegisterClasses[X86::GR64RegClassID].contains(getReg()));
+       X86MCRegisterClasses[X86::GR64RegClassID].contains(getReg()));
+  }
+
+  bool isGR16orGR32orGR64() const {
+    return Kind == Register &&
+      (X86MCRegisterClasses[X86::GR16RegClassID].contains(getReg()) ||
+       X86MCRegisterClasses[X86::GR32RegClassID].contains(getReg()) ||
+       X86MCRegisterClasses[X86::GR64RegClassID].contains(getReg()));
   }
 
   bool isVectorReg() const {
@@ -512,6 +524,15 @@ struct X86Operand final : public MCParsedAsmOperand {
     MCRegister RegNo = getReg();
     if (X86MCRegisterClasses[X86::GR64RegClassID].contains(RegNo))
       RegNo = getX86SubSuperRegister(RegNo, 32);
+    Inst.addOperand(MCOperand::createReg(RegNo));
+  }
+
+  void addGR16orGR32orGR64Operands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    MCRegister RegNo = getReg();
+    if (X86MCRegisterClasses[X86::GR32RegClassID].contains(RegNo) ||
+        X86MCRegisterClasses[X86::GR64RegClassID].contains(RegNo))
+      RegNo = getX86SubSuperRegister(RegNo, 16);
     Inst.addOperand(MCOperand::createReg(RegNo));
   }
 

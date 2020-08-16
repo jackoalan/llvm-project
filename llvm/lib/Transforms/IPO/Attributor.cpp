@@ -15,19 +15,32 @@
 
 #include "llvm/Transforms/IPO/Attributor.h"
 
+#include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LazyValueInfo.h"
+#include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <cassert>
+#include <string>
 
 using namespace llvm;
 
@@ -77,6 +90,35 @@ static cl::opt<bool>
                          cl::desc("Allow the Attributor to create shallow "
                                   "wrappers for non-exact definitions."),
                          cl::init(false));
+
+static cl::opt<bool>
+    AllowDeepWrapper("attributor-allow-deep-wrappers", cl::Hidden,
+                     cl::desc("Allow the Attributor to use IP information "
+                              "derived from non-exact functions via cloning"),
+                     cl::init(false));
+
+static cl::list<std::string>
+    SeedAllowList("attributor-seed-allow-list", cl::Hidden,
+                  cl::desc("Comma seperated list of attrbute names that are "
+                           "allowed to be seeded."),
+                  cl::ZeroOrMore, cl::CommaSeparated);
+
+static cl::opt<bool>
+    DumpDepGraph("attributor-dump-dep-graph", cl::Hidden,
+                 cl::desc("Dump the dependency graph to dot files."),
+                 cl::init(false));
+
+static cl::opt<std::string> DepGraphDotFileNamePrefix(
+    "attributor-depgraph-dot-filename-prefix", cl::Hidden,
+    cl::desc("The prefix used for the CallGraph dot file names."));
+
+static cl::opt<bool> ViewDepGraph("attributor-view-dep-graph", cl::Hidden,
+                                  cl::desc("View the dependency graph."),
+                                  cl::init(false));
+
+static cl::opt<bool> PrintDependencies("attributor-print-dep", cl::Hidden,
+                                       cl::desc("Print attribute dependencies"),
+                                       cl::init(false));
 
 /// Logic operators for the change status enum class.
 ///
@@ -491,8 +533,10 @@ Attributor::getAssumedConstant(const Value &V, const AbstractAttribute &AA,
 Attributor::~Attributor() {
   // The abstract attributes are allocated via the BumpPtrAllocator Allocator,
   // thus we cannot delete them. We can, and want to, destruct them though.
-  for (AbstractAttribute *AA : AllAbstractAttributes)
+  for (auto &DepAA : DG.SyntheticRoot.Deps) {
+    AbstractAttribute *AA = cast<AbstractAttribute>(DepAA.getPointer());
     AA->~AbstractAttribute();
+  }
 }
 
 bool Attributor::isAssumedDead(const AbstractAttribute &AA,
@@ -896,8 +940,9 @@ bool Attributor::checkForAllReadWriteInstructions(
 }
 
 void Attributor::runTillFixpoint() {
+  TimeTraceScope TimeScope("Attributor::runTillFixpoint");
   LLVM_DEBUG(dbgs() << "[Attributor] Identified and initialized "
-                    << AllAbstractAttributes.size()
+                    << DG.SyntheticRoot.Deps.size()
                     << " abstract attributes.\n");
 
   // Now that all abstract attributes are collected and initialized we start
@@ -907,11 +952,11 @@ void Attributor::runTillFixpoint() {
 
   SmallVector<AbstractAttribute *, 32> ChangedAAs;
   SetVector<AbstractAttribute *> Worklist, InvalidAAs;
-  Worklist.insert(AllAbstractAttributes.begin(), AllAbstractAttributes.end());
+  Worklist.insert(DG.SyntheticRoot.begin(), DG.SyntheticRoot.end());
 
   do {
     // Remember the size to determine new attributes.
-    size_t NumAAs = AllAbstractAttributes.size();
+    size_t NumAAs = DG.SyntheticRoot.Deps.size();
     LLVM_DEBUG(dbgs() << "\n\n[Attributor] #Iteration: " << IterationCounter
                       << ", Worklist size: " << Worklist.size() << "\n");
 
@@ -928,7 +973,7 @@ void Attributor::runTillFixpoint() {
       while (!InvalidAA->Deps.empty()) {
         const auto &Dep = InvalidAA->Deps.back();
         InvalidAA->Deps.pop_back();
-        AbstractAttribute *DepAA = Dep.getPointer();
+        AbstractAttribute *DepAA = cast<AbstractAttribute>(Dep.getPointer());
         if (Dep.getInt() == unsigned(DepClassTy::OPTIONAL)) {
           Worklist.insert(DepAA);
           continue;
@@ -946,7 +991,8 @@ void Attributor::runTillFixpoint() {
     // changed to the work list.
     for (AbstractAttribute *ChangedAA : ChangedAAs)
       while (!ChangedAA->Deps.empty()) {
-        Worklist.insert(ChangedAA->Deps.back().getPointer());
+        Worklist.insert(
+            cast<AbstractAttribute>(ChangedAA->Deps.back().getPointer()));
         ChangedAA->Deps.pop_back();
       }
 
@@ -974,8 +1020,8 @@ void Attributor::runTillFixpoint() {
 
     // Add attributes to the changed set if they have been created in the last
     // iteration.
-    ChangedAAs.append(AllAbstractAttributes.begin() + NumAAs,
-                      AllAbstractAttributes.end());
+    ChangedAAs.append(DG.SyntheticRoot.begin() + NumAAs,
+                      DG.SyntheticRoot.end());
 
     // Reset the work list and repopulate with the changed abstract attributes.
     // Note that dependent ones are added above.
@@ -1008,7 +1054,8 @@ void Attributor::runTillFixpoint() {
     }
 
     while (!ChangedAA->Deps.empty()) {
-      ChangedAAs.push_back(ChangedAA->Deps.back().getPointer());
+      ChangedAAs.push_back(
+          cast<AbstractAttribute>(ChangedAA->Deps.back().getPointer()));
       ChangedAA->Deps.pop_back();
     }
   }
@@ -1030,12 +1077,14 @@ void Attributor::runTillFixpoint() {
 }
 
 ChangeStatus Attributor::manifestAttributes() {
-  size_t NumFinalAAs = AllAbstractAttributes.size();
+  TimeTraceScope TimeScope("Attributor::manifestAttributes");
+  size_t NumFinalAAs = DG.SyntheticRoot.Deps.size();
 
   unsigned NumManifested = 0;
   unsigned NumAtFixpoint = 0;
   ChangeStatus ManifestChange = ChangeStatus::UNCHANGED;
-  for (AbstractAttribute *AA : AllAbstractAttributes) {
+  for (auto &DepAA : DG.SyntheticRoot.Deps) {
+    AbstractAttribute *AA = cast<AbstractAttribute>(DepAA.getPointer());
     AbstractState &State = AA->getState();
 
     // If there is not already a fixpoint reached, we can now take the
@@ -1075,11 +1124,14 @@ ChangeStatus Attributor::manifestAttributes() {
   NumAttributesValidFixpoint += NumAtFixpoint;
 
   (void)NumFinalAAs;
-  if (NumFinalAAs != AllAbstractAttributes.size()) {
-    for (unsigned u = NumFinalAAs; u < AllAbstractAttributes.size(); ++u)
-      errs() << "Unexpected abstract attribute: " << *AllAbstractAttributes[u]
+  if (NumFinalAAs != DG.SyntheticRoot.Deps.size()) {
+    for (unsigned u = NumFinalAAs; u < DG.SyntheticRoot.Deps.size(); ++u)
+      errs() << "Unexpected abstract attribute: "
+             << cast<AbstractAttribute>(DG.SyntheticRoot.Deps[u].getPointer())
              << " :: "
-             << AllAbstractAttributes[u]->getIRPosition().getAssociatedValue()
+             << cast<AbstractAttribute>(DG.SyntheticRoot.Deps[u].getPointer())
+                    ->getIRPosition()
+                    .getAssociatedValue()
              << "\n";
     llvm_unreachable("Expected the final number of abstract attributes to "
                      "remain unchanged!");
@@ -1088,6 +1140,7 @@ ChangeStatus Attributor::manifestAttributes() {
 }
 
 ChangeStatus Attributor::cleanupIR() {
+  TimeTraceScope TimeScope("Attributor::cleanupIR");
   // Delete stuff at the end to avoid invalid references and a nice order.
   LLVM_DEBUG(dbgs() << "\n[Attributor] Delete at least "
                     << ToBeDeletedFunctions.size() << " functions and "
@@ -1180,6 +1233,9 @@ ChangeStatus Attributor::cleanupIR() {
     }
   }
 
+  LLVM_DEBUG(dbgs() << "[Attributor] DeadInsts size: " << DeadInsts.size()
+                    << "\n");
+
   RecursivelyDeleteTriviallyDeadInstructions(DeadInsts);
 
   if (unsigned NumDeadBlocks = ToBeDeletedBlocks.size()) {
@@ -1238,6 +1294,9 @@ ChangeStatus Attributor::cleanupIR() {
 
   NumFnDeleted += ToBeDeletedFunctions.size();
 
+  LLVM_DEBUG(dbgs() << "[Attributor] Deleted " << NumFnDeleted
+                    << " functions after manifest.\n");
+
 #ifdef EXPENSIVE_CHECKS
   for (Function *F : Functions) {
     if (ToBeDeletedFunctions.count(F))
@@ -1250,13 +1309,29 @@ ChangeStatus Attributor::cleanupIR() {
 }
 
 ChangeStatus Attributor::run() {
+  TimeTraceScope TimeScope("Attributor::run");
+
+  SeedingPeriod = false;
   runTillFixpoint();
+
+  // dump graphs on demand
+  if (DumpDepGraph)
+    DG.dumpGraph();
+
+  if (ViewDepGraph)
+    DG.viewGraph();
+
+  if (PrintDependencies)
+    DG.print();
+
   ChangeStatus ManifestChange = manifestAttributes();
   ChangeStatus CleanupChange = cleanupIR();
   return ManifestChange | CleanupChange;
 }
 
 ChangeStatus Attributor::updateAA(AbstractAttribute &AA) {
+  TimeTraceScope TimeScope(AA.getName() + "::updateAA");
+
   // Use a new dependence vector for this update.
   DependenceVector DV;
   DependenceStack.push_back(&DV);
@@ -1345,6 +1420,52 @@ static void createShallowWrapper(Function &F) {
   ReturnInst::Create(Ctx, CI->getType()->isVoidTy() ? nullptr : CI, EntryBB);
 
   NumFnShallowWrapperCreated++;
+}
+
+/// Make another copy of the function \p F such that the copied version has
+/// internal linkage afterwards and can be analysed. Then we replace all uses
+/// of the original function to the copied one
+///
+/// Only non-exactly defined functions that have `linkonce_odr` or `weak_odr`
+/// linkage can be internalized because these linkages guarantee that other
+/// definitions with the same name have the same semantics as this one
+///
+static Function *internalizeFunction(Function &F) {
+  assert(AllowDeepWrapper && "Cannot create a copy if not allowed.");
+  assert(!F.isDeclaration() && !F.hasExactDefinition() &&
+         !GlobalValue::isInterposableLinkage(F.getLinkage()) &&
+         "Trying to internalize function which cannot be internalized.");
+
+  Module &M = *F.getParent();
+  FunctionType *FnTy = F.getFunctionType();
+
+  // create a copy of the current function
+  Function *Copied =
+      Function::Create(FnTy, GlobalValue::PrivateLinkage, F.getAddressSpace(),
+                       F.getName() + ".internalized");
+  ValueToValueMapTy VMap;
+  auto *NewFArgIt = Copied->arg_begin();
+  for (auto &Arg : F.args()) {
+    auto ArgName = Arg.getName();
+    NewFArgIt->setName(ArgName);
+    VMap[&Arg] = &(*NewFArgIt++);
+  }
+  SmallVector<ReturnInst *, 8> Returns;
+
+  // Copy the body of the original function to the new one
+  CloneFunctionInto(Copied, &F, VMap, /* ModuleLevelChanges */ false, Returns);
+
+  // Copy metadata
+  SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
+  F.getAllMetadata(MDs);
+  for (auto MDIt : MDs)
+    Copied->addMetadata(MDIt.first, *MDIt.second);
+
+  M.getFunctionList().insert(F.getIterator(), Copied);
+  F.replaceAllUsesWith(Copied);
+  Copied->setDSOLocal(true);
+
+  return Copied;
 }
 
 bool Attributor::isValidFunctionSignatureRewrite(
@@ -1444,6 +1565,12 @@ bool Attributor::registerFunctionSignatureRewrite(
                                         std::move(ACSRepairCB)));
 
   return true;
+}
+
+bool Attributor::shouldSeedAttribute(AbstractAttribute &AA) {
+  if (SeedAllowList.size() == 0)
+    return true;
+  return std::count(SeedAllowList.begin(), SeedAllowList.end(), AA.getName());
 }
 
 ChangeStatus Attributor::rewriteFunctionSignatures(
@@ -2007,9 +2134,45 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const AbstractAttribute &AA) {
   return OS;
 }
 
+raw_ostream &llvm::operator<<(raw_ostream &OS,
+                              const PotentialConstantIntValuesState &S) {
+  OS << "set-state(< {";
+  if (!S.isValidState())
+    OS << "full-set";
+  else
+    for (auto &it : S.getAssumedSet())
+      OS << it << ", ";
+  OS << "} >)";
+
+  return OS;
+}
+
 void AbstractAttribute::print(raw_ostream &OS) const {
-  OS << "[P: " << getIRPosition() << "][" << getAsStr() << "][S: " << getState()
-     << "]";
+  OS << "[";
+  OS << getName();
+  OS << "] for CtxI ";
+
+  if (auto *I = getCtxI()) {
+    OS << "'";
+    I->print(OS);
+    OS << "'";
+  } else
+    OS << "<<null inst>>";
+
+  OS << " at position " << getIRPosition() << " with state " << getAsStr()
+     << '\n';
+}
+
+void AbstractAttribute::printWithDeps(raw_ostream &OS) const {
+  print(OS);
+
+  for (const auto &DepAA : Deps) {
+    auto *AA = DepAA.getPointer();
+    OS << "  updates ";
+    AA->print(OS);
+  }
+
+  OS << '\n';
 }
 ///}
 
@@ -2037,6 +2200,30 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
       if (!A.isFunctionIPOAmendable(*F))
         createShallowWrapper(*F);
 
+  // Internalize non-exact functions
+  // TODO: for now we eagerly internalize functions without calculating the
+  //       cost, we need a cost interface to determine whether internalizing
+  //       a function is "benefitial"
+  if (AllowDeepWrapper) {
+    unsigned FunSize = Functions.size();
+    for (unsigned u = 0; u < FunSize; u++) {
+      Function *F = Functions[u];
+      if (!F->isDeclaration() && !F->isDefinitionExact() && F->getNumUses() &&
+          !GlobalValue::isInterposableLinkage(F->getLinkage())) {
+        Function *NewF = internalizeFunction(*F);
+        Functions.insert(NewF);
+
+        // Update call graph
+        CGUpdater.registerOutlinedFunction(*NewF);
+        for (const Use &U : NewF->uses())
+          if (CallBase *CB = dyn_cast<CallBase>(U.getUser())) {
+            auto *CallerF = CB->getCaller();
+            CGUpdater.reanalyzeFunction(*CallerF);
+          }
+      }
+    }
+  }
+
   for (Function *F : Functions) {
     if (F->hasExactDefinition())
       NumFnWithExactDefinition++;
@@ -2044,8 +2231,8 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
       NumFnWithoutExactDefinition++;
 
     // We look at internal functions only on-demand but if any use is not a
-    // direct call or outside the current set of analyzed functions, we have to
-    // do it eagerly.
+    // direct call or outside the current set of analyzed functions, we have
+    // to do it eagerly.
     if (F->hasLocalLinkage()) {
       if (llvm::all_of(F->uses(), [&Functions](const Use &U) {
             const auto *CB = dyn_cast<CallBase>(U.getUser());
@@ -2061,9 +2248,39 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
   }
 
   ChangeStatus Changed = A.run();
+
   LLVM_DEBUG(dbgs() << "[Attributor] Done with " << Functions.size()
                     << " functions, result: " << Changed << ".\n");
   return Changed == ChangeStatus::CHANGED;
+}
+
+void AADepGraph::viewGraph() { llvm::ViewGraph(this, "Dependency Graph"); }
+
+void AADepGraph::dumpGraph() {
+  static std::atomic<int> CallTimes;
+  std::string Prefix;
+
+  if (!DepGraphDotFileNamePrefix.empty())
+    Prefix = DepGraphDotFileNamePrefix;
+  else
+    Prefix = "dep_graph";
+  std::string Filename =
+      Prefix + "_" + std::to_string(CallTimes.load()) + ".dot";
+
+  outs() << "Dependency graph dump to " << Filename << ".\n";
+
+  std::error_code EC;
+
+  raw_fd_ostream File(Filename, EC, sys::fs::OF_Text);
+  if (!EC)
+    llvm::WriteGraph(File, this);
+
+  CallTimes++;
+}
+
+void AADepGraph::print() {
+  for (auto DepAA : SyntheticRoot.Deps)
+    cast<AbstractAttribute>(DepAA.getPointer())->printWithDeps(outs());
 }
 
 PreservedAnalyses AttributorPass::run(Module &M, ModuleAnalysisManager &AM) {
@@ -2111,6 +2328,51 @@ PreservedAnalyses AttributorCGSCCPass::run(LazyCallGraph::SCC &C,
   }
   return PreservedAnalyses::all();
 }
+
+namespace llvm {
+
+template <> struct GraphTraits<AADepGraphNode *> {
+  using NodeRef = AADepGraphNode *;
+  using DepTy = PointerIntPair<AADepGraphNode *, 1>;
+  using EdgeRef = PointerIntPair<AADepGraphNode *, 1>;
+
+  static NodeRef getEntryNode(AADepGraphNode *DGN) { return DGN; }
+  static NodeRef DepGetVal(DepTy &DT) { return DT.getPointer(); }
+
+  using ChildIteratorType =
+      mapped_iterator<TinyPtrVector<DepTy>::iterator, decltype(&DepGetVal)>;
+  using ChildEdgeIteratorType = TinyPtrVector<DepTy>::iterator;
+
+  static ChildIteratorType child_begin(NodeRef N) { return N->child_begin(); }
+
+  static ChildIteratorType child_end(NodeRef N) { return N->child_end(); }
+};
+
+template <>
+struct GraphTraits<AADepGraph *> : public GraphTraits<AADepGraphNode *> {
+  static NodeRef getEntryNode(AADepGraph *DG) { return DG->GetEntryNode(); }
+
+  using nodes_iterator =
+      mapped_iterator<TinyPtrVector<DepTy>::iterator, decltype(&DepGetVal)>;
+
+  static nodes_iterator nodes_begin(AADepGraph *DG) { return DG->begin(); }
+
+  static nodes_iterator nodes_end(AADepGraph *DG) { return DG->end(); }
+};
+
+template <> struct DOTGraphTraits<AADepGraph *> : public DefaultDOTGraphTraits {
+  DOTGraphTraits(bool isSimple = false) : DefaultDOTGraphTraits(isSimple) {}
+
+  static std::string getNodeLabel(const AADepGraphNode *Node,
+                                  const AADepGraph *DG) {
+    std::string AAString = "";
+    raw_string_ostream O(AAString);
+    Node->print(O);
+    return AAString;
+  }
+};
+
+} // end namespace llvm
 
 namespace {
 

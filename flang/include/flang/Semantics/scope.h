@@ -87,6 +87,7 @@ public:
   bool IsModule() const; // only module, not submodule
   bool IsSubmodule() const;
   bool IsDerivedType() const { return kind_ == Kind::DerivedType; }
+  bool IsStmtFunction() const;
   bool IsParameterizedDerivedType() const;
   Symbol *symbol() { return symbol_; }
   const Symbol *symbol() const { return symbol_; }
@@ -265,8 +266,9 @@ private:
 // Inline so that it can be called from Evaluate without a link-time dependency.
 
 inline const Symbol *Scope::GetSymbol() const {
-  return symbol_ ? symbol_
-                 : derivedTypeSpec_ ? &derivedTypeSpec_->typeSymbol() : nullptr;
+  return symbol_         ? symbol_
+      : derivedTypeSpec_ ? &derivedTypeSpec_->typeSymbol()
+                         : nullptr;
 }
 
 } // namespace Fortran::semantics

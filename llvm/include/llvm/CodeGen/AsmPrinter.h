@@ -126,6 +126,14 @@ public:
   /// default, this is equal to CurrentFnSym.
   MCSymbol *CurrentFnSymForSize = nullptr;
 
+  /// Map a basic block section ID to the begin and end symbols of that section
+  ///  which determine the section's range.
+  struct MBBSectionRange {
+    MCSymbol *BeginLabel, *EndLabel;
+  };
+
+  MapVector<unsigned, MBBSectionRange> MBBSectionRanges;
+
   /// Map global GOT equivalent MCSymbols to GlobalVariables and keep track of
   /// its number of uses by other globals.
   using GOTEquivUsePair = std::pair<const GlobalVariable *, unsigned>;
@@ -360,6 +368,32 @@ public:
   /// Check to see if the specified global is a special global used by LLVM. If
   /// so, emit it and return true, otherwise do nothing and return false.
   bool emitSpecialLLVMGlobal(const GlobalVariable *GV);
+
+  /// `llvm.global_ctors` and `llvm.global_dtors` are arrays of Structor
+  /// structs.
+  ///
+  /// Priority - init priority
+  /// Func - global initialization or global clean-up function
+  /// ComdatKey - associated data
+  struct Structor {
+    int Priority = 0;
+    Constant *Func = nullptr;
+    GlobalValue *ComdatKey = nullptr;
+
+    Structor() = default;
+  };
+
+  /// This method gathers an array of Structors and then sorts them out by
+  /// Priority.
+  /// @param List The initializer of `llvm.global_ctors` or `llvm.global_dtors`
+  /// array.
+  /// @param[out] Structors Sorted Structor structs by Priority.
+  void preprocessXXStructorList(const DataLayout &DL, const Constant *List,
+                                SmallVector<Structor, 8> &Structors);
+
+  /// This method emits `llvm.global_ctors` or `llvm.global_dtors` list.
+  virtual void emitXXStructorList(const DataLayout &DL, const Constant *List,
+                                  bool IsCtor);
 
   /// Emit an alignment directive to the specified power of two boundary. If a
   /// global value is specified, and if that global has an explicit alignment
@@ -705,8 +739,6 @@ private:
   void emitModuleIdents(Module &M);
   /// Emit bytes for llvm.commandline metadata.
   void emitModuleCommandLines(Module &M);
-  void emitXXStructorList(const DataLayout &DL, const Constant *List,
-                          bool isCtor);
 
   GCMetadataPrinter *GetOrCreateGCPrinter(GCStrategy &S);
   /// Emit GlobalAlias or GlobalIFunc.

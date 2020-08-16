@@ -57,11 +57,11 @@ struct GPUShuffleOpLowering : public ConvertToLLVMPattern {
     Location loc = op->getLoc();
     gpu::ShuffleOpAdaptor adaptor(operands);
 
-    auto dialect = typeConverter.getDialect();
     auto valueTy = adaptor.value().getType().cast<LLVM::LLVMType>();
-    auto int32Type = LLVM::LLVMType::getInt32Ty(dialect);
-    auto predTy = LLVM::LLVMType::getInt1Ty(dialect);
-    auto resultTy = LLVM::LLVMType::getStructTy(dialect, {valueTy, predTy});
+    auto int32Type = LLVM::LLVMType::getInt32Ty(rewriter.getContext());
+    auto predTy = LLVM::LLVMType::getInt1Ty(rewriter.getContext());
+    auto resultTy =
+        LLVM::LLVMType::getStructTy(rewriter.getContext(), {valueTy, predTy});
 
     Value one = rewriter.create<LLVM::ConstantOp>(
         loc, int32Type, rewriter.getI32IntegerAttr(1));
@@ -140,7 +140,7 @@ struct LowerGpuOpsToNVVMOpsPass
                         LLVM::LogOp, LLVM::Log10Op, LLVM::Log2Op>();
     target.addIllegalOp<FuncOp>();
     target.addLegalDialect<NVVM::NVVMDialect>();
-    // TODO(csigg): Remove once we support replacing non-root ops.
+    // TODO: Remove once we support replacing non-root ops.
     target.addLegalOp<gpu::YieldOp, gpu::GPUModuleOp, gpu::ModuleEndOp>();
     if (failed(applyPartialConversion(m, target, patterns)))
       signalPassFailure();

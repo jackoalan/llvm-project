@@ -384,8 +384,10 @@ namespace llvm {
     /// Vector comparison generating mask bits for fp and
     /// integer signed and unsigned data types.
     CMPM,
-    // Vector comparison with SAE for FP values
-    CMPM_SAE,
+    // Vector mask comparison generating mask bits for FP values.
+    CMPMM,
+    // Vector mask comparison with SAE for FP values.
+    CMPMM_SAE,
 
     // Arithmetic operations with FLAGS results.
     ADD,
@@ -1116,7 +1118,8 @@ namespace llvm {
     }
 
     /// Handle Lowering flag assembly outputs.
-    SDValue LowerAsmOutputForConstraint(SDValue &Chain, SDValue &Flag, SDLoc DL,
+    SDValue LowerAsmOutputForConstraint(SDValue &Chain, SDValue &Flag,
+                                        const SDLoc &DL,
                                         const AsmOperandInfo &Constraint,
                                         SelectionDAG &DAG) const override;
 
@@ -1349,8 +1352,6 @@ namespace llvm {
                                           Align Alignment,
                                           SelectionDAG &DAG) const;
 
-    bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
-
     /// Customize the preferred legalization strategy for certain types.
     LegalizeTypeAction getPreferredVectorAction(MVT VT) const override;
 
@@ -1436,7 +1437,7 @@ namespace llvm {
     SDValue LowerMemOpCallTo(SDValue Chain, SDValue StackPtr, SDValue Arg,
                              const SDLoc &dl, SelectionDAG &DAG,
                              const CCValAssign &VA,
-                             ISD::ArgFlagsTy Flags) const;
+                             ISD::ArgFlagsTy Flags, bool isByval) const;
 
     // Call lowering helpers.
 

@@ -605,9 +605,10 @@ private:
         if (safeToHoistScalar(BB, Insn->getParent(), NumBBsOnAllPaths))
           Safe.push_back(CHI);
       } else {
-        MemoryUseOrDef *UD = MSSA->getMemoryAccess(Insn);
-        if (safeToHoistLdSt(BB->getTerminator(), Insn, UD, K, NumBBsOnAllPaths))
-          Safe.push_back(CHI);
+        auto *T = BB->getTerminator();
+        if (MemoryUseOrDef *UD = MSSA->getMemoryAccess(Insn))
+          if (safeToHoistLdSt(T, Insn, UD, K, NumBBsOnAllPaths))
+            Safe.push_back(CHI);
       }
     }
   }
