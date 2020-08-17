@@ -20,7 +20,10 @@ class MetalCompilerRunner {
   llvm::ErrorOr<std::string> MetalPath;
 #else
   llvm::ErrorOr<std::string> WinePath;
+  llvm::ErrorOr<std::string> WinePathPath;
   llvm::ErrorOr<std::string> MetalPath;
+  bool ReadDefaultRegKey(StringRef KeyPathIn, std::string &ValueOut) const;
+  bool WineToHostPath(StringRef WinePathIn, std::string &HostPathOut) const;
 #endif
 
 public:

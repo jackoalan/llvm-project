@@ -62,7 +62,9 @@ StringRef GetTargetSDKPath(HshTarget Target) {
 } // namespace
 
 #ifdef __APPLE__
-MetalCompilerRunner::MetalCompilerRunner(DiagnosticsEngine &Diags)
+
+MetalCompilerRunner::MetalCompilerRunner(HshTarget Target,
+                                         DiagnosticsEngine &Diags)
     : XCRunPath(llvm::sys::findProgramByName("xcrun")),
       TargetSDK(GetTargetSDK(Target)) {
   if (!XCRunPath)
@@ -70,12 +72,15 @@ MetalCompilerRunner::MetalCompilerRunner(DiagnosticsEngine &Diags)
                  Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                        "Unable to find xcrun"));
 }
+
 template <typename... Args> int MetalCompilerRunner::Run(Args... A) const {
   return llvm::sys::ExecuteAndWait(
       *XCRunPath, {*XCRunPath, "-sdk", TargetSDK, "metal", A...});
 }
+
 #elif defined(_WIN32)
-static bool readFullStringValue(HKEY hkey, const wchar_t *valueName,
+
+static bool ReadFullStringValue(HKEY hkey, const wchar_t *valueName,
                                 std::string &value) {
   DWORD result = 0;
   DWORD valueSize = 0;
@@ -101,6 +106,7 @@ static bool readFullStringValue(HKEY hkey, const wchar_t *valueName,
   }
   return false;
 }
+
 MetalCompilerRunner::MetalCompilerRunner(HshTarget Target,
                                          DiagnosticsEngine &Diags)
     : MetalPath(llvm::errc::no_such_file_or_directory) {
@@ -110,7 +116,7 @@ MetalCompilerRunner::MetalCompilerRunner(HshTarget Target,
                                   KEY_READ | KEY_WOW64_32KEY, &hTopKey);
   if (lResult == ERROR_SUCCESS) {
     std::string Path;
-    if (readFullStringValue(hTopKey, nullptr, Path)) {
+    if (ReadFullStringValue(hTopKey, nullptr, Path)) {
       Path += GetTargetSDKPath(Target);
       MetalPath = llvm::sys::findProgramByName("metal", {Path});
     }
@@ -125,22 +131,103 @@ MetalCompilerRunner::MetalCompilerRunner(HshTarget Target,
 template <typename... Args> int MetalCompilerRunner::Run(Args... A) const {
   return llvm::sys::ExecuteAndWait(*MetalPath, {*MetalPath, A...});
 }
+
 #else
-MetalCompilerRunner::MetalCompilerRunner(DiagnosticsEngine &Diags)
+
+bool MetalCompilerRunner::ReadDefaultRegKey(StringRef KeyPathIn,
+                                            std::string &ValueOut) const {
+  SmallString<128> OutputFile;
+  llvm::sys::fs::createTemporaryFile("reg-metal-output", "", OutputFile);
+  llvm::FileRemover OutputRemover(OutputFile.c_str());
+
+  Optional<StringRef> Redirects[] = {StringRef(""), StringRef(OutputFile),
+                                     StringRef("")};
+
+  if (llvm::sys::ExecuteAndWait(
+          *WinePath, {*WinePath, "reg", "query", KeyPathIn}, None, Redirects))
+    return false;
+
+  if (auto OutputBuf = llvm::MemoryBuffer::getFile(OutputFile.c_str())) {
+    StringRef OutStr((*OutputBuf)->getBufferStart(),
+                     (*OutputBuf)->getBufferSize());
+#define DEFAULT_KEY_PATTERN "(Default)    REG_SZ    "
+    size_t StartPos = OutStr.find(DEFAULT_KEY_PATTERN);
+    if (StartPos != StringRef::npos) {
+      StartPos += std::strlen(DEFAULT_KEY_PATTERN);
+      size_t EndPos = OutStr.find('\r', StartPos);
+      if (EndPos != StringRef::npos) {
+        ValueOut.assign(OutStr.begin() + StartPos, OutStr.begin() + EndPos);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool MetalCompilerRunner::WineToHostPath(StringRef WinePathIn,
+                                         std::string &HostPathOut) const {
+  SmallString<128> OutputFile;
+  llvm::sys::fs::createTemporaryFile("withpath-output", "", OutputFile);
+  llvm::FileRemover OutputRemover(OutputFile.c_str());
+
+  Optional<StringRef> Redirects[] = {StringRef(""), StringRef(OutputFile),
+                                     StringRef("")};
+
+  if (llvm::sys::ExecuteAndWait(*WinePathPath, {*WinePathPath, WinePathIn},
+                                None, Redirects))
+    return false;
+
+  if (auto OutputBuf = llvm::MemoryBuffer::getFile(OutputFile.c_str())) {
+    StringRef OutStr((*OutputBuf)->getBufferStart(),
+                     (*OutputBuf)->getBufferSize());
+    size_t EndPos = OutStr.find('\n');
+    if (EndPos != StringRef::npos) {
+      HostPathOut.assign(OutStr.begin(), OutStr.begin() + EndPos);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+MetalCompilerRunner::MetalCompilerRunner(HshTarget Target,
+                                         DiagnosticsEngine &Diags)
     : WinePath(llvm::sys::findProgramByName("wine")),
+      WinePathPath(llvm::sys::findProgramByName("winepath")),
       MetalPath(llvm::errc::no_such_file_or_directory) {
   if (!WinePath) {
+    Diags.Report(
+        SourceLocation(),
+        Diags.getCustomDiagID(DiagnosticsEngine::Error, "Unable to find wine"));
+    return;
+  }
+  if (!WinePathPath) {
     Diags.Report(SourceLocation(),
                  Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                       "Unable to find wine"));
+                                       "Unable to find winepath"));
     return;
   }
 
-  // reg query "HKLM\SOFTWARE\Apple\Metal Developer Tools" /reg:32
+  std::string Path;
+  if (ReadDefaultRegKey("HKLM\\SOFTWARE\\Apple\\Metal Developer Tools", Path)) {
+    std::string HostPath;
+    if (WineToHostPath(Path, HostPath)) {
+      HostPath += GetTargetSDKPath(Target);
+      MetalPath = llvm::sys::findProgramByName("metal.exe", {HostPath});
+    }
+  }
+
+  if (!MetalPath)
+    Diags.Report(SourceLocation(),
+                 Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                       "Unable to find metal compiler"));
 }
+
 template <typename... Args> int MetalCompilerRunner::Run(Args... A) const {
-  return 1;
+  return llvm::sys::ExecuteAndWait(*WinePath, {*WinePath, *MetalPath, A...});
 }
+
 #endif
 
 MetalStageCompiler::MetalStageCompiler(HshTarget Target, bool DebugInfo,

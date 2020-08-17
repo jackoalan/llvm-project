@@ -78,22 +78,20 @@ struct WsiConnection {
     }
   }
 
+  void dispatchLatestEvents() {
+    MSG Msg;
+    while (PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE))
+      _handleMsg(Msg);
+  }
+
   void runloop(const std::function<bool()> &IdleFunc) {
     while (Running) {
-      MSG Msg;
-      while (PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE))
-        _handleMsg(Msg);
+      dispatchLatestEvents();
       if (!IdleFunc()) {
         Running = false;
         break;
       }
     }
-  }
-
-  void dispatchLatestEvents() {
-    MSG Msg;
-    while (PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE))
-      _handleMsg(Msg);
   }
 };
 
@@ -262,20 +260,20 @@ struct WsiConnection {
   }
   static void _idle(WsiConnection *Self) { Self->idle(); }
 
-  void runloop(const std::function<bool()> &IdleFunc) {
-    IdleFuncPtr = &IdleFunc;
-    dispatch_async_f(dispatch_get_main_queue(), this,
-                     dispatch_function_t(_idle));
-    [App run];
-    IdleFuncPtr = nullptr;
-  }
-
   void dispatchLatestEvents() {
     while (NSEvent *Event = [App nextEventMatchingMask:NSEventMaskAny
                                              untilDate:nullptr
                                                 inMode:NSDefaultRunLoopMode
                                                dequeue:YES])
       [App sendEvent:Event];
+  }
+
+  void runloop(const std::function<bool()> &IdleFunc) {
+    IdleFuncPtr = &IdleFunc;
+    dispatch_async_f(dispatch_get_main_queue(), this,
+                     dispatch_function_t(_idle));
+    [App run];
+    IdleFuncPtr = nullptr;
   }
 };
 
@@ -319,6 +317,7 @@ struct WsiWindow {
 struct WsiConnection {
   xcb_connection_t *Connection;
   xcb_atom_t wmDeleteWin, wmProtocols;
+  bool Running = true;
 
   operator xcb_connection_t *() const { return Connection; }
 
@@ -342,30 +341,35 @@ struct WsiConnection {
 
   WsiWindow makeWindow() { return WsiWindow(*this); }
 
-  void runloop(const std::function<bool()> &IdleFunc) {
-    bool Running = true;
-    while (Running) {
-      xcb_generic_event_t *event = xcb_poll_for_event(Connection);
-      if (!event) {
-        if (!IdleFunc())
-          break;
-        continue;
-      }
+  void _handleEvent(xcb_generic_event_t* event) {
+    switch (event->response_type & ~0x80u) {
+    case XCB_CLIENT_MESSAGE: {
+      auto *cm = (xcb_client_message_event_t *)event;
 
-      switch (event->response_type & ~0x80u) {
-      case XCB_CLIENT_MESSAGE: {
-        auto *cm = (xcb_client_message_event_t *)event;
+      if (cm->data.data32[0] == wmDeleteWin)
+        Running = false;
 
-        if (cm->data.data32[0] == wmDeleteWin)
-          Running = false;
+      break;
+    }
+    default:
+      break;
+    }
+  }
 
-        break;
-      }
-      default:
-        break;
-      }
-
+  void dispatchLatestEvents() {
+    while (xcb_generic_event_t *event = xcb_poll_for_event(Connection)) {
+      _handleEvent(event);
       free(event);
+    }
+  }
+
+  void runloop(const std::function<bool()> &IdleFunc) {
+    while (Running) {
+      dispatchLatestEvents();
+      if (!IdleFunc()) {
+        Running = false;
+        break;
+      }
     }
   }
 };
