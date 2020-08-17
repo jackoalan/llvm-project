@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sstream>
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/mman.h>

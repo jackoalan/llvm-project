@@ -110,7 +110,9 @@ public:
 class FifoBufferAllocation : public BufferAllocation {
   FifoBufferAllocation *Prev = nullptr, *Next = nullptr;
   void *MappedData;
+#ifndef NDEBUG
   uint32_t Size;
+#endif
   uint32_t Offset = 0;
   uint32_t StartOffset = 0;
   friend std::unique_ptr<FifoBufferAllocation>
@@ -1069,7 +1071,12 @@ FifoBufferAllocation::FifoBufferAllocation(vk::Buffer BufferIn,
                                            vk::DeviceSize Size,
                                            void *MappedData) noexcept
     : BufferAllocation(BufferIn, AllocationIn), Next(Globals.FifoBufferHead),
-      MappedData(MappedData), Size(Size) {
+      MappedData(MappedData)
+#ifndef NDEBUG
+      ,
+      Size(Size)
+#endif
+{
   Globals.FifoBufferHead = this;
   if (Next)
     Next->Prev = this;

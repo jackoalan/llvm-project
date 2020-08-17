@@ -4,6 +4,7 @@
 
 #define VK_NO_PROTOTYPES
 #define VULKAN_HPP_NO_EXCEPTIONS
+#define VULKAN_HPP_NO_NODISCARD_WARNINGS
 #include <vulkan/vulkan.hpp>
 
 #ifdef HSH_IMPLEMENTATION
