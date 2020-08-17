@@ -66,7 +66,7 @@ struct WsiConnection {
 
   WsiWindow makeWindow() { return WsiWindow(*this); }
 
-  void _handleMsg(const MSG& Msg) {
+  void _handleMsg(const MSG &Msg) {
     switch (Msg.message) {
     case WM_QUIT:
       Running = false;
@@ -96,9 +96,12 @@ struct WsiConnection {
 };
 
 WsiWindow::WsiWindow(WsiConnection &Connection) : Connection(Connection) {
+  RECT Rect{0, 0, 512, 512};
+  AdjustWindowRect(&Rect, WS_OVERLAPPEDWINDOW, false);
   Window = CreateWindow(TEXT("TestappWndClass"), TEXT("HSH Test App"),
-                        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 512,
-                        512, (HWND) nullptr, (HMENU) nullptr, Connection,
+                        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                        Rect.right - Rect.left, Rect.bottom - Rect.top,
+                        (HWND) nullptr, (HMENU) nullptr, Connection,
                         (LPVOID) nullptr);
   ShowWindow(Window, SW_SHOW);
 }
@@ -341,7 +344,7 @@ struct WsiConnection {
 
   WsiWindow makeWindow() { return WsiWindow(*this); }
 
-  void _handleEvent(xcb_generic_event_t* event) {
+  void _handleEvent(xcb_generic_event_t *event) {
     switch (event->response_type & ~0x80u) {
     case XCB_CLIENT_MESSAGE: {
       auto *cm = (xcb_client_message_event_t *)event;
