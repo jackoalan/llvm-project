@@ -30,6 +30,7 @@ struct WsiWindow {
 
 struct WsiConnection {
   HINSTANCE Instance;
+  bool Running = true;
 
   operator HINSTANCE() const { return Instance; }
 
@@ -65,26 +66,34 @@ struct WsiConnection {
 
   WsiWindow makeWindow() { return WsiWindow(*this); }
 
+  void _handleMsg(const MSG& Msg) {
+    switch (Msg.message) {
+    case WM_QUIT:
+      Running = false;
+      break;
+    default:
+      TranslateMessage(&Msg);
+      DispatchMessage(&Msg);
+      break;
+    }
+  }
+
   void runloop(const std::function<bool()> &IdleFunc) {
-    bool Running = true;
     while (Running) {
       MSG Msg;
-      if (!PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE)) {
-        if (!IdleFunc())
-          break;
-        continue;
-      }
-
-      switch (Msg.message) {
-      case WM_QUIT:
+      while (PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE))
+        _handleMsg(Msg);
+      if (!IdleFunc()) {
         Running = false;
-        break;
-      default:
-        TranslateMessage(&Msg);
-        DispatchMessage(&Msg);
         break;
       }
     }
+  }
+
+  void dispatchLatestEvents() {
+    MSG Msg;
+    while (PeekMessage(&Msg, nullptr, 0, 0, PM_REMOVE))
+      _handleMsg(Msg);
   }
 };
 

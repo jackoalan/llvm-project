@@ -12,11 +12,26 @@
 
 namespace clang::hshgen {
 
+class MetalCompilerRunner {
+#ifdef __APPLE__
+  llvm::ErrorOr<std::string> XCRunPath;
+  StringRef TargetSDK;
+#elif defined(_WIN32)
+  llvm::ErrorOr<std::string> MetalPath;
+#else
+  llvm::ErrorOr<std::string> WinePath;
+  llvm::ErrorOr<std::string> MetalPath;
+#endif
+
+public:
+  MetalCompilerRunner(HshTarget Target, DiagnosticsEngine &Diags);
+  template <typename... Args> int Run(Args... A) const;
+};
+
 class MetalStageCompiler : public StageCompiler {
   CompilerInstance &CI;
   DiagnosticsEngine &Diags;
-  llvm::ErrorOr<std::string> XCRunPath;
-  StringRef TargetSDK;
+  MetalCompilerRunner Runner;
   bool DebugInfo;
 
 public:
