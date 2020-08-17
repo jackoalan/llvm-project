@@ -78,8 +78,8 @@ bool MetalPrintingPolicy::overrideCXXOperatorCall(
           if (Builtins.identifyBuiltinPipelineField(FD) == HPF_color_out) {
             /* Remove subscripts from color out field */
             ExprArg(C->getArg(0));
-            APSInt Result;
-            if (C->getArg(1)->isIntegerConstantExpr(Result, Context)) {
+            if (Optional<APSInt> Result =
+                    C->getArg(1)->getIntegerConstantExpr(Context)) {
               OS << Result;
               return true;
             } else {

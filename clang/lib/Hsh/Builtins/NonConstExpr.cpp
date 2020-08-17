@@ -22,13 +22,14 @@ bool CheckConstexprTemplateSpecialization(
                                                   NonConstExprs, Position);
       break;
     case TemplateArgument::Expression: {
-      llvm::APSInt Value;
-      if (!Arg.getAsExpr()->isIntegerConstantExpr(Value, Context)) {
+      Optional<llvm::APSInt> Value =
+          Arg.getAsExpr()->getIntegerConstantExpr(Context);
+      if (!Value) {
         Ret = false;
         if (NonConstExprs)
           NonConstExprs->emplace_back(Arg.getAsExpr(), Position);
       } else if (NonConstExprs) {
-        NonConstExprs->emplace_back(Value, Arg.getAsExpr()->getType());
+        NonConstExprs->emplace_back(*Value, Arg.getAsExpr()->getType());
       }
       break;
     }

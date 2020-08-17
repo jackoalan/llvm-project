@@ -260,6 +260,14 @@ struct WsiConnection {
     [App run];
     IdleFuncPtr = nullptr;
   }
+
+  void dispatchLatestEvents() {
+    while (NSEvent *Event = [App nextEventMatchingMask:NSEventMaskAny
+                                             untilDate:nullptr
+                                                inMode:NSDefaultRunLoopMode
+                                               dequeue:YES])
+      [App sendEvent:Event];
+  }
 };
 
 WsiWindow::WsiWindow(WsiConnection &Connection) : Connection(Connection) {
@@ -544,6 +552,7 @@ int main(int argc, char **argv) {
         VFifo = hsh::create_vertex_fifo(sizeof(MyNS::MyFormat) * 3 * 2);
 
       if (Surface.acquire_next_image()) {
+        Connection.dispatchLatestEvents();
         RenderTexture.attach();
         hsh::clear_attachments();
 

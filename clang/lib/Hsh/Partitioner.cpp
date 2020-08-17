@@ -805,14 +805,14 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
   }
 
   Expr *InterStageReferenceExpr(Expr *E, HshStage ToStage) {
-    llvm::APSInt ConstVal;
-    if (E->isIntegerConstantExpr(ConstVal, Partitioner.Context)) {
+    if (Optional<llvm::APSInt> ConstVal =
+            E->getIntegerConstantExpr(Partitioner.Context)) {
       if (E->isKnownToHaveBooleanValue()) {
         return new (Partitioner.Context)
             CXXBoolLiteralExpr(!!ConstVal, Partitioner.Context.BoolTy, {});
       } else {
         return IntegerLiteral::Create(Partitioner.Context,
-                                      ConstVal.extOrTrunc(32),
+                                      ConstVal->extOrTrunc(32),
                                       Partitioner.Context.IntTy, {});
       }
     }
@@ -979,7 +979,7 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
           }
           return CallExpr::Create(Partitioner.Context, CallExpr->getCallee(),
                                   *Arguments, CallExpr->getType(), VK_XValue,
-                                  {});
+                                  {}, {});
         }
       }
     }
@@ -1021,14 +1021,14 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
                                       CallExpr->getArg(2)};
         auto *NMCE = CXXMemberCallExpr::Create(
             Partitioner.Context, CallExpr->getCallee(), NewArgs,
-            CallExpr->getType(), VK_XValue, {});
+            CallExpr->getType(), VK_XValue, {}, {});
         Builder.registerSampleCall(Method, NMCE, Stage);
         return NMCE;
       } else {
         std::array<Expr *, 2> NewArgs{cast<Expr>(UVStmt), CallExpr->getArg(1)};
         auto *NMCE = CXXMemberCallExpr::Create(
             Partitioner.Context, CallExpr->getCallee(), NewArgs,
-            CallExpr->getType(), VK_XValue, {});
+            CallExpr->getType(), VK_XValue, {}, {});
         Builder.registerSampleCall(Method, NMCE, Stage);
         return NMCE;
       }
@@ -1232,14 +1232,14 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
     if (hasErrorOccurred())
       return nullptr;
     return IfStmt::Create(Partitioner.Context, {}, S->isConstexpr(), NewInit,
-                          S->getConditionVariable(), NewCond, NewThen,
-                          SourceLocation{}, NewElse);
+                          S->getConditionVariable(), NewCond, {}, {}, NewThen,
+                          {}, NewElse);
   }
 
   Stmt *VisitConditionalOperator(ConditionalOperator *S, HshStage Stage) {
     if (auto *Cond = S->getCond()) {
-      llvm::APSInt ConstVal;
-      if (Cond->isIntegerConstantExpr(ConstVal, Partitioner.Context)) {
+      if (Optional<llvm::APSInt> ConstVal =
+              Cond->getIntegerConstantExpr(Partitioner.Context)) {
         dumper() << "Constant Cond ";
         dumper() << S->getCond();
         if (!!ConstVal) {
@@ -1339,8 +1339,9 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
       NewBody = DoVisit(Body, Stage);
     if (hasErrorOccurred())
       return nullptr;
-    auto *NewSwitch = SwitchStmt::Create(Partitioner.Context, nullptr,
-                                         S->getConditionVariable(), NewCond);
+    auto *NewSwitch =
+        SwitchStmt::Create(Partitioner.Context, nullptr,
+                           S->getConditionVariable(), NewCond, {}, {});
     NewSwitch->setBody(NewBody);
     return NewSwitch;
   }
@@ -1359,7 +1360,7 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
     if (hasErrorOccurred())
       return nullptr;
     return WhileStmt::Create(Partitioner.Context, S->getConditionVariable(),
-                             NewCond, NewBody, {});
+                             NewCond, NewBody, {}, {}, {});
   }
 
   Stmt *VisitCompoundStmt(CompoundStmt *S, HshStage Stage) {

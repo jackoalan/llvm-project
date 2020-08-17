@@ -27,7 +27,7 @@ endif()
 ExternalProject_Add(
         DirectXShaderCompiler
         GIT_REPOSITORY https://github.com/microsoft/DirectXShaderCompiler
-        GIT_TAG 73c0d97f0dff11cbfac30b0d0f94bed8feff7e51
+        GIT_TAG 0fb58c61adfb96427f6c58860b83d52fc16443c4
         BUILD_COMMAND "${CMAKE_COMMAND}" --build . --target dxcompiler
         INSTALL_COMMAND
         "${CMAKE_COMMAND}" -E make_directory "${CLANG_BINARY_DIR}/include/dxc/"
@@ -45,6 +45,7 @@ ExternalProject_Add(
         -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER:STRING=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:STRING=${CMAKE_CXX_COMPILER}
+        -DSPIRV_WERROR:STRING=Off
         -DENABLE_SPIRV_CODEGEN:STRING=On
         -DLLVM_TARGETS_TO_BUILD:STRING=None
         -DDXC_BUILD_ARCH:STRING=x64

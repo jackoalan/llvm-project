@@ -875,7 +875,7 @@ CXXMemberCallExpr *HshBuiltins::makeSpecializedRebindCall(
           false, SourceLocation{}, {}, SourceLocation{}, Method,
           DeclAccessPair::make(Method, AS_public), {}, &TemplateArgs,
           Method->getType(), VK_XValue, OK_Ordinary, NOUR_None),
-      CallExprs, Context.VoidTy, VK_XValue, {});
+      CallExprs, Context.VoidTy, VK_XValue, {}, {});
 }
 
 bool HshBuiltins::isDerivedFromPipelineDecl(CXXRecordDecl *Decl) const {
