@@ -3,5 +3,8 @@
 include("${CMAKE_CURRENT_LIST_DIR}/hshTargets.cmake")
 check_required_components(hsh)
 
+# hshHelpers may make recursive find_package calls; this avoids mismatched name warnings
+unset(CMAKE_FIND_PACKAGE_NAME)
+
 set(HSH_INCLUDE_DIR "${PACKAGE_PREFIX_DIR}/include")
 include("${CMAKE_CURRENT_LIST_DIR}/hshHelpers.cmake")
