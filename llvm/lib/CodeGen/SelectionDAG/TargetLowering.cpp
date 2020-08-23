@@ -6156,6 +6156,18 @@ bool TargetLowering::expandFunnelShift(SDNode *Node, SDValue &Result,
 
   EVT ShVT = Z.getValueType();
 
+  assert(isPowerOf2_32(BW) && "Expecting the type bitwidth to be a power of 2");
+
+  // If a funnel shift in the other direction is more supported, use it.
+  unsigned RevOpcode = IsFSHL ? ISD::FSHR : ISD::FSHL;
+  if (!isOperationLegalOrCustom(Node->getOpcode(), VT) &&
+      isOperationLegalOrCustom(RevOpcode, VT)) {
+    SDValue Zero = DAG.getConstant(0, DL, ShVT);
+    SDValue Sub = DAG.getNode(ISD::SUB, DL, ShVT, Zero, Z);
+    Result = DAG.getNode(RevOpcode, DL, VT, X, Y, Sub);
+    return true;
+  }
+
   SDValue ShX, ShY;
   SDValue ShAmt, InvShAmt;
   if (isNonZeroModBitWidth(Z, BW)) {
@@ -6724,6 +6736,9 @@ TargetLowering::scalarizeVectorLoad(LoadSDNode *LD,
   EVT DstVT = LD->getValueType(0);
   ISD::LoadExtType ExtType = LD->getExtensionType();
 
+  if (SrcVT.isScalableVector())
+    report_fatal_error("Cannot scalarize scalable vector loads");
+
   unsigned NumElem = SrcVT.getVectorNumElements();
 
   EVT SrcEltVT = SrcVT.getScalarType();
@@ -6810,6 +6825,9 @@ SDValue TargetLowering::scalarizeVectorStore(StoreSDNode *ST,
   SDValue BasePtr = ST->getBasePtr();
   SDValue Value = ST->getValue();
   EVT StVT = ST->getMemoryVT();
+
+  if (StVT.isScalableVector())
+    report_fatal_error("Cannot scalarize scalable vector stores");
 
   // The type of the data we want to save
   EVT RegVT = Value.getValueType();
@@ -7328,6 +7346,7 @@ SDValue TargetLowering::expandAddSubSat(SDNode *Node, SelectionDAG &DAG) const {
     return DAG.getNode(ISD::SUB, dl, VT, Max, RHS);
   }
 
+  // uadd.sat(a, b) -> umin(a, ~b) + b
   if (Opcode == ISD::UADDSAT && isOperationLegalOrCustom(ISD::UMIN, VT)) {
     SDValue InvRHS = DAG.getNOT(dl, RHS, VT);
     SDValue Min = DAG.getNode(ISD::UMIN, dl, VT, LHS, InvRHS);

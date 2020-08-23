@@ -1810,8 +1810,6 @@ Query for this feature with ``__has_builtin(__builtin_readcyclecounter)``. Note
 that even if present, its use may depend on run-time privilege or other OS
 controlled state.
 
-.. _langext-__builtin_shufflevector:
-
 ``__builtin_dump_struct``
 -------------------------
 
@@ -1857,6 +1855,8 @@ structure and their values for debugging purposes. The builtin accepts a pointer
 to a structure to dump the fields of, and a pointer to a formatted output
 function whose signature must be: ``int (*)(const char *, ...)`` and must
 support the format specifiers used by ``printf()``.
+
+.. _langext-__builtin_shufflevector:
 
 ``__builtin_shufflevector``
 ---------------------------
@@ -1984,7 +1984,7 @@ Query for this feature with ``__has_builtin(__builtin_convertvector)``.
 
 The '``__builtin_bitreverse``' family of builtins is used to reverse
 the bitpattern of an integer value; for example ``0b10110110`` becomes
-``0b01101101``.
+``0b01101101``. These builtins can be used within constant expressions.
 
 ``__builtin_rotateleft``
 ------------------------
@@ -2016,7 +2016,8 @@ the bits in the first argument by the amount in the second argument.
 For example, ``0b10000110`` rotated left by 11 becomes ``0b00110100``.
 The shift value is treated as an unsigned amount modulo the size of
 the arguments. Both arguments and the result have the bitwidth specified
-by the name of the builtin.
+by the name of the builtin. These builtins can be used within constant
+expressions.
 
 ``__builtin_rotateright``
 -------------------------
@@ -2048,7 +2049,8 @@ the bits in the first argument by the amount in the second argument.
 For example, ``0b10000110`` rotated right by 3 becomes ``0b11010000``.
 The shift value is treated as an unsigned amount modulo the size of
 the arguments. Both arguments and the result have the bitwidth specified
-by the name of the builtin.
+by the name of the builtin. These builtins can be used within constant
+expressions.
 
 ``__builtin_unreachable``
 -------------------------

@@ -280,6 +280,7 @@ define void @f7_2(i1 %c) {
 ; CHECK-SAME: (i1 [[C:%.*]])
 ; CHECK-NEXT:    [[PTR:%.*]] = tail call nonnull align 4 dereferenceable(4) i32* @unkown_ptr()
 ; CHECK-NEXT:    [[A:%.*]] = tail call i32 @unkown_f(i32* nonnull align 4 dereferenceable(4) [[PTR]])
+; CHECK-NEXT:    [[ARG_A_0:%.*]] = load i32, i32* [[PTR]], align 4
 ; CHECK-NEXT:    [[B:%.*]] = tail call i32 @unkown_f(i32* nonnull align 4 dereferenceable(4) [[PTR]])
 ; CHECK-NEXT:    br i1 [[C]], label [[IF_TRUE:%.*]], label [[IF_FALSE:%.*]]
 ; CHECK:       if.true:
@@ -1021,15 +1022,15 @@ define void @nonnull_assume_call(i8* %arg1, i8* %arg2, i8* %arg3, i8* %arg4) {
 ; CHECK-NEXT:    call void @unknown()
 ; CHECK-NEXT:    [[P:%.*]] = call nonnull dereferenceable(101) i32* @unkown_ptr()
 ; CHECK-NEXT:    call void @unknown_use32(i32* nonnull dereferenceable(101) [[P]])
-; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(42) [[ARG4]])
+; CHECK-NEXT:    call void @unknown_use8(i8* dereferenceable_or_null(42) [[ARG4]])
 ; CHECK-NEXT:    call void @unknown_use8(i8* nonnull [[ARG3]])
-; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(31) [[ARG2]])
+; CHECK-NEXT:    call void @unknown_use8(i8* dereferenceable_or_null(31) [[ARG2]])
 ; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(2) [[ARG1]])
 ; CHECK-NEXT:    call void @llvm.assume(i1 true) [ "nonnull"(i8* [[ARG3]]), "dereferenceable"(i8* [[ARG1]], i64 1), "dereferenceable"(i8* [[ARG1]], i64 2), "dereferenceable"(i32* [[P]], i64 101), "dereferenceable_or_null"(i8* [[ARG2]], i64 31), "dereferenceable_or_null"(i8* [[ARG4]], i64 42) ]
 ; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(2) [[ARG1]])
-; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(31) [[ARG2]])
+; CHECK-NEXT:    call void @unknown_use8(i8* dereferenceable_or_null(31) [[ARG2]])
 ; CHECK-NEXT:    call void @unknown_use8(i8* nonnull [[ARG3]])
-; CHECK-NEXT:    call void @unknown_use8(i8* nonnull dereferenceable(42) [[ARG4]])
+; CHECK-NEXT:    call void @unknown_use8(i8* dereferenceable_or_null(42) [[ARG4]])
 ; CHECK-NEXT:    call void @unknown_use32(i32* nonnull dereferenceable(101) [[P]])
 ; CHECK-NEXT:    call void @unknown()
 ; CHECK-NEXT:    ret void

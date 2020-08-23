@@ -243,24 +243,12 @@ private:
 
   TYPEDEF_ELF_TYPES(ELFT)
 
-  DynRegionInfo checkDRI(DynRegionInfo DRI) {
+  DynRegionInfo createDRI(uint64_t Offset, uint64_t Size, uint64_t EntSize) {
     const ELFFile<ELFT> *Obj = ObjF->getELFFile();
-    if (DRI.Addr < Obj->base() ||
-        reinterpret_cast<const uint8_t *>(DRI.Addr) + DRI.Size >
-            Obj->base() + Obj->getBufSize())
+    if (Offset + Size < Offset || Offset + Size > Obj->getBufSize())
       reportError(errorCodeToError(llvm::object::object_error::parse_failed),
                   ObjF->getFileName());
-    return DRI;
-  }
-
-  DynRegionInfo createDRIFrom(const Elf_Phdr *P, uintX_t EntSize) {
-    return checkDRI({ObjF->getELFFile()->base() + P->p_offset, P->p_filesz,
-                     EntSize, ObjF->getFileName()});
-  }
-
-  DynRegionInfo createDRIFrom(const Elf_Shdr *S) {
-    return checkDRI({ObjF->getELFFile()->base() + S->sh_offset, S->sh_size,
-                     S->sh_entsize, ObjF->getFileName()});
+    return {Obj->base() + Offset, Size, EntSize, ObjF->getFileName()};
   }
 
   void printAttributes();
@@ -1706,8 +1694,7 @@ static StringRef segmentTypeToString(unsigned Arch, unsigned Type) {
 
 static std::string getGNUPtType(unsigned Arch, unsigned Type) {
   StringRef Seg = segmentTypeToString(Arch, Type);
-  // GNU doesn't recognize PT_OPENBSD_*.
-  if (Seg.empty() || Seg.startswith("PT_OPENBSD_"))
+  if (Seg.empty())
     return std::string("<unknown>: ") + to_string(format_hex(Type, 1));
 
   // E.g. "PT_ARM_EXIDX" -> "EXIDX".
@@ -1892,12 +1879,16 @@ ELFDumper<ELFT>::findDynamic(const ELFFile<ELFT> *Obj) {
     break;
   }
 
-  if (DynamicPhdr && DynamicPhdr->p_offset + DynamicPhdr->p_filesz >
-                         ObjF->getMemoryBufferRef().getBufferSize()) {
-    reportWarning(
-        createError(
-            "PT_DYNAMIC segment offset + size exceeds the size of the file"),
-        ObjF->getFileName());
+  if (DynamicPhdr && ((DynamicPhdr->p_offset + DynamicPhdr->p_filesz >
+                       ObjF->getMemoryBufferRef().getBufferSize()) ||
+                      (DynamicPhdr->p_offset + DynamicPhdr->p_filesz <
+                       DynamicPhdr->p_offset))) {
+    reportUniqueWarning(createError(
+        "PT_DYNAMIC segment offset (0x" +
+        Twine::utohexstr(DynamicPhdr->p_offset) + ") + file size (0x" +
+        Twine::utohexstr(DynamicPhdr->p_filesz) +
+        ") exceeds the size of the file (0x" +
+        Twine::utohexstr(ObjF->getMemoryBufferRef().getBufferSize()) + ")"));
     // Don't use the broken dynamic header.
     DynamicPhdr = nullptr;
   }
@@ -1934,7 +1925,8 @@ void ELFDumper<ELFT>::loadDynamicTable(const ELFFile<ELFT> *Obj) {
   DynRegionInfo FromPhdr(ObjF->getFileName());
   bool IsPhdrTableValid = false;
   if (DynamicPhdr) {
-    FromPhdr = createDRIFrom(DynamicPhdr, sizeof(Elf_Dyn));
+    FromPhdr = createDRI(DynamicPhdr->p_offset, DynamicPhdr->p_filesz,
+                         sizeof(Elf_Dyn));
     FromPhdr.SizePrintName = "PT_DYNAMIC size";
     FromPhdr.EntSizePrintName = "";
 
@@ -1949,8 +1941,7 @@ void ELFDumper<ELFT>::loadDynamicTable(const ELFFile<ELFT> *Obj) {
   bool IsSecTableValid = false;
   if (DynamicSec) {
     FromSec =
-        checkDRI({ObjF->getELFFile()->base() + DynamicSec->sh_offset,
-                  DynamicSec->sh_size, sizeof(Elf_Dyn), ObjF->getFileName()});
+        createDRI(DynamicSec->sh_offset, DynamicSec->sh_size, sizeof(Elf_Dyn));
     FromSec.Context = describe(*DynamicSec);
     FromSec.EntSizePrintName = "";
 
@@ -2038,7 +2029,7 @@ ELFDumper<ELFT>::ELFDumper(const object::ELFObjectFile<ELFT> *ObjF,
         DotDynsymSec = &Sec;
 
       if (!DynSymRegion) {
-        DynSymRegion = createDRIFrom(&Sec);
+        DynSymRegion = createDRI(Sec.sh_offset, Sec.sh_size, Sec.sh_entsize);
         DynSymRegion->Context = describe(Sec);
 
         if (Expected<StringRef> E = Obj->getStringTableForSymtab(Sec))
@@ -3747,30 +3738,47 @@ static bool isRelocationSec(const typename ELFT::Shdr &Sec) {
 }
 
 template <class ELFT> void GNUStyle<ELFT>::printRelocations(const ELFO *Obj) {
+  auto GetEntriesNum = [&](const Elf_Shdr &Sec) -> Expected<size_t> {
+    // Android's packed relocation section needs to be unpacked first
+    // to get the actual number of entries.
+    if (Sec.sh_type == ELF::SHT_ANDROID_REL ||
+        Sec.sh_type == ELF::SHT_ANDROID_RELA) {
+      Expected<std::vector<typename ELFT::Rela>> RelasOrErr =
+          Obj->android_relas(&Sec);
+      if (!RelasOrErr)
+        return RelasOrErr.takeError();
+      return RelasOrErr->size();
+    }
+
+    if (!opts::RawRelr && (Sec.sh_type == ELF::SHT_RELR ||
+                           Sec.sh_type == ELF::SHT_ANDROID_RELR)) {
+      Expected<Elf_Relr_Range> RelrsOrErr = Obj->relrs(&Sec);
+      if (!RelrsOrErr)
+        return RelrsOrErr.takeError();
+      return Obj->decode_relrs(*RelrsOrErr).size();
+    }
+
+    return Sec.getEntityCount();
+  };
+
   bool HasRelocSections = false;
   for (const Elf_Shdr &Sec : cantFail(Obj->sections())) {
     if (!isRelocationSec<ELFT>(Sec))
       continue;
     HasRelocSections = true;
 
-    unsigned Entries;
-    // Android's packed relocation section needs to be unpacked first
-    // to get the actual number of entries.
-    if (Sec.sh_type == ELF::SHT_ANDROID_REL ||
-        Sec.sh_type == ELF::SHT_ANDROID_RELA) {
-      Entries = unwrapOrError(this->FileName, Obj->android_relas(&Sec)).size();
-    } else if (!opts::RawRelr && (Sec.sh_type == ELF::SHT_RELR ||
-                                  Sec.sh_type == ELF::SHT_ANDROID_RELR)) {
-      Elf_Relr_Range Relrs = unwrapOrError(this->FileName, Obj->relrs(&Sec));
-      Entries = Obj->decode_relrs(Relrs).size();
-    } else {
-      Entries = Sec.getEntityCount();
-    }
+    std::string EntriesNum = "<?>";
+    if (Expected<size_t> NumOrErr = GetEntriesNum(Sec))
+      EntriesNum = std::to_string(*NumOrErr);
+    else
+      this->reportUniqueWarning(createError(
+          "unable to get the number of relocations in " + describe(Obj, Sec) +
+          ": " + toString(NumOrErr.takeError())));
 
     uintX_t Offset = Sec.sh_offset;
     StringRef Name = this->getPrintableSectionName(Obj, Sec);
     OS << "\nRelocation section '" << Name << "' at offset 0x"
-       << to_hexString(Offset, false) << " contains " << Entries
+       << to_hexString(Offset, false) << " contains " << EntriesNum
        << " entries:\n";
     printRelocHeader(Sec.sh_type);
     this->printRelocationsHelper(Obj, Sec);

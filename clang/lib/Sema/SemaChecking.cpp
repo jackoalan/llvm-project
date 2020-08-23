@@ -3705,16 +3705,12 @@ bool Sema::CheckX86BuiltinGatherScatterScale(unsigned BuiltinID,
 enum { TileRegLow = 0, TileRegHigh = 7 };
 
 bool Sema::CheckX86BuiltinTileArgumentsRange(CallExpr *TheCall,
-                                    ArrayRef<int> ArgNums) {
+                                             ArrayRef<int> ArgNums) {
   for (int ArgNum : ArgNums) {
     if (SemaBuiltinConstantArgRange(TheCall, ArgNum, TileRegLow, TileRegHigh))
       return true;
   }
   return false;
-}
-
-bool Sema::CheckX86BuiltinTileArgumentsRange(CallExpr *TheCall, int ArgNum) {
-  return SemaBuiltinConstantArgRange(TheCall, ArgNum, TileRegLow, TileRegHigh);
 }
 
 bool Sema::CheckX86BuiltinTileDuplicate(CallExpr *TheCall,
@@ -3723,9 +3719,14 @@ bool Sema::CheckX86BuiltinTileDuplicate(CallExpr *TheCall,
   // each bit to represent the usage of them in bitset.
   std::bitset<TileRegHigh + 1> ArgValues;
   for (int ArgNum : ArgNums) {
-    llvm::APSInt Arg;
-    SemaBuiltinConstantArg(TheCall, ArgNum, Arg);
-    int ArgExtValue = Arg.getExtValue();
+    Expr *Arg = TheCall->getArg(ArgNum);
+    if (Arg->isTypeDependent() || Arg->isValueDependent())
+      continue;
+
+    llvm::APSInt Result;
+    if (SemaBuiltinConstantArg(TheCall, ArgNum, Result))
+      return true;
+    int ArgExtValue = Result.getExtValue();
     assert((ArgExtValue >= TileRegLow || ArgExtValue <= TileRegHigh) &&
            "Incorrect tile register num.");
     if (ArgValues.test(ArgExtValue))
@@ -5049,6 +5050,11 @@ ExprResult Sema::BuildAtomicExpr(SourceRange CallRange, SourceRange ExprRange,
              Op == AtomicExpr::AO__opencl_atomic_load)
                 ? 0
                 : 1);
+
+  if (ValType->isExtIntType()) {
+    Diag(Ptr->getExprLoc(), diag::err_atomic_builtin_ext_int_prohibit);
+    return ExprError();
+  }
 
   return AE;
 }
@@ -11837,9 +11843,9 @@ static void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
       Expr::EvalResult Result;
       if (E->EvaluateAsFixedPoint(Result, S.Context, Expr::SE_AllowSideEffects,
                                   S.isConstantEvaluated())) {
-        APFixedPoint Value = Result.Val.getFixedPoint();
-        APFixedPoint MaxVal = S.Context.getFixedPointMax(T);
-        APFixedPoint MinVal = S.Context.getFixedPointMin(T);
+        llvm::APFixedPoint Value = Result.Val.getFixedPoint();
+        llvm::APFixedPoint MaxVal = S.Context.getFixedPointMax(T);
+        llvm::APFixedPoint MinVal = S.Context.getFixedPointMin(T);
         if (Value > MaxVal || Value < MinVal) {
           S.DiagRuntimeBehavior(E->getExprLoc(), E,
                                 S.PDiag(diag::warn_impcast_fixed_point_range)
@@ -11854,7 +11860,7 @@ static void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
       if (!S.isConstantEvaluated() &&
           E->EvaluateAsFixedPoint(Result, S.Context,
                                   Expr::SE_AllowSideEffects)) {
-        APFixedPoint FXResult = Result.Val.getFixedPoint();
+        llvm::APFixedPoint FXResult = Result.Val.getFixedPoint();
 
         bool Overflowed;
         llvm::APSInt IntResult = FXResult.convertToInt(
@@ -11879,7 +11885,7 @@ static void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
         llvm::APSInt Value = Result.Val.getInt();
 
         bool Overflowed;
-        APFixedPoint IntResult = APFixedPoint::getFromIntValue(
+        llvm::APFixedPoint IntResult = llvm::APFixedPoint::getFromIntValue(
             Value, S.Context.getFixedPointSemantics(T), &Overflowed);
 
         if (Overflowed) {
