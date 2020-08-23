@@ -62,7 +62,8 @@ inline uint8_t *mmap_file(const TCHAR *FilePath, size_t Offset,
   if (File == INVALID_HANDLE_VALUE)
     return nullptr;
 
-  void *Mem = ::MapViewOfFile(FileMapping, FILE_MAP_READ, 0, Offset, Length);
+  void *Mem = ::MapViewOfFile(FileMapping, FILE_MAP_READ, 0, DWORD(Offset),
+                              DWORD(Length));
   ::CloseHandle(FileMapping);
   if (Mem == nullptr)
     return nullptr;

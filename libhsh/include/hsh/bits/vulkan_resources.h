@@ -334,7 +334,7 @@ template <> struct SamplerObject<Target::VULKAN_SPIRV> {
 
 namespace vulkan {
 template <typename Impl> struct DescriptorPoolWrites {
-  std::size_t NumWrites = 0;
+  uint32_t NumWrites = 0;
   std::array<VkWriteDescriptorSet, MaxUniforms + MaxImages + MaxSamplers>
       Writes;
   std::array<VkDescriptorBufferInfo, MaxUniforms> Uniforms;
@@ -359,7 +359,7 @@ template <typename Impl> struct DescriptorPoolWrites {
                              std::make_index_sequence<MaxSamplers>()) {
     Iterators Its(DstSet, *this);
     (Its.Add(args), ...);
-    NumWrites = Its.WriteIt - Its.WriteBegin;
+    NumWrites = uint32_t(Its.WriteIt - Its.WriteBegin);
   }
 
   struct Iterators {
@@ -381,7 +381,7 @@ template <typename Impl> struct DescriptorPoolWrites {
           UniformIt(Writes.Uniforms.begin()), ImageIt(Writes.Images.begin()),
           SamplerIt(Writes.Samplers.begin()) {}
     void Add(uniform_buffer_typeless uniform) noexcept {
-      auto UniformIdx = UniformIt - UniformBegin;
+      auto UniformIdx = uint32_t(UniformIt - UniformBegin);
       auto &Uniform = *UniformIt++;
       const auto &Binding = uniform.Binding.get_VULKAN_SPIRV();
       Uniform =
@@ -394,7 +394,7 @@ template <typename Impl> struct DescriptorPoolWrites {
     static void Add(vertex_buffer_typeless) noexcept {}
     static void Add(index_buffer_typeless) noexcept {}
     void Add(texture_typeless texture) noexcept {
-      auto ImageIdx = ImageIt - ImageBegin;
+      auto ImageIdx = uint32_t(ImageIt - ImageBegin);
       auto &Image = *ImageIt++;
       Image = vk::DescriptorImageInfo(
           {}, texture.Binding.get_VULKAN_SPIRV().ImageView,
@@ -406,7 +406,7 @@ template <typename Impl> struct DescriptorPoolWrites {
           reinterpret_cast<vk::DescriptorImageInfo *>(&Image));
     }
     void Add(render_texture2d texture) noexcept {
-      auto ImageIdx = ImageIt - ImageBegin;
+      auto ImageIdx = uint32_t(ImageIt - ImageBegin);
       auto &Image = *ImageIt++;
       Image = vk::DescriptorImageInfo(
           {}, texture.Binding.get_VULKAN_SPIRV().GetImageView(),
@@ -418,7 +418,7 @@ template <typename Impl> struct DescriptorPoolWrites {
           reinterpret_cast<vk::DescriptorImageInfo *>(&Image));
     }
     void Add(hsh::detail::SamplerBinding sampler) noexcept {
-      auto SamplerIdx = SamplerIt - SamplerBegin;
+      auto SamplerIdx = uint32_t(SamplerIt - SamplerBegin);
       auto &Sampler = *SamplerIt++;
       Sampler = vk::DescriptorImageInfo(
           Impl::data_VULKAN_SPIRV.SamplerObjects[sampler.Idx]->Get(
@@ -449,7 +449,7 @@ void TargetTraits<Target::VULKAN_SPIRV>::PipelineBinding::Rebind(
         nullptr);
     Iterators Its(*this);
     (Its.Add(args), ...);
-    NumVertexBuffers = Its.VertexBufferIt - Its.VertexBufferBegin;
+    NumVertexBuffers = uint32_t(Its.VertexBufferIt - Its.VertexBufferBegin);
   }
   OffsetIterators OffIts(*this);
   (OffIts.Add(args), ...);
@@ -625,7 +625,7 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
       vk::DynamicState::eViewport, vk::DynamicState::eScissor,
       vk::DynamicState::eBlendConstants};
   static constexpr vk::PipelineDynamicStateCreateInfo DynamicState{
-      {}, Dynamics.size(), Dynamics.data()};
+      {}, uint32_t(Dynamics.size()), Dynamics.data()};
   static constexpr vk::PipelineViewportStateCreateInfo ViewportState{
       {}, 1, {}, 1, {}};
 
@@ -658,30 +658,26 @@ struct ShaderConstData<Target::VULKAN_SPIRV, NStages, NBindings, NAttributes,
     ColorBlendStateTmp.pAttachments = TargetAttachments.data();
 #endif
 
-    return vk::GraphicsPipelineCreateInfo{
-        {},
-        NStages,
-        reinterpret_cast<vk::PipelineShaderStageCreateInfo *>(StageInfos),
+    return vk::GraphicsPipelineCreateInfo {
+      {}, NStages,
+          reinterpret_cast<vk::PipelineShaderStageCreateInfo *>(StageInfos),
 #if _MSC_VER
-        &VertexInputStateTmp,
+          &VertexInputStateTmp,
 #else
-        &VertexInputState,
+          &VertexInputState,
 #endif
-        &InputAssemblyState,
-        &TessellationState,
-        &ViewportState,
-        &RasterizationState,
-        &vulkan::Globals.MultisampleState,
-        &DepthStencilState,
+          &InputAssemblyState, &TessellationState, &ViewportState,
+          &RasterizationState, &vulkan::Globals.MultisampleState,
+          &DepthStencilState,
 #if _MSC_VER
-        &ColorBlendStateTmp,
+          &ColorBlendStateTmp,
 #else
-        &ColorBlendState,
+          &ColorBlendState,
 #endif
-        &DynamicState,
-        vulkan::Globals.PipelineLayout,
-        DirectRenderPass ? vulkan::Globals.GetDirectRenderPass()
-                         : vulkan::Globals.GetRenderPass()};
+          &DynamicState, vulkan::Globals.PipelineLayout,
+          DirectRenderPass ? vulkan::Globals.GetDirectRenderPass()
+                           : vulkan::Globals.GetRenderPass()
+    };
   }
 };
 
@@ -730,8 +726,8 @@ template <> struct PipelineBuilder<Target::VULKAN_SPIRV> {
             ShaderStageInfos.data() + StageInfoStart<B...>(BSeq, seq))...};
     std::array<vk::Pipeline, sizeof...(B)> Pipelines;
     auto Result = vulkan::Globals.Device.createGraphicsPipelines(
-        vulkan::Globals.PipelineCache, Infos.size(), Infos.data(), nullptr,
-        Pipelines.data());
+        vulkan::Globals.PipelineCache, uint32_t(Infos.size()), Infos.data(),
+        nullptr, Pipelines.data());
     HSH_ASSERT_VK_SUCCESS(Result);
     (SetPipeline<B>(Pipelines[BSeq]), ...);
   }
@@ -968,8 +964,8 @@ inline auto CreateTextureOwner(
     uint32_t numMips, CopyFunc copyFunc, ColorSwizzle redSwizzle,
     ColorSwizzle greenSwizzle, ColorSwizzle blueSwizzle,
     ColorSwizzle alphaSwizzle) noexcept {
-  auto TexelSize = HshFormatToTexelSize(format);
-  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
+  auto TexelSize = uint32_t(HshFormatToTexelSize(format));
+  auto TexelSizeShift = uint32_t(HshFormatToTexelSizeShift(format));
   auto TexelFormat = HshToVkFormat(format);
   std::array<vk::BufferImageCopy, MaxMipCount> Copies =
       Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift);
@@ -1044,8 +1040,8 @@ inline auto CreateDynamicTextureOwner(
     typename Traits::ExtentType extent, uint32_t numLayers, Format format,
     uint32_t numMips, ColorSwizzle redSwizzle, ColorSwizzle greenSwizzle,
     ColorSwizzle blueSwizzle, ColorSwizzle alphaSwizzle) noexcept {
-  auto TexelSize = HshFormatToTexelSize(format);
-  auto TexelSizeShift = HshFormatToTexelSizeShift(format);
+  auto TexelSize = uint32_t(HshFormatToTexelSize(format));
+  auto TexelSizeShift = uint32_t(HshFormatToTexelSizeShift(format));
   auto TexelFormat = HshToVkFormat(format);
   auto BufferSize =
       Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
@@ -1333,9 +1329,9 @@ struct MyInstanceCreateInfo : vk::InstanceCreateInfo {
     HasGetPhysicalProps2 =
         enableExtension("VK_KHR_get_physical_device_properties2"sv);
 
-    setEnabledLayerCount(EnabledLayers.size());
+    setEnabledLayerCount(uint32_t(EnabledLayers.size()));
     setPpEnabledLayerNames(EnabledLayers.data());
-    setEnabledExtensionCount(EnabledExtensions.size());
+    setEnabledExtensionCount(uint32_t(EnabledExtensions.size()));
     setPpEnabledExtensionNames(EnabledExtensions.data());
   }
 };
@@ -1413,9 +1409,9 @@ struct MyDeviceCreateInfo : vk::DeviceCreateInfo {
 
     HasExtMemoryBudget = enableExtension("VK_EXT_memory_budget"sv);
 
-    setEnabledLayerCount(EnabledLayers.size());
+    setEnabledLayerCount(uint32_t(EnabledLayers.size()));
     setPpEnabledLayerNames(EnabledLayers.data());
-    setEnabledExtensionCount(EnabledExtensions.size());
+    setEnabledExtensionCount(uint32_t(EnabledExtensions.size()));
     setPpEnabledExtensionNames(EnabledExtensions.data());
 
     uint32_t QFIdx = 0;
@@ -1483,7 +1479,8 @@ struct MyDescriptorSetLayoutCreateInfo : vk::DescriptorSetLayoutCreateInfo {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
-      : vk::DescriptorSetLayoutCreateInfo({}, Bindings.size(), Bindings.data()),
+      : vk::DescriptorSetLayoutCreateInfo({}, uint32_t(Bindings.size()),
+                                          Bindings.data()),
         Bindings{vk::DescriptorSetLayoutBinding(
                      USeq, vk::DescriptorType::eUniformBufferDynamic, 1,
                      vk::ShaderStageFlagBits::eAllGraphics)...,
@@ -1513,7 +1510,8 @@ struct MyPipelineLayoutCreateInfo : vk::PipelineLayoutCreateInfo {
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
   constexpr MyPipelineLayoutCreateInfo(vk::DescriptorSetLayout layout) noexcept
-      : vk::PipelineLayoutCreateInfo({}, Layouts.size(), Layouts.data()),
+      : vk::PipelineLayoutCreateInfo({}, uint32_t(Layouts.size()),
+                                     Layouts.data()),
         Layouts{layout} {}
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop

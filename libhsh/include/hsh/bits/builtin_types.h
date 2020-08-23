@@ -170,7 +170,6 @@ struct uint3 {
   constexpr uint3(std::uint32_t x, std::uint32_t y, std::uint32_t z) noexcept
       : x(x), y(y), z(z) {}
   constexpr explicit uint3(std::uint32_t f) noexcept : x(f), y(f), z(f) {}
-  uint3 operator-() const noexcept { return uint3{-x, -y, -z}; };
   uint3 operator*(std::uint32_t other) noexcept {
     return uint3{x * other, y * other, z * other};
   }
@@ -180,7 +179,6 @@ struct uint2 {
   uint2() noexcept = default;
   constexpr uint2(std::uint32_t x, std::uint32_t y) noexcept : x(x), y(y) {}
   constexpr explicit uint2(std::uint32_t f) noexcept : x(f), y(f) {}
-  uint2 operator-() const noexcept { return uint2{-x, -y}; };
 };
 constexpr uint4::uint4(const hsh::uint3 &other, std::uint32_t w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}

@@ -111,7 +111,7 @@ class FifoBufferAllocation : public BufferAllocation {
   FifoBufferAllocation *Prev = nullptr, *Next = nullptr;
   void *MappedData;
 #ifndef NDEBUG
-  uint32_t Size;
+  vk::DeviceSize Size;
 #endif
   uint32_t Offset = 0;
   uint32_t StartOffset = 0;
@@ -171,7 +171,8 @@ struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
       : vk::RenderPassBeginInfo(RenderPass, Framebuffer, vk::Rect2D({}, Extent),
-                                ClearValues.size(), ClearValues.data()),
+                                uint32_t(ClearValues.size()),
+                                ClearValues.data()),
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -835,8 +836,8 @@ void SurfaceAllocation::DrawDecorations() noexcept {
                                       VK_REMAINING_ARRAY_LAYERS)));
     Globals.Cmd.beginRenderPass(DstImage.RenderPassBegin,
                                 vk::SubpassContents::eInline);
-    Globals.Cmd.setViewport(
-        0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
+    Globals.Cmd.setViewport(0, vk::Viewport(0.f, 0.f, float(Extent.width),
+                                            float(Extent.height), 0.f, 1.f));
     Globals.Cmd.setScissor(0, vk::Rect2D({}, {Extent.width, Extent.height}));
     DecorationLambda();
     Globals.Cmd.endRenderPass();
@@ -951,8 +952,9 @@ SurfaceAllocation::SurfaceAllocation(
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
-          : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
-                                     Subpasses.size(), Subpasses.data()),
+          : vk::RenderPassCreateInfo(
+                {}, uint32_t(Attachments.size()), Attachments.data(),
+                uint32_t(Subpasses.size()), Subpasses.data()),
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -995,8 +997,9 @@ SurfaceAllocation::SurfaceAllocation(
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
-          : vk::RenderPassCreateInfo({}, Attachments.size(), Attachments.data(),
-                                     Subpasses.size(), Subpasses.data()),
+          : vk::RenderPassCreateInfo(
+                {}, uint32_t(Attachments.size()), Attachments.data(),
+                uint32_t(Subpasses.size()), Subpasses.data()),
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -1099,7 +1102,7 @@ uint32_t FifoBufferAllocation::MapUniform(Func func) noexcept {
   assert(MapOffset + sizeof(T) <= Size && "Fifo buffer must be larger");
   func(*reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
                               MapOffset));
-  Offset += sizeof(T);
+  Offset += uint32_t(sizeof(T));
   return MapOffset;
 }
 
@@ -1111,7 +1114,7 @@ uint32_t FifoBufferAllocation::MapVertexIndex(std::size_t count,
   assert(MapOffset + sizeof(T) * count <= Size && "Fifo buffer must be larger");
   func(reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(MappedData) +
                              MapOffset));
-  Offset += sizeof(T) * count;
+  Offset += uint32_t(sizeof(T) * count);
   return MapOffset;
 }
 
@@ -1184,7 +1187,8 @@ struct DescriptorPoolCreateInfo : vk::DescriptorPoolCreateInfo {
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
       : vk::DescriptorPoolCreateInfo({}, MaxDescriptorPoolSets,
-                                     PoolSizes.size(), PoolSizes.data()) {
+                                     uint32_t(PoolSizes.size()),
+                                     PoolSizes.data()) {
   }
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
@@ -1777,8 +1781,8 @@ void RenderTextureAllocation::Attach(const Args &... args) noexcept {
 }
 
 void RenderTextureAllocation::ProcessAttachArgs() noexcept {
-  Globals.Cmd.setViewport(
-      0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
+  Globals.Cmd.setViewport(0, vk::Viewport(0.f, 0.f, float(Extent.width),
+                                          float(Extent.height), 0.f, 1.f));
   Globals.Cmd.setScissor(0, vk::Rect2D({}, {Extent.width, Extent.height}));
 }
 
@@ -1791,8 +1795,8 @@ void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp) noexcept {
 }
 
 void RenderTextureAllocation::ProcessAttachArgs(const scissor &s) noexcept {
-  Globals.Cmd.setViewport(
-      0, vk::Viewport(0.f, 0.f, Extent.width, Extent.height, 0.f, 1.f));
+  Globals.Cmd.setViewport(0, vk::Viewport(0.f, 0.f, float(Extent.width),
+                                          float(Extent.height), 0.f, 1.f));
   Globals.Cmd.setScissor(0, vk::Rect2D(s));
 }
 

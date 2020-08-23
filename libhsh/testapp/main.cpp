@@ -60,8 +60,7 @@ struct WsiConnection {
     Class.lpszClassName = TEXT("TestappWndClass");
     Class.hIconSm = nullptr;
 
-    ATOM ClassAtom = RegisterClassEx(&Class);
-    assert(ClassAtom);
+    RegisterClassEx(&Class);
   }
 
   WsiWindow makeWindow() { return WsiWindow(*this); }
