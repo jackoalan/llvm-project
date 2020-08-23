@@ -5,7 +5,7 @@ set(lib_destination "${LLVM_LIBRARY_OUTPUT_INTDIR}/clang-hsh/${CLANG_VERSION}")
 set(lib_install_destination "lib${LLVM_LIBDIR_SUFFIX}/clang-hsh/${CLANG_VERSION}")
 
 if(WIN32)
-  set(DXCOMPILER_SHLIB libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX})
+  set(DXCOMPILER_SHLIB dxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX})
 elseif(APPLE)
   set(DXCOMPILER_SHLIB libdxcompiler.3.7${CMAKE_SHARED_LIBRARY_SUFFIX})
 else()
@@ -27,7 +27,7 @@ endif()
 ExternalProject_Add(
         DirectXShaderCompiler
         GIT_REPOSITORY https://github.com/microsoft/DirectXShaderCompiler
-        GIT_TAG 0fb58c61adfb96427f6c58860b83d52fc16443c4
+        GIT_TAG b3c14b2a7abecf25e3477ae35eb4b2ba5dde1d49
         BUILD_COMMAND "${CMAKE_COMMAND}" --build . --target dxcompiler
         INSTALL_COMMAND
         "${CMAKE_COMMAND}" -E make_directory "${CLANG_BINARY_DIR}/include/dxc/"
@@ -112,7 +112,7 @@ set(uam_library "${uam_binary_dir}/libuam.a")
 add_custom_command(OUTPUT "${uam_library}"
         COMMAND "${CMAKE_COMMAND}" ARGS
         --build . --target UAM
-        DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
+        DEPENDS "${CMAKE_CURRENT_LIST_FILE}" uam.patch
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         COMMENT "Fetching and building UAM")
 
@@ -152,7 +152,7 @@ set_target_properties(DirectXShaderCompiler-libs PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${lib_install_destination}")
 
 install(FILES
-        "${lib_destination}/libdxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${lib_destination}/${CMAKE_SHARED_LIBRARY_PREFIX}dxcompiler${CMAKE_SHARED_LIBRARY_SUFFIX}"
         "${lib_destination}/${DXCOMPILER_SHLIB}"
         COMPONENT DirectXShaderCompiler-libs
         DESTINATION "${lib_install_destination}")

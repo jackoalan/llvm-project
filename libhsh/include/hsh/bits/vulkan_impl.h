@@ -1240,9 +1240,9 @@ struct DescriptorPoolChain {
               &AllocateInfo, DescriptorSets.data());
           HSH_ASSERT_VK_SUCCESS(Result);
         }
-        for (unsigned i = 0; i < 64; ++i) {
-          if ((bmp & (1u << i)) == 0) {
-            bmp |= (1u << i);
+        for (uint64_t i = 0; i < 64; ++i) {
+          if ((bmp & (1ull << i)) == 0) {
+            bmp |= (1ull << i);
             return UniqueDescriptorSet(DescriptorSets[i], Index + i);
           }
         }

@@ -100,7 +100,7 @@ index d6d5da7..7a5be48 100644
  
  #define delete_Instruction(p, insn) (p)->releaseInstruction(insn)
 diff --git a/meson.build b/meson.build
-index 871cd20..fe77653 100644
+index 871cd20..80fcebf 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -26,7 +26,7 @@ pre_args = [
@@ -112,7 +112,7 @@ index 871cd20..fe77653 100644
  ]
  
  if host_machine.system() != 'windows'
-@@ -38,10 +38,11 @@ if host_machine.system() != 'windows'
+@@ -38,10 +38,12 @@ if host_machine.system() != 'windows'
  	endforeach
  else
  	pre_args += [
@@ -120,13 +120,14 @@ index 871cd20..fe77653 100644
 -		'-Werror=format-extra-args',
 +		'/Zc:__cplusplus',
 +		'-DNOMINMAX=1',
++		'-DNOGDI=1',
  		'-D__STDC_FORMAT_MACROS',
  		'-D__USE_MINGW_ANSI_STDIO=1',
 +		'-Dstrtok_r=strtok_s',
  	]
  endif
  
-@@ -73,9 +74,8 @@ uam_incs = []
+@@ -73,9 +75,8 @@ uam_incs = []
  subdir('source')
  subdir('mesa-imported')
  

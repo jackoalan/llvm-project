@@ -49,7 +49,7 @@ _hsh_register_macro_variables(
 
 if(WIN32)
   get_filename_component(VULKAN_SDK_DIRS "[HKEY_LOCAL_MACHINE\\SOFTWARE\\LunarG\\VulkanSDK;VK_SDK_PATHs]" ABSOLUTE CACHE)
-  if(NOT ${VULKAN_SDK_DIRS} STREQUAL "/registry")
+  if(NOT "${VULKAN_SDK_DIRS}" STREQUAL "/registry")
     message(STATUS "[hsh]: Found vulkan headers")
     list(APPEND HSH_TARGETS_FOUND vulkan-spirv)
     list(GET VULKAN_SDK_DIRS 0 VULKAN_SDK_DIR)

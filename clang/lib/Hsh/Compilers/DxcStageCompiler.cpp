@@ -77,11 +77,10 @@ public:
 
   explicit DxcLibrary(StringRef ResourceDir, DiagnosticsEngine &Diags) {
     std::string Err;
-#if LLVM_ON_UNIX
     SmallString<128> LibPath(ResourceDir);
+#if LLVM_ON_UNIX
     sys::path::append(LibPath, "libdxcompiler" LTDL_SHLIB_EXT);
 #else
-    SmallString<128> LibPath(ResourceDir);
     sys::path::append(LibPath, "dxcompiler" LTDL_SHLIB_EXT);
 #endif
     Library = sys::DynamicLibrary::getPermanentLibrary(LibPath.c_str(), &Err);

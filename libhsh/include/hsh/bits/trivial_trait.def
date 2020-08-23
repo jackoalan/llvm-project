@@ -1,3 +1,9 @@
+#ifdef _MSC_VER
+#pragma warning(push)
+// Disable warning for empty stringification in HSH_XSTR
+#pragma warning(disable : 4003)
+#endif
+
 #ifndef HSH_TRAIT_TEMPLATE_PARMS
 #define HSH_TRAIT_TEMPLATE_PARMS
 #endif
@@ -99,3 +105,7 @@ bool IsValid() const noexcept { return false; }
 #undef HSH_TRAIT_BINDING
 #undef HSH_XSTR
 #undef HSH_STR
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

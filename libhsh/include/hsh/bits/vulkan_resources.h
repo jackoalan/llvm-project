@@ -18,6 +18,7 @@ template <> struct ShaderCode<Target::VULKAN_SPIRV> {
 constexpr vk::Format HshToVkFormat(Format Format) noexcept {
   switch (Format) {
   case R8_UNORM:
+  default:
     return vk::Format::eR8Unorm;
   case RG8_UNORM:
     return vk::Format::eR8G8Unorm;
@@ -270,6 +271,7 @@ constexpr vk::ComponentSwizzle
 HshToVkComponentSwizzle(enum ColorSwizzle swizzle) noexcept {
   switch (swizzle) {
   case CS_Identity:
+  default:
     return vk::ComponentSwizzle::eIdentity;
   case CS_Red:
     return vk::ComponentSwizzle::eR;
