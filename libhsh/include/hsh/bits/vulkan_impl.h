@@ -696,6 +696,13 @@ bool SurfaceAllocation::PreRender() noexcept {
 
     Extent = Capabilities.currentExtent;
 
+    if (Extent.width == 0 || Extent.height == 0) {
+      // This happens on Win32 for minimized windows
+      Swapchain.reset();
+      SwapchainImages.clear();
+      return true;
+    }
+
     struct SwapchainCreateInfo : vk::SwapchainCreateInfoKHR {
       explicit SwapchainCreateInfo(const vk::SurfaceCapabilitiesKHR &SC,
                                    vk::SurfaceKHR Surface,
@@ -768,6 +775,8 @@ bool SurfaceAllocation::PreRender() noexcept {
 }
 
 bool SurfaceAllocation::AcquireNextImage() noexcept {
+  if (!Swapchain)
+    return false;
   auto ret = Globals.Device.acquireNextImageKHR(
       Swapchain.get(), UINT64_MAX, Globals.ImageAcquireSem, {}, &NextImage);
   if (ret == vk::Result::eSuccess || ret == vk::Result::eSuboptimalKHR) {
