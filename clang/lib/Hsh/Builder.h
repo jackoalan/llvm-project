@@ -86,13 +86,16 @@ class Builder {
   SmallVector<VertexBinding, 4> VertexBindings;
   SmallVector<VertexAttribute, 4> VertexAttributes;
   llvm::DenseMap<ParmVarDecl *, unsigned> UseParmVarDecls;
+  bool HasDualSource = false;
 
 public:
   Builder(ASTContext &Context, HshBuiltins &Builtins,
-          DeclContext *BindingDeclContext, unsigned NumColorAttachments)
+          DeclContext *BindingDeclContext, unsigned NumColorAttachments,
+          bool HasDualSource)
       : Context(Context), Builtins(Builtins),
         BindingDeclContext(BindingDeclContext),
-        NumColorAttachments(NumColorAttachments) {}
+        NumColorAttachments(NumColorAttachments), HasDualSource(HasDualSource) {
+  }
 
   void updateUseStages();
 

@@ -51,8 +51,8 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
              CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
              ArrayRef<TextureRecord> Textures,
              ArrayRef<SamplerBinding> Samplers, unsigned NumColorAttachments,
-             CompoundStmt *Stmts, HshStage Stage, HshStage From, HshStage To,
-             ArrayRef<SampleCall> SampleCalls) = 0;
+             bool HasDualSource, CompoundStmt *Stmts, HshStage Stage,
+             HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) = 0;
   explicit ShaderPrintingPolicyBase(HshBuiltins &Builtins, ASTContext &Context,
                                     HshTarget Target)
       : PrintingPolicy(LangOptions()), Builtins(Builtins), Context(Context),

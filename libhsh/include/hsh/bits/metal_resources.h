@@ -284,12 +284,21 @@ HshToMTLSamplerAddressMode(enum SamplerAddressMode AddressMode) noexcept {
   case ClampToEdge:
     return MTLSamplerAddressModeClampToEdge;
   case ClampToBorder:
+#if TARGET_OS_OSX
     return MTLSamplerAddressModeClampToBorderColor;
+#else
+    return MTLSamplerAddressModeClampToZero;
+#endif
   case MirrorClampToEdge:
+#if TARGET_OS_OSX
     return MTLSamplerAddressModeMirrorClampToEdge;
+#else
+    return MTLSamplerAddressModeClampToEdge;
+#endif
   }
 }
 
+#if TARGET_OS_OSX
 constexpr MTLSamplerBorderColor
 HshToMTLSamplerBorderColor(enum BorderColor BorderColor) noexcept {
   switch (BorderColor) {
@@ -301,6 +310,7 @@ HshToMTLSamplerBorderColor(enum BorderColor BorderColor) noexcept {
     return MTLSamplerBorderColorOpaqueWhite;
   }
 }
+#endif
 
 constexpr MTLColorWriteMask
 HshToMTLColorWriteMask(enum ColorComponentFlags Comps) noexcept {
@@ -362,7 +372,9 @@ struct MetalSamplerCreateInfo {
   MTLSamplerAddressMode sAddressMode;
   MTLSamplerAddressMode tAddressMode;
   MTLSamplerAddressMode rAddressMode;
+#if TARGET_OS_OSX
   MTLSamplerBorderColor borderColor;
+#endif
   MTLCompareFunction compareFunction;
 
   id<MTLSamplerState>
@@ -375,7 +387,9 @@ struct MetalSamplerCreateInfo {
     Descriptor.sAddressMode = sAddressMode;
     Descriptor.tAddressMode = tAddressMode;
     Descriptor.rAddressMode = rAddressMode;
+#if TARGET_OS_OSX
     Descriptor.borderColor = borderColor;
+#endif
     Descriptor.normalizedCoordinates = true;
 #if HSH_SOURCE_LOCATION_ENABLED
     Descriptor.label = @(Location.to_string().c_str());
@@ -602,9 +616,12 @@ struct ShaderConstData<Target::HSH_METAL_TARGET, NStages, NBindings,
             HshToMTLSamplerAddressMode(std::get<SampSeq>(Samps).AddressModeU),
             HshToMTLSamplerAddressMode(std::get<SampSeq>(Samps).AddressModeV),
             HshToMTLSamplerAddressMode(std::get<SampSeq>(Samps).AddressModeW),
+#if TARGET_OS_OSX
             HshToMTLSamplerBorderColor(std::get<SampSeq>(Samps).BorderColor),
+#endif
             HshToMTLCompareFunction(std::get<SampSeq>(Samps).CompareOp)}...},
-        Location(Location), DirectRenderPass(PipelineInfo.DirectRenderPass) {}
+        Location(Location), DirectRenderPass(PipelineInfo.DirectRenderPass) {
+  }
 
   constexpr ShaderConstData(
       std::array<ShaderCode<Target::HSH_METAL_TARGET>, NStages> S,
@@ -667,16 +684,21 @@ struct ShaderConstData<Target::HSH_METAL_TARGET, NStages, NBindings,
     for (std::size_t i = 0; i < NAttachments; ++i)
       Descriptor.colorAttachments[i] =
           TargetAttachments[i].Get(metal::Globals.TargetPixelFormat);
-    Descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    Descriptor.depthAttachmentPixelFormat =
+        DirectRenderPass ? MTLPixelFormatInvalid : MTLPixelFormatDepth32Float;
     Descriptor.sampleCount = metal::Globals.SampleCount;
     Descriptor.inputPrimitiveTopology = TopologyClass;
 
 #if HSH_METAL_BINARY_ARCHIVE
     if (HSH_METAL_BINARY_ARCHIVE_AVAILABILITY) {
-      Descriptor.binaryArchives = @[ metal::Globals.PipelineCache ];
-      [metal::Globals.PipelineCache
-          addRenderPipelineFunctionsWithDescriptor:Descriptor
-                                             error:nullptr];
+      if ([metal::Globals.PipelineCache
+              respondsToSelector:@selector
+              (addRenderPipelineFunctionsWithDescriptor:error:)]) {
+        Descriptor.binaryArchives = @[ metal::Globals.PipelineCache ];
+        [metal::Globals.PipelineCache
+            addRenderPipelineFunctionsWithDescriptor:Descriptor
+                                               error:nullptr];
+      }
     }
 #endif
 
@@ -1382,28 +1404,40 @@ public:
     metal_device_owner Ret;
     auto &ErrHandler = Data->ErrHandler;
 
+    id<MTLDevice> UseDevice = nullptr;
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
     for (id<MTLDevice> Device in MTLCopyAllDevices()) {
       detail::metal::Globals.Device = Device;
-
-      if (!Acceptor(Device,
-                    CheckSurface && CheckSurface.preferredDevice == Device))
-        continue;
-
-      Ret.Data = std::make_unique<struct metal_device_owner::Data>();
-      auto &Data = *Ret.Data;
-      Data.Device = Device;
-      Data.CommandQueue = [Device newCommandQueue];
-
-      detail::metal::Globals.Device = Data.Device;
-      detail::metal::Globals.CommandQueue = Data.CommandQueue;
-
-      detail::metal::Globals.DeletedResourcesArr = &Data.DeletedResources;
-      detail::metal::Globals.DeletedResources = &Data.DeletedResources[0];
-
-      return Ret;
+      if (Acceptor(Device,
+                   CheckSurface && CheckSurface.preferredDevice == Device)) {
+        UseDevice = Device;
+        break;
+      }
     }
+#else
+    if (id<MTLDevice> Device = MTLCreateSystemDefaultDevice()) {
+      detail::metal::Globals.Device = Device;
+      if (Acceptor(Device,
+                   CheckSurface && CheckSurface.preferredDevice == Device))
+        UseDevice = Device;
+    }
+#endif
 
-    return {};
+    if (!UseDevice)
+      return {};
+
+    Ret.Data = std::make_unique<struct metal_device_owner::Data>();
+    auto &Data = *Ret.Data;
+    Data.Device = UseDevice;
+    Data.CommandQueue = [UseDevice newCommandQueue];
+
+    detail::metal::Globals.Device = Data.Device;
+    detail::metal::Globals.CommandQueue = Data.CommandQueue;
+
+    detail::metal::Globals.DeletedResourcesArr = &Data.DeletedResources;
+    detail::metal::Globals.DeletedResources = &Data.DeletedResources[0];
+
+    return Ret;
   }
 };
 

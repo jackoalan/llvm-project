@@ -175,8 +175,9 @@ void MetalPrintingPolicy::printStage(
     ArrayRef<UniformRecord> UniformRecords, CXXRecordDecl *FromRecord,
     CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
-    unsigned NumColorAttachments, CompoundStmt *Stmts, HshStage Stage,
-    HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) {
+    unsigned NumColorAttachments, bool HasDualSource, CompoundStmt *Stmts,
+    HshStage Stage, HshStage From, HshStage To,
+    ArrayRef<SampleCall> SampleCalls) {
   OS << MetalRuntimeSupport;
   ThisStmts = Stmts;
   ThisSampleCalls = SampleCalls;
@@ -277,8 +278,12 @@ void MetalPrintingPolicy::printStage(
 
   if (Stage == HshFragmentStage) {
     OS << "struct color_targets_out {\n";
-    for (unsigned A = 0; A < NumColorAttachments; ++A)
+    for (unsigned A = 0; A < NumColorAttachments; ++A) {
       OS << "  float4 _color_out" << A << " [[color(" << A << ")]];\n";
+      if (NumColorAttachments == 1 && HasDualSource)
+        OS << "  float4 _color_out" << A + 1 << " [[color(" << A
+           << "), index(1)]];\n";
+    }
     OS << "};\n";
   }
 

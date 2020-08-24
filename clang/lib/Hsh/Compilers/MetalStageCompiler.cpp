@@ -258,8 +258,15 @@ MetalStageCompiler::doCompile(ArrayRef<std::string> Sources) const {
                          nullptr, nullptr)
         << Stage;
 
-    if (Runner.Run("-Wno-unused-function", DebugInfo ? "-g" : "", "-o",
-                   OutputFile.c_str(), InputFile.c_str())) {
+    if (Runner.Run("-Wno-unused-function",
+                   Target == HT_METAL_BIN_IOS ? "-std=ios-metal2.2"
+                                              : "-std=macos-metal2.2",
+                   // TODO: Get from target triple
+                   Target == HT_METAL_BIN_IOS ? "-mios-version-min=13.0"
+                                              : "",
+                   DebugInfo ? "-gline-tables-only" : "",
+                   DebugInfo ? "-MO" : "", "-o", OutputFile.c_str(),
+                   InputFile.c_str())) {
       llvm::errs() << Stage << '\n';
       Diags.Report(SourceLocation(),
                    Diags.getCustomDiagID(DiagnosticsEngine::Error,

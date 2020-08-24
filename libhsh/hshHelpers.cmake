@@ -166,7 +166,7 @@ function(target_hsh target)
           ${ARGN})
 
   # Assemble target arguments for hshgen
-  unset(_hsh_args)
+  set(_hsh_args --target=${CMAKE_CXX_COMPILER_TARGET})
   foreach(target ${HSH_TARGETS})
     list(APPEND _hsh_args "--${target}")
   endforeach()
@@ -285,22 +285,7 @@ function(hsh_add_executable target_name basis_target)
   if(CMAKE_HOST_UNIX)
     set(dest_binary "$<TARGET_FILE_NAME:${basis_target}>")
   endif()
-  if(CMAKE_CONFIGURATION_TYPES)
-    list(GET CMAKE_CONFIGURATION_TYPES 0 first_type)
-    string(TOUPPER ${first_type} first_type_upper)
-    set(first_type_suffix _${first_type_upper})
-  endif()
-  get_target_property(ARG_OUTPUT_DIR ${basis_target} RUNTIME_OUTPUT_DIRECTORY${first_type_suffix})
-  if(CMAKE_CONFIGURATION_TYPES)
-    string(FIND "${ARG_OUTPUT_DIR}" "/${first_type}/" type_start REVERSE)
-    string(SUBSTRING "${ARG_OUTPUT_DIR}" 0 ${type_start} path_prefix)
-    string(SUBSTRING "${ARG_OUTPUT_DIR}" ${type_start} -1 path_suffix)
-    string(REPLACE "/${first_type}/" "/${CMAKE_CFG_INTDIR}/"
-            path_suffix ${path_suffix})
-    set(ARG_OUTPUT_DIR ${path_prefix}${path_suffix})
-  endif()
-
-  set(output_path "${ARG_OUTPUT_DIR}/${target_name}${CMAKE_EXECUTABLE_SUFFIX}")
+  set(output_path "${target_name}${CMAKE_EXECUTABLE_SUFFIX}")
 
   if (APPLE)
     # TODO: Come up with some kind of bundle handling (install basis removal?)
@@ -309,13 +294,13 @@ function(hsh_add_executable target_name basis_target)
             COMMAND "$<TARGET_FILE:llvm-objcopy>"
             "${dest_binary}" "${output_path}"
             COMMAND "${CMAKE_COMMAND}" -E create_symlink "${dest_binary}.dSYM" "${output_path}.dSYM"
-            WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:${basis_target}>"
             DEPENDS ${basis_target} llvm-objcopy)
   else()
     add_custom_command(OUTPUT ${output_path}
             COMMAND "$<TARGET_FILE:llvm-objcopy>"
             "${dest_binary}" "${output_path}"
-            WORKING_DIRECTORY "${ARG_OUTPUT_DIR}"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:${basis_target}>"
             DEPENDS ${basis_target} llvm-objcopy)
   endif()
 

@@ -177,6 +177,8 @@ class RenderTextureAllocation {
   RenderTextureAllocation *Prev = nullptr, *Next = nullptr;
   SourceLocation Location;
   id<MTLRenderCommandEncoder> Cmd = nullptr;
+  MTLViewport Viewport{};
+  MTLScissorRect ScissorRect{};
   SurfaceAllocation *Surface = nullptr;
   hsh::extent2d Extent;
   MTLPixelFormat ColorFormat = MTLPixelFormatInvalid;
@@ -226,7 +228,9 @@ public:
       }
     }
   }
+  inline id<MTLRenderCommandEncoder> GetCmd() noexcept;
   inline void BeginRenderPass() noexcept;
+  inline void EndRenderPass() noexcept;
   inline void ResolveSurface(SurfaceAllocation *Surface,
                              bool Reattach) noexcept;
   inline void ResolveColorBinding(uint32_t Idx, rect2d Region,
@@ -400,7 +404,7 @@ struct MetalGlobals {
   id PipelineCache = nullptr;
 #endif
   uint32_t SampleCount = 1;
-  float Anisotropy = 0.f;
+  float Anisotropy = 1.f;
   MTLPixelFormat TargetPixelFormat = MTLPixelFormatInvalid;
   id<MTLCommandQueue> CommandQueue = nullptr;
   std::array<id<MTLCommandBuffer>, 2> CommandBuffers{};
@@ -413,6 +417,7 @@ struct MetalGlobals {
 #endif
   id<MTLRenderPipelineState> BoundPipeline = nullptr;
   RenderTextureAllocation *AttachedRenderTexture = nullptr;
+  id<MTLRenderCommandEncoder> OverrideCmd = nullptr;
   uint64_t Frame = 0;
   bool AcquiredImage = false;
 
@@ -459,8 +464,7 @@ struct MetalGlobals {
     [CopyCmd endEncoding];
     CopyCmd = nullptr;
     if (AttachedRenderTexture) {
-      [AttachedRenderTexture->Cmd endEncoding];
-      AttachedRenderTexture->Cmd = nullptr;
+      AttachedRenderTexture->EndRenderPass();
       AttachedRenderTexture = nullptr;
     }
 
@@ -499,8 +503,10 @@ struct MetalGlobals {
   }
 
   id<MTLRenderCommandEncoder> GetCmd() noexcept {
+    if (OverrideCmd)
+      return OverrideCmd;
     assert(AttachedRenderTexture && "No attached render texture");
-    return AttachedRenderTexture->Cmd;
+    return AttachedRenderTexture->GetCmd();
   }
 
   id<MTLBlitCommandEncoder> GetCopyCmd() noexcept {
@@ -523,24 +529,32 @@ inline MetalGlobals Globals;
 
 template <typename Mgr> inline id CreatePipelineCache(Mgr &M) noexcept {
   if (HSH_METAL_BINARY_ARCHIVE_AVAILABILITY) {
-    MTLBinaryArchiveDescriptor *Descriptor = [MTLBinaryArchiveDescriptor new];
-    M.ReadPipelineCache([&](NSURL *url) { Descriptor.url = url; });
-    NSError *Error;
-    id Archive =
-        [metal::Globals.Device newBinaryArchiveWithDescriptor:Descriptor
-                                                        error:&Error];
-    if (!Archive)
-      (*metal::Globals.ErrHandler)(Error);
-    return Archive;
+    if ([MTLBinaryArchiveDescriptor
+            instancesRespondToSelector:@selector(setUrl:)] &&
+        [metal::Globals.Device respondsToSelector:@selector
+                               (newBinaryArchiveWithDescriptor:error:)]) {
+      MTLBinaryArchiveDescriptor *Descriptor = [MTLBinaryArchiveDescriptor new];
+      M.ReadPipelineCache([&](NSURL *url) { Descriptor.url = url; });
+      NSError *Error;
+      id Archive =
+          [metal::Globals.Device newBinaryArchiveWithDescriptor:Descriptor
+                                                          error:&Error];
+      if (!Archive)
+        (*metal::Globals.ErrHandler)(Error);
+      return Archive;
+    }
   }
   return nullptr;
 }
 
 template <typename Mgr> inline void WritePipelineCache(Mgr &M) noexcept {
   if (HSH_METAL_BINARY_ARCHIVE_AVAILABILITY) {
-    M.WritePipelineCache([&](NSURL *url) {
-      [Globals.PipelineCache serializeToURL:url error:nullptr];
-    });
+    if ([Globals.PipelineCache respondsToSelector:@selector(serializeToURL:
+                                                                     error:)]) {
+      M.WritePipelineCache([&](NSURL *url) {
+        [Globals.PipelineCache serializeToURL:url error:nullptr];
+      });
+    }
   }
 }
 
@@ -636,7 +650,9 @@ void SurfaceAllocation::DrawDecorations() noexcept {
                                  0.0, 1.0}];
     [Cmd setScissorRect:MTLScissorRect{0, 0, NSUInteger(Extent.w),
                                        NSUInteger(Extent.h)}];
+    Globals.OverrideCmd = Cmd;
     DecorationLambda();
+    Globals.OverrideCmd = nullptr;
     [Cmd endEncoding];
   }
 }
@@ -777,7 +793,9 @@ uint32_t FifoBufferAllocation::MapVertexIndex(std::size_t count,
 }
 
 void FifoBufferAllocation::PostRender() noexcept {
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
   [GetBuffer() didModifyRange:NSMakeRange(StartOffset, Offset - StartOffset)];
+#endif
   if (StartOffset) {
     Offset = 0;
     StartOffset = 0;
@@ -898,10 +916,23 @@ void RenderTextureAllocation::Prepare() noexcept {
   }
 }
 
+inline id<MTLRenderCommandEncoder> RenderTextureAllocation::GetCmd() noexcept {
+  if (!Cmd)
+    BeginRenderPass();
+  return Cmd;
+}
+
 void RenderTextureAllocation::BeginRenderPass() noexcept {
   [Cmd endEncoding];
   Cmd = [Globals.GetCmdBuffer()
       renderCommandEncoderWithDescriptor:RenderPassBegin];
+  [Cmd setViewport:Viewport];
+  [Cmd setScissorRect:ScissorRect];
+}
+
+void RenderTextureAllocation::EndRenderPass() noexcept {
+  [Cmd endEncoding];
+  Cmd = nullptr;
 }
 
 template <bool Depth>
@@ -945,19 +976,13 @@ void RenderTextureAllocation::Resolve(id<MTLTexture> SrcImage,
                                       MTLSize ExtentIn,
                                       bool Reattach) noexcept {
   bool DelimitRenderPass = this == Globals.AttachedRenderTexture;
-  if (DelimitRenderPass) {
-    [Cmd endEncoding];
-    Cmd = nullptr;
-  }
+  if (DelimitRenderPass)
+    EndRenderPass();
 
   _Resolve<Depth>(SrcImage, DstImage, Offset, Offset, ExtentIn);
 
-  if (DelimitRenderPass) {
-    if (Reattach)
-      BeginRenderPass();
-    else
-      Globals.AttachedRenderTexture = nullptr;
-  }
+  if (DelimitRenderPass && !Reattach)
+    Globals.AttachedRenderTexture = nullptr;
 }
 
 void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
@@ -967,10 +992,8 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
   assert(Surface->ContentExtent() == Extent &&
          "Mismatched render texture / surface extents");
   bool DelimitRenderPass = this == Globals.AttachedRenderTexture;
-  if (DelimitRenderPass) {
-    [Cmd endEncoding];
-    Cmd = nullptr;
-  }
+  if (DelimitRenderPass)
+    EndRenderPass();
   auto DstImage = Surface->NextImage;
   MTLOrigin DestOff{};
   if (int32_t(Surface->Extent.w) > Surface->MarginL + Surface->MarginR &&
@@ -980,12 +1003,8 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
   _Resolve<false>(ColorTexture.GetTexture(), DstImage.texture, MTLOrigin{},
                   DestOff, Extent);
   Surface->DrawDecorations();
-  if (DelimitRenderPass) {
-    if (Reattach)
-      BeginRenderPass();
-    else
-      Globals.AttachedRenderTexture = nullptr;
-  }
+  if (DelimitRenderPass && !Reattach)
+    Globals.AttachedRenderTexture = nullptr;
 }
 
 void RenderTextureAllocation::ResolveColorBinding(uint32_t Idx, rect2d region,
@@ -1005,8 +1024,7 @@ void RenderTextureAllocation::ResolveDepthBinding(uint32_t Idx, rect2d region,
 }
 
 void RenderTextureAllocation::Clear(bool Color, bool Depth) noexcept {
-  [Cmd endEncoding];
-  Cmd = nullptr;
+  EndRenderPass();
 
   MTLRenderPassDescriptor *RenderPass =
       [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1016,6 +1034,7 @@ void RenderTextureAllocation::Clear(bool Color, bool Depth) noexcept {
     Attachment.texture = ColorTexture.GetTexture();
     Attachment.loadAction = MTLLoadActionClear;
     Attachment.storeAction = MTLStoreActionStore;
+    Attachment.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
   }
   if (Depth) {
     MTLRenderPassDepthAttachmentDescriptor *Attachment =
@@ -1023,57 +1042,49 @@ void RenderTextureAllocation::Clear(bool Color, bool Depth) noexcept {
     Attachment.texture = DepthTexture.GetTexture();
     Attachment.loadAction = MTLLoadActionClear;
     Attachment.storeAction = MTLStoreActionStore;
+    Attachment.clearDepth = 0.0;
   }
   [[Globals.GetCmdBuffer() renderCommandEncoderWithDescriptor:RenderPass]
       endEncoding];
-
-  BeginRenderPass();
 }
 
 template <typename... Args>
 void RenderTextureAllocation::Attach(const Args &... args) noexcept {
   if (Globals.AttachedRenderTexture == this)
     return;
-  if (Globals.AttachedRenderTexture) {
-    [Globals.AttachedRenderTexture->Cmd endEncoding];
-    Globals.AttachedRenderTexture->Cmd = nullptr;
-  }
+  if (Globals.AttachedRenderTexture)
+    Globals.AttachedRenderTexture->EndRenderPass();
   Globals.AttachedRenderTexture = this;
-
-  BeginRenderPass();
   ProcessAttachArgs(args...);
 }
 
 void RenderTextureAllocation::ProcessAttachArgs() noexcept {
-  [Cmd setViewport:MTLViewport{0.0, 0.0, double(Extent.w), double(Extent.h),
-                               0.0, 1.0}];
-  [Cmd setScissorRect:MTLScissorRect{0, 0, NSUInteger(Extent.w),
-                                     NSUInteger(Extent.h)}];
+  Viewport =
+      MTLViewport{0.0, 0.0, double(Extent.w), double(Extent.h), 0.0, 1.0};
+  ScissorRect =
+      MTLScissorRect{0, 0, NSUInteger(Extent.w), NSUInteger(Extent.h)};
 }
 
 void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp) noexcept {
-  [Cmd setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
-                               vp.maxDepth}];
-  [Cmd setScissorRect:MTLScissorRect{NSUInteger(vp.x), NSUInteger(vp.y),
-                                     NSUInteger(vp.width),
-                                     NSUInteger(vp.height)}];
+  Viewport =
+      MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth, vp.maxDepth};
+  ScissorRect = MTLScissorRect{NSUInteger(vp.x), NSUInteger(vp.y),
+                               NSUInteger(vp.width), NSUInteger(vp.height)};
 }
 
 void RenderTextureAllocation::ProcessAttachArgs(const scissor &s) noexcept {
-  [Cmd setViewport:MTLViewport{0.0, 0.0, double(Extent.w), double(Extent.h),
-                               0.0, 1.0}];
-  [Cmd setScissorRect:MTLScissorRect{
-                          NSUInteger(s.offset.x), NSUInteger(s.offset.y),
-                          NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
+  Viewport =
+      MTLViewport{0.0, 0.0, double(Extent.w), double(Extent.h), 0.0, 1.0};
+  ScissorRect = MTLScissorRect{NSUInteger(s.offset.x), NSUInteger(s.offset.y),
+                               NSUInteger(s.extent.w), NSUInteger(s.extent.h)};
 }
 
 void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp,
                                                 const scissor &s) noexcept {
-  [Cmd setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
-                               vp.maxDepth}];
-  [Cmd setScissorRect:MTLScissorRect{
-                          NSUInteger(s.offset.x), NSUInteger(s.offset.y),
-                          NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
+  Viewport =
+      MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth, vp.maxDepth};
+  ScissorRect = MTLScissorRect{NSUInteger(s.offset.x), NSUInteger(s.offset.y),
+                               NSUInteger(s.extent.w), NSUInteger(s.extent.h)};
 }
 
 struct BufferImageCopy {

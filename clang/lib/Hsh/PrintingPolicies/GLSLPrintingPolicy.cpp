@@ -78,8 +78,11 @@ void GLSLPrintingPolicy::printStage(
     ArrayRef<UniformRecord> UniformRecords, CXXRecordDecl *FromRecord,
     CXXRecordDecl *ToRecord, ArrayRef<AttributeRecord> Attributes,
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
-    unsigned NumColorAttachments, CompoundStmt *Stmts, HshStage Stage,
-    HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) {
+    unsigned NumColorAttachments, bool HasDualSource, CompoundStmt *Stmts,
+    HshStage Stage, HshStage From, HshStage To,
+    ArrayRef<SampleCall> SampleCalls) {
+  if (HasDualSource)
+    ++NumColorAttachments;
   OS << GLSLRuntimeSupport;
 
   auto PrintFunction = [&](const FunctionDecl *FD) {

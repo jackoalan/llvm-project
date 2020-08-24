@@ -89,9 +89,9 @@ struct MetalPrintingPolicy
                   ArrayRef<AttributeRecord> Attributes,
                   ArrayRef<TextureRecord> Textures,
                   ArrayRef<SamplerBinding> Samplers,
-                  unsigned NumColorAttachments, CompoundStmt *Stmts,
-                  HshStage Stage, HshStage From, HshStage To,
-                  ArrayRef<SampleCall> SampleCalls) override;
+                  unsigned NumColorAttachments, bool HasDualSource,
+                  CompoundStmt *Stmts, HshStage Stage, HshStage From,
+                  HshStage To, ArrayRef<SampleCall> SampleCalls) override;
 };
 
 } // namespace clang::hshgen

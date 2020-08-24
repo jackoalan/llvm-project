@@ -75,6 +75,11 @@ int main(int argc, const char **argv) {
       "g", cl::desc("Embed debug information in compiled shaders"),
       cl::cat(llvm::cl::GeneralCategory));
 
+  static cl::opt<std::string, false, cl::value_parser> Target(
+      "target", cl::Optional,
+      cl::desc("Generate code for the given target"),
+      cl::cat(llvm::cl::GeneralCategory));
+
   static cl::opt<std::string, false, cl::dir_parser> IStdlibDir(
       "stdlib++-isystem", cl::Optional, cl::Prefix,
       cl::desc("Specify directory as C++ standard library include path"),
@@ -169,6 +174,8 @@ int main(int argc, const char **argv) {
     args.emplace_back("-v");
   if (WithColor(llvm::errs()).colorsEnabled())
     args.emplace_back("-fcolor-diagnostics");
+  if (!Target.empty())
+    args.push_back(std::string("--target=") + Target);
   if (!IStdlibDir.empty()) {
     args.emplace_back("-stdlib++-isystem");
     args.push_back(IStdlibDir);

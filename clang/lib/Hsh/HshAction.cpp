@@ -379,7 +379,7 @@ public:
         addCoordinatorType(T);
 
       Builder Builder(Context, Builtins, Specialization,
-                      ColorAttachmentArgs.size() + (HasDualSource ? 1 : 0));
+                      ColorAttachmentArgs.size(), HasDualSource);
 
       CXXConstructorDecl *Constructor = nullptr;
       for (auto *Ctor : PipelineSource->ctors()) {

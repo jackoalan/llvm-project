@@ -590,8 +590,8 @@ StageSources Builder::printResults(ShaderPrintingPolicyBase &Policy) {
           NextStage != HshNoStage ? InterStageRecords[NextStage].getRecord()
                                   : nullptr,
           AttributeRecords, Textures, SamplerBindings, NumColorAttachments,
-          StageStmts[S].CStmts, HshStage(S), previousUsedStage(HshStage(S)),
-          NextStage, SampleCalls[S]);
+          HasDualSource, StageStmts[S].CStmts, HshStage(S),
+          previousUsedStage(HshStage(S)), NextStage, SampleCalls[S]);
     }
   }
 
