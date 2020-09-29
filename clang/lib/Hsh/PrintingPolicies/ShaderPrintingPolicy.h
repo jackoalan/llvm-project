@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <bitset>
+
 #include "llvm/ADT/FunctionExtras.h"
 
 #include "clang/AST/ExprCXX.h"
@@ -52,7 +54,8 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
              ArrayRef<TextureRecord> Textures,
              ArrayRef<SamplerBinding> Samplers, unsigned NumColorAttachments,
              bool HasDualSource, CompoundStmt *Stmts, HshStage Stage,
-             HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls) = 0;
+             HshStage From, HshStage To, ArrayRef<SampleCall> SampleCalls,
+             std::bitset<HPF_Max> ReferencedPipelineFields) = 0;
   explicit ShaderPrintingPolicyBase(HshBuiltins &Builtins, ASTContext &Context,
                                     HshTarget Target)
       : PrintingPolicy(LangOptions()), Builtins(Builtins), Context(Context),

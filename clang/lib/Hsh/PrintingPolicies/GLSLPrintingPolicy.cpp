@@ -80,7 +80,8 @@ void GLSLPrintingPolicy::printStage(
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
     unsigned NumColorAttachments, bool HasDualSource, CompoundStmt *Stmts,
     HshStage Stage, HshStage From, HshStage To,
-    ArrayRef<SampleCall> SampleCalls) {
+    ArrayRef<SampleCall> SampleCalls,
+    std::bitset<HPF_Max> ReferencedPipelineFields) {
   if (HasDualSource)
     ++NumColorAttachments;
   OS << GLSLRuntimeSupport;

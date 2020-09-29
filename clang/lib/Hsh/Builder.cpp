@@ -591,7 +591,8 @@ StageSources Builder::printResults(ShaderPrintingPolicyBase &Policy) {
                                   : nullptr,
           AttributeRecords, Textures, SamplerBindings, NumColorAttachments,
           HasDualSource, StageStmts[S].CStmts, HshStage(S),
-          previousUsedStage(HshStage(S)), NextStage, SampleCalls[S]);
+          previousUsedStage(HshStage(S)), NextStage, SampleCalls[S],
+          ReferencedPipelineFields);
     }
   }
 

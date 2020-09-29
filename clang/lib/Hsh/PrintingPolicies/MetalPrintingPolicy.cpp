@@ -177,7 +177,8 @@ void MetalPrintingPolicy::printStage(
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
     unsigned NumColorAttachments, bool HasDualSource, CompoundStmt *Stmts,
     HshStage Stage, HshStage From, HshStage To,
-    ArrayRef<SampleCall> SampleCalls) {
+    ArrayRef<SampleCall> SampleCalls,
+    std::bitset<HPF_Max> ReferencedPipelineFields) {
   OS << MetalRuntimeSupport;
   ThisStmts = Stmts;
   ThisSampleCalls = SampleCalls;
@@ -307,9 +308,13 @@ void MetalPrintingPolicy::printStage(
     raw_string_ostream AO(AfterStatements);
     AO << "return _to_" << HshStageToString(To) << ";\n";
   }
-  if (Stage == HshVertexStage)
+  if (Stage == HshVertexStage) {
     OS << "host_vert_data _vert_data [[stage_in]]";
-  else if (FromRecord)
+    if (ReferencedPipelineFields[HPF_vertex_id])
+      OS << ", uint _vertex_id [[vertex_id]]";
+    if (ReferencedPipelineFields[HPF_instance_id])
+      OS << ", uint _instance_id [[instance_id]]";
+  } else if (FromRecord)
     OS << HshStageToString(From) << "_to_" << HshStageToString(Stage)
        << " _from_" << HshStageToString(From) << " [[stage_in]]";
 
