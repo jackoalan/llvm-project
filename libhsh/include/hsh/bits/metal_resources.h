@@ -1276,6 +1276,7 @@ public:
     Data->BuiltPipelines = true;
   }
 
+#if HSH_METAL_BINARY_ARCHIVE
   template <typename CacheFileMgr>
   void build_pipelines(CacheFileMgr &CFM) noexcept {
     if (Data->BuiltPipelines)
@@ -1289,6 +1290,12 @@ public:
     hsh::detail::metal::WritePipelineCache(CFM);
     Data->BuiltPipelines = true;
   }
+#else
+  template <typename CacheFileMgr>
+  void build_pipelines(CacheFileMgr &CFM) noexcept {
+    build_pipelines();
+  }
+#endif
 
   using HighCompleteFunc = std::function<void()>;
   using ProgFunc = std::function<void(std::size_t, std::size_t)>;
@@ -1311,6 +1318,7 @@ public:
     Data->BuiltPipelines = true;
   }
 
+#if HSH_METAL_BINARY_ARCHIVE
   template <typename CacheFileMgr>
   void build_pipelines(CacheFileMgr &CFM, const HighCompleteFunc &HCF,
                        const ProgFunc &PF) noexcept {
@@ -1384,6 +1392,13 @@ public:
 
     return pipeline_build_pump(CFM);
   }
+#else
+  template <typename CacheFileMgr>
+  void build_pipelines(CacheFileMgr &CFM, const HighCompleteFunc &HCF,
+                       const ProgFunc &PF) noexcept {
+    build_pipelines(HCF, PF);
+  }
+#endif
 
   template <typename Func> void enter_draw_context(Func F) const noexcept {
     detail::metal::Globals.PreRender();
