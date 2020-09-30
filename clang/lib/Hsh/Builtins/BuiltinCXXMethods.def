@@ -4,10 +4,10 @@
 
 BUILTIN_CXX_METHOD(sample2d, sample, false, texture2d, struct hsh::float2, struct hsh::sampler)
 BUILTIN_CXX_METHOD(sample_bias2d, sample_bias, false, texture2d, struct hsh::float2, float, struct hsh::sampler)
-BUILTIN_CXX_METHOD(read2d, read, false, texture2d, struct hsh::int2, int)
+BUILTIN_CXX_METHOD(read2d, read, false, texture2d, struct hsh::uint2, uint)
 
 BUILTIN_CXX_METHOD(render_sample2d, sample, false, render_texture2d, struct hsh::float2, struct hsh::sampler)
-BUILTIN_CXX_METHOD(render_read2d, read, false, render_texture2d, struct hsh::int2, int)
+BUILTIN_CXX_METHOD(render_read2d, read, false, render_texture2d, struct hsh::uint2, uint)
 
 BUILTIN_CXX_METHOD(xyz_float4, xyz, true, float4, void)
 BUILTIN_CXX_METHOD(xy_float4, xy, true, float4, void)

@@ -293,26 +293,27 @@ struct texture_typeless : base_texture {
 
 #define HSH_PROTOTYPE_NORMAL(readt)                                            \
   template <typename T>                                                        \
-  scalar_to_vector_t<T, 4> read(readt, int lod = 0) const noexcept {           \
+  scalar_to_vector_t<T, 4> read(readt, uint lod = 0) const noexcept {          \
     return {};                                                                 \
   }
 
 #define HSH_PROTOTYPE_ARRAY(readt)                                             \
   template <typename T>                                                        \
-  scalar_to_vector_t<T, 4> read(readt, int array, int lod = 0)                 \
+  scalar_to_vector_t<T, 4> read(readt, uint array, uint lod = 0)               \
       const noexcept {                                                         \
     return {};                                                                 \
   }
 
 #define HSH_PROTOTYPE_CUBE(readt)                                              \
   template <typename T>                                                        \
-  scalar_to_vector_t<T, 4> read(readt, int face, int lod = 0) const noexcept { \
+  scalar_to_vector_t<T, 4> read(readt, uint face, uint lod = 0)                \
+      const noexcept {                                                         \
     return {};                                                                 \
   }
 
 #define HSH_PROTOTYPE_CUBEARRAY(readt)                                         \
   template <typename T>                                                        \
-  scalar_to_vector_t<T, 4> read(readt, int face, int array, int lod = 0)       \
+  scalar_to_vector_t<T, 4> read(readt, uint face, uint array, uint lod = 0)    \
       const noexcept {                                                         \
     return {};                                                                 \
   }
@@ -335,13 +336,13 @@ struct texture_typeless : base_texture {
     }                                                                          \
     HSH_PROTOTYPE_##prototype(readt)                                           \
   };
-HSH_CASTABLE_TEXTURE(texture1d, NORMAL, float, int)
-HSH_CASTABLE_TEXTURE(texture1d_array, ARRAY, float2, int2)
-HSH_CASTABLE_TEXTURE(texture2d, NORMAL, float2, int2)
-HSH_CASTABLE_TEXTURE(texture2d_array, ARRAY, float3, int3)
-HSH_CASTABLE_TEXTURE(texture3d, NORMAL, float3, int3)
-HSH_CASTABLE_TEXTURE(texturecube, CUBE, float3, int3)
-HSH_CASTABLE_TEXTURE(texturecube_array, CUBEARRAY, float4, int4)
+HSH_CASTABLE_TEXTURE(texture1d, NORMAL, float, uint)
+HSH_CASTABLE_TEXTURE(texture1d_array, ARRAY, float2, uint2)
+HSH_CASTABLE_TEXTURE(texture2d, NORMAL, float2, uint2)
+HSH_CASTABLE_TEXTURE(texture2d_array, ARRAY, float3, uint3)
+HSH_CASTABLE_TEXTURE(texture3d, NORMAL, float3, uint3)
+HSH_CASTABLE_TEXTURE(texturecube, CUBE, float3, uint3)
+HSH_CASTABLE_TEXTURE(texturecube_array, CUBEARRAY, float4, uint4)
 #undef HSH_CASTABLE_TEXTURE
 #undef HSH_PROTOTYPE_NORMAL
 #undef HSH_PROTOTYPE_ARRAY
@@ -357,7 +358,7 @@ struct render_texture2d {
     return {};
   }
   template <typename T>
-  scalar_to_vector_t<T, 4> read(int2, int lod = 0) const noexcept {
+  scalar_to_vector_t<T, 4> read(uint2, uint lod = 0) const noexcept {
     return {};
   }
 };
