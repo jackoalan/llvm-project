@@ -156,7 +156,8 @@ void HLSLPrintingPolicy::printStage(
     ArrayRef<TextureRecord> Textures, ArrayRef<SamplerBinding> Samplers,
     unsigned NumColorAttachments, bool HasDualSource, CompoundStmt *Stmts,
     HshStage Stage, HshStage From, HshStage To,
-    ArrayRef<SampleCall> SampleCalls) {
+    ArrayRef<SampleCall> SampleCalls,
+    std::bitset<HPF_Max> ReferencedPipelineFields) {
   if (HasDualSource)
     ++NumColorAttachments;
   OS << HLSLRuntimeSupport;
@@ -292,9 +293,13 @@ void HLSLPrintingPolicy::printStage(
     raw_string_ostream AO(AfterStatements);
     AO << "return _to_" << HshStageToString(To) << ";\n";
   }
-  if (Stage == HshVertexStage)
+  if (Stage == HshVertexStage) {
     OS << "in host_vert_data _vert_data";
-  else if (FromRecord)
+    if (ReferencedPipelineFields[HPF_vertex_id])
+      OS << ", uint _vertex_id : SV_VertexID";
+    if (ReferencedPipelineFields[HPF_instance_id])
+      OS << ", uint _instance_id : SV_InstanceID";
+  } else if (FromRecord)
     OS << "in " << HshStageToString(From) << "_to_" << HshStageToString(Stage)
        << " _from_" << HshStageToString(From);
   OS << ") ";

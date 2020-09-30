@@ -501,6 +501,8 @@ template <typename... Attrs> struct pipeline {
   template <std::size_t Idx>
   static constexpr BlendFactor DstAlphaBlendFactor =
       detail::ColorAttachmentSelectorImpl<Idx, 0, Attrs...>::DstAlphaBlend;
+  uint32_t vertex_id;
+  uint32_t instance_id;
 };
 } // namespace pipeline
 

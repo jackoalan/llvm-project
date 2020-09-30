@@ -133,11 +133,15 @@ struct DependencyPass : ConstStmtVisitor<DependencyPass, HshStage> {
 
   HshStage VisitMemberExpr(const MemberExpr *ME) {
     if (auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl())) {
-      auto Stage = Partitioner.Builtins.determinePipelineFieldStage(FD);
-      if (Stage != HshNoStage) {
-        if (AssignMutator)
-          Builder.setStageUsed(Stage);
-        return Stage;
+      auto HPF = Partitioner.Builtins.identifyBuiltinPipelineField(FD);
+      if (HPF != HPF_None) {
+        Builder.setReferencedPipelineField(HPF);
+        auto Stage = Partitioner.Builtins.stageOfBuiltinPipelineField(HPF);
+        if (Stage != HshNoStage) {
+          if (AssignMutator)
+            Builder.setStageUsed(Stage);
+          return Stage;
+        }
       }
     }
     return VisitStmt(ME);

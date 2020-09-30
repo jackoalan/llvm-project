@@ -39,6 +39,14 @@ struct HLSLPrintingPolicy
     return "_targets_out._color_out";
   }
 
+  static constexpr StringRef identifierOfVertexID(FieldDecl *FD) {
+      return "_vertex_id";
+  }
+
+  static constexpr StringRef identifierOfInstanceID(FieldDecl *FD) {
+      return "_instance_id";
+  }
+
   mutable std::string CXXMethodIdentifier;
   StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
                                   CXXMemberCallExpr *C) const;
@@ -97,7 +105,8 @@ struct HLSLPrintingPolicy
                   ArrayRef<SamplerBinding> Samplers,
                   unsigned NumColorAttachments, bool HasDualSource,
                   CompoundStmt *Stmts, HshStage Stage, HshStage From,
-                  HshStage To, ArrayRef<SampleCall> SampleCalls) override;
+                  HshStage To, ArrayRef<SampleCall> SampleCalls,
+                  std::bitset<HPF_Max> ReferencedPipelineFields) override;
 };
 
 } // namespace clang::hshgen

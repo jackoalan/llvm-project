@@ -33,6 +33,14 @@ struct GLSLPrintingPolicy
     return "_color_out";
   }
 
+  static constexpr StringRef identifierOfVertexID(FieldDecl *FD) {
+    return "gl_VertexID";
+  }
+
+  static constexpr StringRef identifierOfInstanceID(FieldDecl *FD) {
+    return "gl_InstanceID";
+  }
+
   static constexpr StringRef identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
                                                    CXXMemberCallExpr *C) {
     switch (HBM) {
@@ -93,7 +101,8 @@ struct GLSLPrintingPolicy
                   ArrayRef<SamplerBinding> Samplers,
                   unsigned NumColorAttachments, bool HasDualSource,
                   CompoundStmt *Stmts, HshStage Stage, HshStage From,
-                  HshStage To, ArrayRef<SampleCall> SampleCalls) override;
+                  HshStage To, ArrayRef<SampleCall> SampleCalls,
+                  std::bitset<HPF_Max> ReferencedPipelineFields) override;
 
   using base::ShaderPrintingPolicy;
 };

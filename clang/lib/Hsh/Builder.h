@@ -10,6 +10,8 @@
 
 #include "Builtins/Builtins.h"
 
+#include <bitset>
+
 namespace clang::hshgen {
 struct ShaderPrintingPolicyBase;
 
@@ -87,6 +89,7 @@ class Builder {
   SmallVector<VertexAttribute, 4> VertexAttributes;
   llvm::DenseMap<ParmVarDecl *, unsigned> UseParmVarDecls;
   bool HasDualSource = false;
+  std::bitset<HPF_Max> ReferencedPipelineFields;
 
 public:
   Builder(ASTContext &Context, HshBuiltins &Builtins,
@@ -159,6 +162,10 @@ public:
     if (S == HshNoStage)
       return;
     UseStages |= 1 << S;
+  }
+
+  void setReferencedPipelineField(HshBuiltinPipelineField field) {
+    ReferencedPipelineFields.set(field);
   }
 
   StageSources printResults(ShaderPrintingPolicyBase &Policy);
