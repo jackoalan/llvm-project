@@ -100,9 +100,18 @@ index d6d5da7..7a5be48 100644
  
  #define delete_Instruction(p, insn) (p)->releaseInstruction(insn)
 diff --git a/meson.build b/meson.build
-index 871cd20..80fcebf 100644
+index 871cd20..9142b58 100644
 --- a/meson.build
 +++ b/meson.build
+@@ -4,7 +4,7 @@ project('uam', ['c', 'cpp'],
+ 	default_options: [ 'buildtype=release', 'strip=true', 'b_ndebug=if-release', 'c_std=c99', 'cpp_std=c++11' ],
+ )
+ 
+-prog_python = import('python3').find_python()
++prog_python = import('python').find_installation('python3')
+ has_mako = run_command(
+ 	prog_python, '-c',
+ 	'''
 @@ -26,7 +26,7 @@ pre_args = [
  	'-DPACKAGE_STRING="@0@ @1@"'.format(meson.project_name(), meson.project_version()),
  	'-DDESKTOP',
