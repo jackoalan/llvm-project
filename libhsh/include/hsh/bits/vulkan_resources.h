@@ -1218,6 +1218,15 @@ struct TargetTraits<Target::VULKAN_SPIRV>::ResourceFactory<render_texture2d> {
             Surf.Binding.get_VULKAN_SPIRV().Allocation, NumColorBindings,
             NumDepthBindings)};
   }
+
+  static auto Create(const SourceLocation &location, extent2d Extent,
+                     Format Format, uint32_t NumColorBindings = 0,
+                     uint32_t NumDepthBindings = 0) noexcept {
+    return TargetTraits<Target::VULKAN_SPIRV>::RenderTextureOwner{
+        std::make_unique<vulkan::RenderTextureAllocation>(
+            location.with_field("RenderTexture2D"), Extent,
+            HshToVkFormat(Format), NumColorBindings, NumDepthBindings)};
+  }
 };
 
 template <>
