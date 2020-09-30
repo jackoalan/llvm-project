@@ -1525,8 +1525,10 @@ void StmtPrinter::VisitCallExpr(CallExpr *Call) {
               OS << Arg;
             },
             [&](Expr *E) {
-              PrintComma();
-              PrintExpr(E);
+              if (!isa<CXXDefaultArgExpr>(E)) {
+                PrintComma();
+                PrintExpr(E);
+              }
             },
             [&](StringRef Before, Expr *E, StringRef After) {
               PrintComma();
