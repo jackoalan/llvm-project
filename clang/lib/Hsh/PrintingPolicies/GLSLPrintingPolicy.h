@@ -48,6 +48,9 @@ struct GLSLPrintingPolicy
     case HBM_render_sample2d:
     case HBM_sample_bias2d:
       return "texture";
+    case HBM_read2d:
+    case HBM_render_read2d:
+      return "texelFetch";
     default:
       return {};
     }
@@ -60,12 +63,19 @@ struct GLSLPrintingPolicy
       const std::function<void(StringRef, Expr *, StringRef)> &WrappedExprArg) {
     switch (HBM) {
     case HBM_sample2d:
-    case HBM_render_sample2d:
-    case HBM_sample_bias2d: {
+    case HBM_sample_bias2d:
+    case HBM_render_sample2d: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       ExprArg(C->getArg(0));
       if (HBM == HBM_sample_bias2d)
         ExprArg(C->getArg(1));
+      return true;
+    }
+    case HBM_read2d:
+    case HBM_render_read2d: {
+      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      WrappedExprArg("ivec2(", C->getArg(0), ")");
+      ExprArg(C->getArg(1));
       return true;
     }
     default:

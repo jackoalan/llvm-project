@@ -34,6 +34,12 @@ struct float4 {
   float4 operator/(float other) const noexcept {
     return float4{x / other, y / other, z / other, w / other};
   }
+  float4 operator+(const float4 &other) const noexcept {
+    return float4{x + other.x, y + other.y, z + other.z, x + other.w};
+  }
+  float4 operator-(const float4 &other) const noexcept {
+    return float4{x - other.x, y - other.y, z - other.z, w - other.w};
+  }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
   constexpr const float &operator[](std::size_t idx) const noexcept {
     return (&x)[idx];
@@ -87,6 +93,8 @@ struct float3 {
   constexpr const float &operator[](std::size_t idx) const noexcept {
     return (&x)[idx];
   }
+  constexpr float2 xy() const noexcept;
+  constexpr float2 xz() const noexcept;
 };
 constexpr float3 float4::xyz() const noexcept { return float3{x, y, z}; }
 struct float2 {
@@ -115,6 +123,8 @@ constexpr float2 float4::xy() const noexcept { return float2{x, y}; }
 constexpr float2 float4::xz() const noexcept { return float2{x, z}; }
 constexpr float2 float4::xw() const noexcept { return float2{x, w}; }
 constexpr float2 float4::zw() const noexcept { return float2{z, w}; }
+constexpr float2 float3::xy() const noexcept { return float2{x, y}; }
+constexpr float2 float3::xz() const noexcept { return float2{x, z}; }
 constexpr float4::float4(const hsh::float3 &other, float w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}
 constexpr float4::float4(const hsh::float2 &other, float z, float w) noexcept

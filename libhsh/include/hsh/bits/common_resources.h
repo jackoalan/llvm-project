@@ -291,7 +291,34 @@ struct texture_typeless : base_texture {
   void reset() noexcept { Binding = decltype(Binding){}; }
 };
 
-#define HSH_CASTABLE_TEXTURE(derived, coordt)                                  \
+#define HSH_PROTOTYPE_NORMAL(readt)                                            \
+  template <typename T>                                                        \
+  scalar_to_vector_t<T, 4> read(readt, uint lod = 0) const noexcept {          \
+    return {};                                                                 \
+  }
+
+#define HSH_PROTOTYPE_ARRAY(readt)                                             \
+  template <typename T>                                                        \
+  scalar_to_vector_t<T, 4> read(readt, uint array, uint lod = 0)               \
+      const noexcept {                                                         \
+    return {};                                                                 \
+  }
+
+#define HSH_PROTOTYPE_CUBE(readt)                                              \
+  template <typename T>                                                        \
+  scalar_to_vector_t<T, 4> read(readt, uint face, uint lod = 0)                \
+      const noexcept {                                                         \
+    return {};                                                                 \
+  }
+
+#define HSH_PROTOTYPE_CUBEARRAY(readt)                                         \
+  template <typename T>                                                        \
+  scalar_to_vector_t<T, 4> read(readt, uint face, uint array, uint lod = 0)    \
+      const noexcept {                                                         \
+    return {};                                                                 \
+  }
+
+#define HSH_CASTABLE_TEXTURE(derived, prototype, coordt, readt)                \
   struct derived : texture_typeless {                                          \
     using MappedType = void;                                                   \
     template <typename... Args>                                                \
@@ -307,15 +334,20 @@ struct texture_typeless : base_texture {
                                          sampler = {}) const noexcept {        \
       return {};                                                               \
     }                                                                          \
+    HSH_PROTOTYPE_##prototype(readt)                                           \
   };
-HSH_CASTABLE_TEXTURE(texture1d, float)
-HSH_CASTABLE_TEXTURE(texture1d_array, float2)
-HSH_CASTABLE_TEXTURE(texture2d, float2)
-HSH_CASTABLE_TEXTURE(texture2d_array, float3)
-HSH_CASTABLE_TEXTURE(texture3d, float3)
-HSH_CASTABLE_TEXTURE(texturecube, float3)
-HSH_CASTABLE_TEXTURE(texturecube_array, float4)
+HSH_CASTABLE_TEXTURE(texture1d, NORMAL, float, uint)
+HSH_CASTABLE_TEXTURE(texture1d_array, ARRAY, float2, uint2)
+HSH_CASTABLE_TEXTURE(texture2d, NORMAL, float2, uint2)
+HSH_CASTABLE_TEXTURE(texture2d_array, ARRAY, float3, uint3)
+HSH_CASTABLE_TEXTURE(texture3d, NORMAL, float3, uint3)
+HSH_CASTABLE_TEXTURE(texturecube, CUBE, float3, uint3)
+HSH_CASTABLE_TEXTURE(texturecube_array, CUBEARRAY, float4, uint4)
 #undef HSH_CASTABLE_TEXTURE
+#undef HSH_PROTOTYPE_NORMAL
+#undef HSH_PROTOTYPE_ARRAY
+#undef HSH_PROTOTYPE_CUBE
+#undef HSH_PROTOTYPE_CUBEARRAY
 
 struct render_texture2d {
   detail::ActiveTargetTraits::RenderTextureBinding Binding;
@@ -323,6 +355,10 @@ struct render_texture2d {
   operator bool() const noexcept { return Binding.IsValid(); }
   template <typename T>
   scalar_to_vector_t<T, 4> sample(float2, sampler = {}) const noexcept {
+    return {};
+  }
+  template <typename T>
+  scalar_to_vector_t<T, 4> read(uint2, uint lod = 0) const noexcept {
     return {};
   }
 };
