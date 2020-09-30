@@ -860,6 +860,14 @@ inline owner<render_texture2d> create_render_texture2d(
                                            NumDepthBindings);
 }
 
+inline owner<render_texture2d> create_render_texture2d(
+    extent2d Extent, Format Format, uint32_t NumColorBindings = 0,
+    uint32_t NumDepthBindings = 0,
+    const SourceLocation &location = SourceLocation::current()) noexcept {
+  return create_resource<render_texture2d>(location, Extent, Format,
+                                           NumColorBindings, NumDepthBindings);
+}
+
 template <> struct owner<surface> : owner_base<surface, owner<surface>> {
   using owner_base<surface, owner<surface>>::owner_base;
   bool acquire_next_image() noexcept {

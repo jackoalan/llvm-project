@@ -1202,6 +1202,15 @@ struct TargetTraits<Target::HSH_METAL_TARGET>::ResourceFactory<
             Surf.Binding.HSH_GET_METAL_TARGET().Allocation, NumColorBindings,
             NumDepthBindings)};
   }
+
+  static auto Create(const SourceLocation &location, extent2d Extent,
+                     Format Format, uint32_t NumColorBindings = 0,
+                     uint32_t NumDepthBindings = 0) noexcept {
+    return TargetTraits<Target::HSH_METAL_TARGET>::RenderTextureOwner{
+        std::make_unique<metal::RenderTextureAllocation>(
+            location.with_field("RenderTexture2D"), Extent,
+            HshToMTLPixelFormat(Format), NumColorBindings, NumDepthBindings)};
+  }
 };
 
 template <>

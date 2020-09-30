@@ -211,7 +211,7 @@ public:
   inline explicit RenderTextureAllocation(SurfaceAllocation *Surface,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
-  inline explicit RenderTextureAllocation(extent2d extent,
+  inline explicit RenderTextureAllocation(extent2d Extent, DkImageFormat Format,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
   RenderTextureAllocation(const RenderTextureAllocation &other) = delete;
@@ -522,13 +522,14 @@ RenderTextureAllocation::RenderTextureAllocation(
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
-    extent2d extent, uint32_t NumColorBindings,
+    extent2d Extent, DkImageFormat Format, uint32_t NumColorBindings,
     uint32_t NumDepthBindings) noexcept
-    : Next(Globals.RenderTextureHead), Extent(extent),
+    : Next(Globals.RenderTextureHead), Extent(Extent),
       NumColorBindings(NumColorBindings), NumDepthBindings(NumDepthBindings) {
   Globals.RenderTextureHead = this;
   if (Next)
     Next->Prev = this;
+  assert(Format == FBColorFormat);
   assert(NumColorBindings <= MaxRenderTextureBindings);
   assert(NumDepthBindings <= MaxRenderTextureBindings);
   Prepare();

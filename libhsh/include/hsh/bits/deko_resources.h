@@ -1130,6 +1130,14 @@ struct TargetTraits<Target::DEKO3D>::ResourceFactory<render_texture2d> {
             Surf.Binding.get_DEKO3D().Allocation, NumColorBindings,
             NumDepthBindings)};
   }
+
+  static auto Create(const SourceLocation &location, extent2d Extent,
+                     Format Format, uint32_t NumColorBindings = 0,
+                     uint32_t NumDepthBindings = 0) noexcept {
+    return TargetTraits<Target::DEKO3D>::RenderTextureOwner{
+        std::make_unique<deko::RenderTextureAllocation>(
+            Extent, HshToDkFormat(Format), NumColorBindings, NumDepthBindings)};
+  }
 };
 
 template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<surface> {
