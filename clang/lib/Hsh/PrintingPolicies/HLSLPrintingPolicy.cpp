@@ -27,6 +27,14 @@ HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
     OS << (HBM == HBM_sample_bias2d ? ".SampleBias" : ".Sample");
     return OS.str();
   }
+  case HBM_read2d:
+  case HBM_render_read2d: {
+    CXXMethodIdentifier.clear();
+    raw_string_ostream OS(CXXMethodIdentifier);
+    C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
+    OS << ".Load";
+    return OS.str();
+  }
   default:
     return {};
   }
@@ -53,6 +61,16 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
     ExprArg(C->getArg(0));
     if (HBM == HBM_sample_bias2d)
       ExprArg(C->getArg(1));
+    return true;
+  }
+  case HBM_read2d:
+  case HBM_render_read2d: {
+    WrappedExprArg("int3(", C->getArg(0), "");
+    Expr *LODStmt = C->getArg(1);
+    if (auto* arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+      LODStmt = arg->getExpr();
+    }
+    WrappedExprArg("", LODStmt, ")");
     return true;
   }
   default:

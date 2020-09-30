@@ -29,6 +29,14 @@ MetalPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
     OS << ".sample";
     return OS.str();
   }
+  case HBM_read2d:
+  case HBM_render_read2d: {
+    CXXMethodIdentifier.clear();
+    raw_string_ostream OS(CXXMethodIdentifier);
+    C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
+    OS << ".read";
+    return OS.str();
+  }
   default:
     return {};
   }
