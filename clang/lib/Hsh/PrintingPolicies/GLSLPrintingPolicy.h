@@ -56,14 +56,18 @@ struct GLSLPrintingPolicy
     switch (HBM) {
     case HBM_sample2d:
     case HBM_sample_bias2d:
-    case HBM_read2d:
-    case HBM_render_sample2d:
-    case HBM_render_read2d: {
+    case HBM_render_sample2d: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       ExprArg(C->getArg(0));
-      if (HBM == HBM_sample_bias2d || HBM == HBM_read2d ||
-          HBM == HBM_render_read2d)
+      if (HBM == HBM_sample_bias2d)
         ExprArg(C->getArg(1));
+      return true;
+    }
+    case HBM_read2d:
+    case HBM_render_read2d: {
+      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      WrappedExprArg("ivec2(", C->getArg(0), ")");
+      ExprArg(C->getArg(1));
       return true;
     }
     default:
