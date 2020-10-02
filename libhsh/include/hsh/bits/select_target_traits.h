@@ -475,6 +475,12 @@ template <> struct SelectTargetTraits<0> {
 
   static void SetBlendConstants(float red, float green, float blue,
                                 float alpha) noexcept {}
+
+  static void SetViewport(const viewport &vp) noexcept {}
+
+  static void SetViewport(const viewport &vp, const scissor &s) noexcept {}
+
+  static void SetScissor(const scissor &s) noexcept {}
 };
 
 using ActiveTargetTraits = SelectTargetTraits<NumStaticallyActiveTargets>;
