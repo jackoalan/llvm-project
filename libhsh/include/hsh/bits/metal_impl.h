@@ -1469,25 +1469,30 @@ template <> struct TargetTraits<Target::HSH_METAL_TARGET> {
   }
 
   static void SetViewport(const viewport &vp) noexcept {
-    [Cmd setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
-                                 vp.maxDepth}];
-    [Cmd setScissorRect:MTLScissorRect{NSUInteger(vp.x), NSUInteger(vp.y),
-                                       NSUInteger(vp.width),
-                                       NSUInteger(vp.height)}];
+    [metal::Globals.GetCmd()
+        setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
+                                vp.maxDepth}];
+    [metal::Globals.GetCmd()
+        setScissorRect:MTLScissorRect{NSUInteger(vp.x), NSUInteger(vp.y),
+                                      NSUInteger(vp.width),
+                                      NSUInteger(vp.height)}];
   }
 
   static void SetViewport(const viewport &vp, const scissor &s) noexcept {
-    [Cmd setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
-                                 vp.maxDepth}];
-    [Cmd setScissorRect:MTLScissorRect{
-                            NSUInteger(s.offset.x), NSUInteger(s.offset.y),
-                            NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
+    [metal::Globals.GetCmd()
+        setViewport:MTLViewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth,
+                                vp.maxDepth}];
+    [metal::Globals.GetCmd()
+        setScissorRect:MTLScissorRect{
+                           NSUInteger(s.offset.x), NSUInteger(s.offset.y),
+                           NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
   }
 
   static void SetScissor(const scissor &s) noexcept {
-    [Cmd setScissorRect:MTLScissorRect{
-                            NSUInteger(s.offset.x), NSUInteger(s.offset.y),
-                            NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
+    [metal::Globals.GetCmd()
+        setScissorRect:MTLScissorRect{
+                           NSUInteger(s.offset.x), NSUInteger(s.offset.y),
+                           NSUInteger(s.extent.w), NSUInteger(s.extent.h)}];
   }
 
   template <typename ResTp> struct ResourceFactory {};
