@@ -901,7 +901,8 @@ public:
             TraverseNonConstExprs(NonConstExprs, Specialization,
                                   [&](NonTypeTemplateParmDecl *NTTP,
                                       const TemplateArgument &Arg) {
-                                    if (NTTP->getType()->isBooleanType())
+                                    if (NTTP->getType()->isBooleanType() ||
+                                        NTTP->getType()->isEnumeralType())
                                       SpecLeaf->IntCast = true;
                                     SpecLeaf->Name = NTTP->getName();
                                     SpecLeaf =
