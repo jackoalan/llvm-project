@@ -1242,6 +1242,28 @@ template <> struct TargetTraits<Target::DEKO3D> {
     deko::Globals.Cmd.setBlendConst(red, green, blue, alpha);
   }
 
+  static void SetViewport(const viewport &vp) noexcept {
+    Globals.Cmd.setViewports(0, DkViewport{vp.x, vp.y, vp.width, vp.height,
+                                           vp.minDepth, vp.maxDepth});
+    Globals.Cmd.setScissors(0,
+                            DkScissor{uint32_t(vp.x), uint32_t(vp.y),
+                                      uint32_t(vp.width), uint32_t(vp.height)});
+  }
+
+  static void SetViewport(const viewport &vp, const scissor &s) noexcept {
+    Globals.Cmd.setViewports(0, DkViewport{vp.x, vp.y, vp.width, vp.height,
+                                           vp.minDepth, vp.maxDepth});
+    Globals.Cmd.setScissors(0, DkScissor{uint32_t(s.offset.x),
+                                         uint32_t(s.offset.y), s.extent.w,
+                                         s.extent.h});
+  }
+
+  static void SetScissor(const scissor &s) noexcept {
+    Globals.Cmd.setScissors(0, DkScissor{uint32_t(s.offset.x),
+                                         uint32_t(s.offset.y), s.extent.w,
+                                         s.extent.h});
+  }
+
   template <typename ResTp> struct ResourceFactory {};
 };
 const dk::ImageView &

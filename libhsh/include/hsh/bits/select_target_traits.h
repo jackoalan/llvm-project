@@ -167,6 +167,42 @@ template <unsigned NSTs> struct SelectTargetTraits {
       assert(false && "unhandled case");
     }
   }
+
+  static void SetViewport(const viewport &vp) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    TargetTraits<Target::Enumeration>::SetViewport(vp);                        \
+    break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+
+  static void SetViewport(const viewport &vp, const scissor &s) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    TargetTraits<Target::Enumeration>::SetViewport(vp, s);                     \
+    break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
+
+  static void SetScissor(const scissor &s) noexcept {
+    switch (detail::CurrentTarget) {
+#define HSH_ACTIVE_TARGET(Enumeration)                                         \
+  case Target::Enumeration:                                                    \
+    TargetTraits<Target::Enumeration>::SetScissor(s);                          \
+    break;
+#include "targets.def"
+    default:
+      assert(false && "unhandled case");
+    }
+  }
 };
 
 template <> struct SelectTargetTraits<1> {
@@ -303,6 +339,21 @@ template <> struct SelectTargetTraits<1> {
                                 float alpha) noexcept {
 #define HSH_ACTIVE_TARGET(Enumeration)                                         \
   SingleTargetTraits::SetBlendConstants(red, green, blue, alpha);
+#include "targets.def"
+  }
+
+  static void SetViewport(const viewport &vp) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration) SingleTargetTraits::SetViewport(vp);
+#include "targets.def"
+  }
+
+  static void SetViewport(const viewport &vp, const scissor &s) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration) SingleTargetTraits::SetViewport(vp, s);
+#include "targets.def"
+  }
+
+  static void SetScissor(const scissor &s) noexcept {
+#define HSH_ACTIVE_TARGET(Enumeration) SingleTargetTraits::SetScissor(s);
 #include "targets.def"
   }
 };

@@ -987,6 +987,18 @@ inline void set_blend_constants(float red, float green, float blue,
   detail::ActiveTargetTraits::SetBlendConstants(red, green, blue, alpha);
 }
 
+inline void set_viewport(const viewport &vp) noexcept {
+  detail::ActiveTargetTraits::SetViewport(vp);
+}
+
+inline void set_viewport(const viewport &vp, const scissor &s) noexcept {
+  detail::ActiveTargetTraits::SetViewport(vp, s);
+}
+
+inline void set_scissor(const scissor &s) noexcept {
+  detail::ActiveTargetTraits::SetScissor(s);
+}
+
 #if __hsh__
 #define HSH_VAR_STAGE(stage) [[hsh::stage]]
 #else

@@ -2205,6 +2205,26 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vulkan::Globals.Cmd.setBlendConstants(constants);
   }
 
+  static void SetViewport(const viewport &vp) noexcept {
+    vulkan::Globals.Cmd.setViewport(0, vk::Viewport(vp.x, vp.y, vp.width,
+                                                    vp.height, vp.minDepth,
+                                                    vp.maxDepth));
+    vulkan::Globals.Cmd.setScissor(
+        0, vk::Rect2D({int32_t(vp.x), int32_t(vp.y)},
+                      {uint32_t(vp.width), uint32_t(vp.height)}));
+  }
+
+  static void SetViewport(const viewport &vp, const scissor &s) noexcept {
+    vulkan::Globals.Cmd.setViewport(0, vk::Viewport(vp.x, vp.y, vp.width,
+                                                    vp.height, vp.minDepth,
+                                                    vp.maxDepth));
+    vulkan::Globals.Cmd.setScissor(0, vk::Rect2D(s));
+  }
+
+  static void SetScissor(const scissor &s) noexcept {
+    vulkan::Globals.Cmd.setScissor(0, vk::Rect2D(s));
+  }
+
   template <typename ResTp> struct ResourceFactory {};
 };
 } // namespace hsh::detail
