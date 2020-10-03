@@ -449,6 +449,7 @@ constexpr float4 lerp(const float4 &a, const float4 &b, float t) noexcept {
   };
 }
 inline float abs(float v) noexcept { return std::abs(v); }
+inline float modf(float v, float &out) { return std::modf(v, &out); }
 constexpr void discard() noexcept {}
 
 } // namespace hsh
