@@ -75,7 +75,11 @@ struct GLSLPrintingPolicy
     case HBM_render_read2d: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       WrappedExprArg("ivec2(", C->getArg(0), ")");
-      ExprArg(C->getArg(1));
+      Expr *LODStmt = C->getArg(1);
+      if (auto *arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+        LODStmt = arg->getExpr();
+      }
+      ExprArg(LODStmt);
       return true;
     }
     default:
