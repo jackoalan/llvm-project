@@ -55,6 +55,7 @@ struct float3 {
   float3() noexcept = default;
   constexpr float3(float x, float y, float z) noexcept : x(x), y(y), z(z) {}
   constexpr explicit float3(float f) noexcept : x(f), y(f), z(f) {}
+  constexpr explicit float3(const float2 &other, float z = 1.f) noexcept;
   float3 operator-() const noexcept { return float3{-x, -y, -z}; };
   float3 operator*(float other) const noexcept {
     return float3{x * other, y * other, z * other};
@@ -118,6 +119,10 @@ struct float2 {
     return float2{x + other.x, y + other.y};
   }
   float2 operator-() const noexcept { return float2{-x, -y}; };
+  float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
+  constexpr const float &operator[](std::size_t idx) const noexcept {
+    return (&x)[idx];
+  }
 };
 constexpr float2 float4::xy() const noexcept { return float2{x, y}; }
 constexpr float2 float4::xz() const noexcept { return float2{x, z}; }
@@ -129,6 +134,8 @@ constexpr float4::float4(const hsh::float3 &other, float w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}
 constexpr float4::float4(const hsh::float2 &other, float z, float w) noexcept
     : x(other.x), y(other.y), z(z), w(w) {}
+constexpr float3::float3(const hsh::float2 &other, float z) noexcept
+    : x(other.x), y(other.y), z(z) {}
 struct int3;
 struct int2;
 struct int4 {
@@ -399,6 +406,19 @@ inline float exp2(float v) noexcept { return std::exp2(v); }
 constexpr float lerp(float a, float b, float t) noexcept {
   return b * t + a * (1.f - t);
 }
+constexpr float2 lerp(const float2 &a, const float2 &b, float t) noexcept {
+  return float2{
+      b[0] * t + a[0] * (1.f - t),
+      b[1] * t + a[1] * (1.f - t),
+  };
+}
+constexpr float2 lerp(const float2 &a, const float2 &b,
+                      const float2 &t) noexcept {
+  return float2{
+      b[0] * t[0] + a[0] * (1.f - t[0]),
+      b[1] * t[1] + a[1] * (1.f - t[1]),
+  };
+}
 constexpr float3 lerp(const float3 &a, const float3 &b, float t) noexcept {
   return float3{
       b[0] * t + a[0] * (1.f - t),
@@ -406,17 +426,33 @@ constexpr float3 lerp(const float3 &a, const float3 &b, float t) noexcept {
       b[2] * t + a[2] * (1.f - t),
   };
 }
+constexpr float3 lerp(const float3 &a, const float3 &b,
+                      const float3 &t) noexcept {
+  return float3{
+      b[0] * t[0] + a[0] * (1.f - t[0]),
+      b[1] * t[1] + a[1] * (1.f - t[1]),
+      b[2] * t[2] + a[2] * (1.f - t[2]),
+  };
+}
 constexpr float4 lerp(const float4 &a, const float4 &b,
                       const float4 &t) noexcept {
   return float4{
-      b[0] * t[0] + a[0] * (1.f - t[0]), b[1] * t[1] + a[1] * (1.f - t[1]),
-      b[2] * t[2] + a[2] * (1.f - t[2]), b[3] * t[3] + a[3] * (1.f - t[3])};
+      b[0] * t[0] + a[0] * (1.f - t[0]),
+      b[1] * t[1] + a[1] * (1.f - t[1]),
+      b[2] * t[2] + a[2] * (1.f - t[2]),
+      b[3] * t[3] + a[3] * (1.f - t[3]),
+  };
 }
 constexpr float4 lerp(const float4 &a, const float4 &b, float t) noexcept {
-  return float4{b[0] * t + a[0] * (1.f - t), b[1] * t + a[1] * (1.f - t),
-                b[2] * t + a[2] * (1.f - t), b[3] * t + a[3] * (1.f - t)};
+  return float4{
+      b[0] * t + a[0] * (1.f - t),
+      b[1] * t + a[1] * (1.f - t),
+      b[2] * t + a[2] * (1.f - t),
+      b[3] * t + a[3] * (1.f - t),
+  };
 }
 inline float abs(float v) noexcept { return std::abs(v); }
+inline float modf(float v, float &out) { return std::modf(v, &out); }
 constexpr void discard() noexcept {}
 
 } // namespace hsh
