@@ -337,12 +337,12 @@ struct texture_typeless : base_texture {
     HSH_PROTOTYPE_##prototype(readt)                                           \
   };
 HSH_CASTABLE_TEXTURE(texture1d, NORMAL, float, uint)
-HSH_CASTABLE_TEXTURE(texture1d_array, ARRAY, float2, uint2)
+HSH_CASTABLE_TEXTURE(texture1d_array, ARRAY, float2, uint)
 HSH_CASTABLE_TEXTURE(texture2d, NORMAL, float2, uint2)
-HSH_CASTABLE_TEXTURE(texture2d_array, ARRAY, float3, uint3)
+HSH_CASTABLE_TEXTURE(texture2d_array, ARRAY, float3, uint2)
 HSH_CASTABLE_TEXTURE(texture3d, NORMAL, float3, uint3)
-HSH_CASTABLE_TEXTURE(texturecube, CUBE, float3, uint3)
-HSH_CASTABLE_TEXTURE(texturecube_array, CUBEARRAY, float4, uint4)
+HSH_CASTABLE_TEXTURE(texturecube, CUBE, float3, uint2)
+HSH_CASTABLE_TEXTURE(texturecube_array, CUBEARRAY, float4, uint2)
 #undef HSH_CASTABLE_TEXTURE
 #undef HSH_PROTOTYPE_NORMAL
 #undef HSH_PROTOTYPE_ARRAY

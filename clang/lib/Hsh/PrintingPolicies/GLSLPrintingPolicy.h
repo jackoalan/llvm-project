@@ -47,6 +47,9 @@ struct GLSLPrintingPolicy
     case HBM_sample2d:
     case HBM_render_sample2d:
     case HBM_sample_bias2d:
+    case HBM_sample2da:
+    case HBM_sample_bias2da:
+    case HBM_read2da:
       return "texture";
     case HBM_read2d:
     case HBM_render_read2d:
@@ -64,10 +67,12 @@ struct GLSLPrintingPolicy
     switch (HBM) {
     case HBM_sample2d:
     case HBM_sample_bias2d:
-    case HBM_render_sample2d: {
+    case HBM_render_sample2d:
+    case HBM_sample2da:
+    case HBM_sample_bias2da: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       ExprArg(C->getArg(0));
-      if (HBM == HBM_sample_bias2d)
+      if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da)
         ExprArg(C->getArg(1));
       return true;
     }
@@ -75,7 +80,22 @@ struct GLSLPrintingPolicy
     case HBM_render_read2d: {
       ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
       WrappedExprArg("ivec2(", C->getArg(0), ")");
-      ExprArg(C->getArg(1));
+      Expr *LODStmt = C->getArg(1);
+      if (auto *arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+        LODStmt = arg->getExpr();
+      }
+      ExprArg(LODStmt);
+      return true;
+    }
+    case HBM_read2da: {
+      ExprArg(C->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      WrappedExprArg("ivec3(", C->getArg(0), "");
+      WrappedExprArg("", C->getArg(1), ")");
+      Expr *LODStmt = C->getArg(2);
+      if (auto *arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+        LODStmt = arg->getExpr();
+      }
+      ExprArg(LODStmt);
       return true;
     }
     default:

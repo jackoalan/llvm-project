@@ -20,14 +20,18 @@ HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
-  case HBM_sample_bias2d: {
+  case HBM_sample_bias2d:
+  case HBM_sample2da:
+  case HBM_sample_bias2da: {
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
     C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
-    OS << (HBM == HBM_sample_bias2d ? ".SampleBias" : ".Sample");
+    OS << (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da ? ".SampleBias"
+                                                                 : ".Sample");
     return OS.str();
   }
   case HBM_read2d:
+  case HBM_read2da:
   case HBM_render_read2d: {
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
@@ -49,7 +53,9 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
-  case HBM_sample_bias2d: {
+  case HBM_sample_bias2d:
+  case HBM_sample2da:
+  case HBM_sample_bias2da: {
     auto *Search =
         std::find_if(ThisSampleCalls.begin(), ThisSampleCalls.end(),
                      [&](const auto &Other) { return C == Other.Expr; });
@@ -59,7 +65,7 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
     OS << Search->SamplerIndex;
     StringArg(OS.str());
     ExprArg(C->getArg(0));
-    if (HBM == HBM_sample_bias2d)
+    if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da)
       ExprArg(C->getArg(1));
     return true;
   }
@@ -67,7 +73,17 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
   case HBM_render_read2d: {
     WrappedExprArg("int3(", C->getArg(0), "");
     Expr *LODStmt = C->getArg(1);
-    if (auto* arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+    if (auto *arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
+      LODStmt = arg->getExpr();
+    }
+    WrappedExprArg("", LODStmt, ")");
+    return true;
+  }
+  case HBM_read2da: {
+    WrappedExprArg("int4(", C->getArg(0), "");
+    ExprArg(C->getArg(1));
+    Expr *LODStmt = C->getArg(2);
+    if (auto *arg = dyn_cast<CXXDefaultArgExpr>(LODStmt)) {
       LODStmt = arg->getExpr();
     }
     WrappedExprArg("", LODStmt, ")");
