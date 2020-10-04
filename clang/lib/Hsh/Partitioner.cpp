@@ -662,12 +662,17 @@ struct DeclUsagePass : StmtVisitor<DeclUsagePass, void, HshStage> {
     case HBM_sample2d:
     case HBM_sample_bias2d:
     case HBM_read2d:
+    case HBM_sample2da:
+    case HBM_sample_bias2da:
+    case HBM_read2da:
     case HBM_render_sample2d:
     case HBM_render_read2d:
       DoVisit(CallExpr->getArg(0), Stage);
       if (Method == HBM_sample_bias2d || Method == HBM_read2d ||
-          Method == HBM_render_read2d)
+          Method == HBM_read2da || Method == HBM_render_read2d)
         DoVisit(CallExpr->getArg(1), Stage);
+      if (Method == HBM_read2da)
+        DoVisit(CallExpr->getArg(2), Stage);
       break;
     default:
       break;
@@ -1056,6 +1061,29 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
       if (!LODStmt)
         return nullptr;
       std::array<Expr *, 2> NewArgs{cast<Expr>(CoordStmt), cast<Expr>(LODStmt)};
+      return CXXMemberCallExpr::Create(
+          Partitioner.Context, CallExpr->getCallee(), NewArgs,
+          CallExpr->getType(), VK_XValue, {}, {});
+    }
+    case HBM_read2da: {
+      ParmVarDecl *PVD = nullptr;
+      if (auto *TexRef = dyn_cast<DeclRefExpr>(ObjArg))
+        PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
+      if (PVD)
+        Builder.registerParmVarRef(PVD, Stage);
+      else
+        Reporter(Partitioner.Context).BadTextureReference(CallExpr);
+      auto *CoordStmt = DoVisit(CallExpr->getArg(0), Stage);
+      if (!CoordStmt)
+        return nullptr;
+      auto *ArrayStmt = DoVisit(CallExpr->getArg(1), Stage);
+      if (!ArrayStmt)
+        return nullptr;
+      auto *LODStmt = DoVisit(CallExpr->getArg(2), Stage);
+      if (!LODStmt)
+        return nullptr;
+      std::array<Expr *, 3> NewArgs{cast<Expr>(CoordStmt),
+                                    cast<Expr>(ArrayStmt), cast<Expr>(LODStmt)};
       return CXXMemberCallExpr::Create(
           Partitioner.Context, CallExpr->getCallee(), NewArgs,
           CallExpr->getType(), VK_XValue, {}, {});

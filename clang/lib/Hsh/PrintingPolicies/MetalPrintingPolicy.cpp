@@ -22,7 +22,9 @@ MetalPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
-  case HBM_sample_bias2d: {
+  case HBM_sample_bias2d:
+  case HBM_sample2da:
+  case HBM_sample_bias2da: {
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
     C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
@@ -30,6 +32,7 @@ MetalPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
     return OS.str();
   }
   case HBM_read2d:
+  case HBM_read2da:
   case HBM_render_read2d: {
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
