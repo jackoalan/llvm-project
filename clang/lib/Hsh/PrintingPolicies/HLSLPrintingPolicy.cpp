@@ -148,6 +148,19 @@ bool HLSLPrintingPolicy::overrideCXXTemporaryObjectExpr(
   return false;
 }
 
+bool HLSLPrintingPolicy::shouldPrintCallArguments(CallExpr *C) const {
+  if (auto *DeclRef =
+      dyn_cast<DeclRefExpr>(C->getCallee()->IgnoreParenImpCasts())) {
+    if (auto *FD = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
+      auto Func = Builtins.identifyBuiltinFunction(FD);
+      if (Func == HBF_discard) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void HLSLPrintingPolicy::PrintAttributeFieldSpelling(raw_ostream &OS,
                                                      QualType Tp,
                                                      const Twine &FieldName,

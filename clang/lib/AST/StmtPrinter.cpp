@@ -1510,6 +1510,8 @@ void StmtPrinter::VisitCallExpr(CallExpr *Call) {
       OS << OverrideIdentifier;
     else
       PrintExpr(Call->getCallee());
+    if (!Policy.Callbacks->shouldPrintCallArguments(Call))
+      return;
     OS << "(";
     bool NeedComma = false;
     auto PrintComma = [&]() {

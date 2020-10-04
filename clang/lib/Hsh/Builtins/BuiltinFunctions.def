@@ -14,6 +14,6 @@ BUILTIN_FUNCTION(saturate1, saturate, saturate, saturate, saturate, false, float
 BUILTIN_FUNCTION(saturate3, saturate, saturate, saturate, saturate, false, const struct hsh::float3 &)
 BUILTIN_FUNCTION(exp21, exp2, exp2, exp2, exp2, false, float)
 BUILTIN_FUNCTION(lerp4, lerp, mix, lerp, lerp, false, const struct hsh::float4 &, const struct hsh::float4 &, float)
-BUILTIN_FUNCTION(discard, discard, discard, discard, discard, false, void)
+BUILTIN_FUNCTION(discard, discard, discard, discard, discard_fragment, true, void)
 
 #undef BUILTIN_FUNCTION

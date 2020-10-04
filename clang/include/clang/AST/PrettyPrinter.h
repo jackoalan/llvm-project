@@ -72,6 +72,12 @@ public:
     return false;
   }
 
+  /// Override whether a call should have arguments printed in case it is
+  /// flattened into a keyword.
+  virtual bool shouldPrintCallArguments(CallExpr *C) const {
+    return true;
+  }
+
   /// Incrementally print operator call to replace default grammar.
   virtual bool
   overrideCXXOperatorCall(CXXOperatorCallExpr *C, raw_ostream &OS,

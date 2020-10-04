@@ -91,6 +91,8 @@ struct GLSLPrintingPolicy
       CXXTemporaryObjectExpr *C, raw_ostream &OS,
       const std::function<void(Expr *)> &ExprArg) const override;
 
+  bool shouldPrintCallArguments(CallExpr *C) const override;
+
   static void PrintBeforePackoffset(FieldPrinter &FH, CharUnits Offset) {
     FH.indent(2) << "layout(offset = " << Offset.getQuantity() << ")\n";
   }
