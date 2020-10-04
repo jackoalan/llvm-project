@@ -20,6 +20,6 @@ BUILTIN_FUNCTION(lerp3f, lerp, mix, lerp, lerp, false, const struct hsh::float3 
 BUILTIN_FUNCTION(lerp4, lerp, mix, lerp, lerp, false, const struct hsh::float4 &, const struct hsh::float4 &, const struct hsh::float4 &)
 BUILTIN_FUNCTION(lerp4f, lerp, mix, lerp, lerp, false, const struct hsh::float4 &, const struct hsh::float4 &, float)
 BUILTIN_FUNCTION(modf, modf, modf, modf, modf, false, float, float &)
-BUILTIN_FUNCTION(discard, discard, discard, discard, discard, false, void)
+BUILTIN_FUNCTION(discard, discard, discard, discard, discard_fragment, true, void)
 
 #undef BUILTIN_FUNCTION
