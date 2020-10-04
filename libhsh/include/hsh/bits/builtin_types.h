@@ -55,6 +55,7 @@ struct float3 {
   float3() noexcept = default;
   constexpr float3(float x, float y, float z) noexcept : x(x), y(y), z(z) {}
   constexpr explicit float3(float f) noexcept : x(f), y(f), z(f) {}
+  constexpr explicit float3(const float2 &other, float z = 1.f) noexcept;
   float3 operator-() const noexcept { return float3{-x, -y, -z}; };
   float3 operator*(float other) const noexcept {
     return float3{x * other, y * other, z * other};
@@ -133,6 +134,8 @@ constexpr float4::float4(const hsh::float3 &other, float w) noexcept
     : x(other.x), y(other.y), z(other.z), w(w) {}
 constexpr float4::float4(const hsh::float2 &other, float z, float w) noexcept
     : x(other.x), y(other.y), z(z), w(w) {}
+constexpr float3::float3(const hsh::float2 &other, float z) noexcept
+    : x(other.x), y(other.y), z(z) {}
 struct int3;
 struct int2;
 struct int4 {
