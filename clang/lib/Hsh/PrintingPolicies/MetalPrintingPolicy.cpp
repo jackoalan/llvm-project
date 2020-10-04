@@ -54,7 +54,9 @@ bool MetalPrintingPolicy::overrideCXXMethodArguments(
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
-  case HBM_sample_bias2d: {
+  case HBM_sample_bias2d:
+  case HBM_sample2da:
+  case HBM_sample_bias2da: {
     auto *Search =
         std::find_if(ThisSampleCalls.begin(), ThisSampleCalls.end(),
                      [&](const auto &Other) { return C == Other.Expr; });
@@ -64,7 +66,7 @@ bool MetalPrintingPolicy::overrideCXXMethodArguments(
     OS << Search->SamplerIndex;
     StringArg(OS.str());
     ExprArg(C->getArg(0));
-    if (HBM == HBM_sample_bias2d)
+    if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da)
       WrappedExprArg("bias(", C->getArg(1), ")");
     return true;
   }

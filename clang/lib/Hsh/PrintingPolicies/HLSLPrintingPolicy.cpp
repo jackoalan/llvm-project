@@ -26,7 +26,8 @@ HLSLPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
     CXXMethodIdentifier.clear();
     raw_string_ostream OS(CXXMethodIdentifier);
     C->getImplicitObjectArgument()->printPretty(OS, nullptr, *this);
-    OS << (HBM == HBM_sample_bias2d ? ".SampleBias" : ".Sample");
+    OS << (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da ? ".SampleBias"
+                                                                 : ".Sample");
     return OS.str();
   }
   case HBM_read2d:
@@ -52,7 +53,9 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
   switch (HBM) {
   case HBM_sample2d:
   case HBM_render_sample2d:
-  case HBM_sample_bias2d: {
+  case HBM_sample_bias2d:
+  case HBM_sample2da:
+  case HBM_sample_bias2da: {
     auto *Search =
         std::find_if(ThisSampleCalls.begin(), ThisSampleCalls.end(),
                      [&](const auto &Other) { return C == Other.Expr; });
@@ -62,7 +65,7 @@ bool HLSLPrintingPolicy::overrideCXXMethodArguments(
     OS << Search->SamplerIndex;
     StringArg(OS.str());
     ExprArg(C->getArg(0));
-    if (HBM == HBM_sample_bias2d)
+    if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da)
       ExprArg(C->getArg(1));
     return true;
   }

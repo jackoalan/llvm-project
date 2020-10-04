@@ -668,8 +668,9 @@ struct DeclUsagePass : StmtVisitor<DeclUsagePass, void, HshStage> {
     case HBM_render_sample2d:
     case HBM_render_read2d:
       DoVisit(CallExpr->getArg(0), Stage);
-      if (Method == HBM_sample_bias2d || Method == HBM_read2d ||
-          Method == HBM_read2da || Method == HBM_render_read2d)
+      if (Method == HBM_sample_bias2d || Method == HBM_sample_bias2da ||
+          Method == HBM_read2d || Method == HBM_read2da ||
+          Method == HBM_render_read2d)
         DoVisit(CallExpr->getArg(1), Stage);
       if (Method == HBM_read2da)
         DoVisit(CallExpr->getArg(2), Stage);
@@ -1014,7 +1015,9 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
     switch (Method) {
     case HBM_sample2d:
     case HBM_render_sample2d:
-    case HBM_sample_bias2d: {
+    case HBM_sample_bias2d:
+    case HBM_sample2da:
+    case HBM_sample_bias2da: {
       ParmVarDecl *PVD = nullptr;
       if (auto *TexRef = dyn_cast<DeclRefExpr>(ObjArg))
         PVD = dyn_cast<ParmVarDecl>(TexRef->getDecl());
@@ -1025,7 +1028,7 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
       auto *UVStmt = DoVisit(CallExpr->getArg(0), Stage);
       if (!UVStmt)
         return nullptr;
-      if (Method == HBM_sample_bias2d) {
+      if (Method == HBM_sample_bias2d || Method == HBM_sample_bias2da) {
         auto *BiasStmt = DoVisit(CallExpr->getArg(1), Stage);
         if (!BiasStmt)
           return nullptr;
