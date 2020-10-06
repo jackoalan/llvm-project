@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+
 #ifdef _MSC_VER
 #pragma section(".hsh5", read)
 #endif
@@ -130,58 +132,6 @@ constexpr uint32_t MaxDescriptorPoolSets = HSH_DESCRIPTOR_POOL_SIZE;
 
 /* Max supported mip count (enough for 16K texture) */
 constexpr uint32_t MaxMipCount = 14;
-
-template <typename T> class ArrayProxy {
-public:
-  constexpr ArrayProxy(std::nullptr_t) noexcept : Data(nullptr), Length(0) {}
-
-  ArrayProxy(const T &OneElt) noexcept : Data(&OneElt), Length(1) {}
-
-  ArrayProxy(const T *data, size_t length) noexcept
-      : Data(data), Length(length) {}
-
-  ArrayProxy(const T *begin, const T *end) noexcept
-      : Data(begin), Length(end - begin) {}
-
-  template <typename A>
-  ArrayProxy(const std::vector<T, A> &Vec) noexcept
-      : Data(Vec.data()), Length(Vec.size()) {}
-
-  template <size_t N>
-  constexpr ArrayProxy(const std::array<T, N> &Arr) noexcept
-      : Data(Arr.data()), Length(N) {}
-
-  template <size_t N>
-  constexpr ArrayProxy(const T (&Arr)[N]) noexcept : Data(Arr), Length(N) {}
-
-  ArrayProxy(const std::initializer_list<T> &Vec) noexcept
-      : Data(Vec.begin() == Vec.end() ? (T *)nullptr : Vec.begin()),
-        Length(Vec.size()) {}
-
-  const T *begin() const noexcept { return Data; }
-
-  const T *end() const noexcept { return Data + Length; }
-
-  const T &front() const noexcept {
-    assert(Length && Data);
-    return *Data;
-  }
-
-  const T &back() const noexcept {
-    assert(Length && Data);
-    return *(Data + Length - 1);
-  }
-
-  bool empty() const noexcept { return (Length == 0); }
-
-  std::size_t size() const noexcept { return Length; }
-
-  const T *data() const noexcept { return Data; }
-
-private:
-  const T *Data = nullptr;
-  std::size_t Length = 0;
-};
 
 template <Target T> struct TargetTraits {
   struct UniformBufferOwner {};

@@ -13,32 +13,86 @@ struct float4 {
   constexpr explicit float4(const float3 &other, float w = 1.f) noexcept;
   constexpr explicit float4(const float2 &other, float z = 0.f,
                             float w = 1.f) noexcept;
-  void operator+=(const float4 &other) noexcept {
-    x += other.x;
-    y += other.y;
-    z += other.z;
-    w += other.w;
+  float4 operator-() const noexcept { return float4{-x, -y, -z, -w}; };
+  float4 operator+(const float4 &other) const noexcept {
+    return float4{x + other.x, y + other.y, z + other.z, x + other.w};
   }
-  void operator*=(const float4 &other) noexcept {
-    x *= other.x;
-    y *= other.y;
-    z *= other.z;
-    w *= other.w;
+  float4 operator+(float other) const noexcept {
+    return float4{x + other, y + other, z + other, x + other};
   }
-  float4 operator*(float other) const noexcept {
-    return float4{x * other, y * other, z * other, w * other};
+  float4 operator-(const float4 &other) const noexcept {
+    return float4{x - other.x, y - other.y, z - other.z, w - other.w};
+  }
+  float4 operator-(float other) const noexcept {
+    return float4{x - other, y - other, z - other, w - other};
   }
   float4 operator*(const float4 &other) const noexcept {
     return float4{x * other.x, y * other.y, z * other.z, w * other.w};
   }
+  float4 operator*(float other) const noexcept {
+    return float4{x * other, y * other, z * other, w * other};
+  }
+  float4 operator/(const float4 &other) const noexcept {
+    return float4{x / other.x, y / other.y, z / other.z, w / other.w};
+  }
   float4 operator/(float other) const noexcept {
     return float4{x / other, y / other, z / other, w / other};
   }
-  float4 operator+(const float4 &other) const noexcept {
-    return float4{x + other.x, y + other.y, z + other.z, x + other.w};
+  float4 &operator+=(const float4 &other) noexcept {
+    x += other.x;
+    y += other.y;
+    z += other.z;
+    w += other.w;
+    return *this;
   }
-  float4 operator-(const float4 &other) const noexcept {
-    return float4{x - other.x, y - other.y, z - other.z, w - other.w};
+  float4 &operator+=(float other) noexcept {
+    x += other;
+    y += other;
+    z += other;
+    w += other;
+    return *this;
+  }
+  float4 &operator-=(const float4 &other) noexcept {
+    x -= other.x;
+    y -= other.y;
+    z -= other.z;
+    w -= other.w;
+    return *this;
+  }
+  float4 &operator-=(float other) noexcept {
+    x -= other;
+    y -= other;
+    z -= other;
+    w -= other;
+    return *this;
+  }
+  float4 &operator*=(const float4 &other) noexcept {
+    x *= other.x;
+    y *= other.y;
+    z *= other.z;
+    w *= other.w;
+    return *this;
+  }
+  float4 &operator*=(float other) noexcept {
+    x *= other;
+    y *= other;
+    z *= other;
+    w *= other;
+    return *this;
+  }
+  float4 &operator/=(const float4 &other) noexcept {
+    x /= other.x;
+    y /= other.y;
+    z /= other.z;
+    w /= other.w;
+    return *this;
+  }
+  float4 &operator/=(float other) noexcept {
+    x /= other;
+    y /= other;
+    z /= other;
+    w /= other;
+    return *this;
   }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
   constexpr const float &operator[](std::size_t idx) const noexcept {
@@ -57,14 +111,53 @@ struct float3 {
   constexpr explicit float3(float f) noexcept : x(f), y(f), z(f) {}
   constexpr explicit float3(const float2 &other, float z = 1.f) noexcept;
   float3 operator-() const noexcept { return float3{-x, -y, -z}; };
+  float3 operator+(const float3 &other) const noexcept {
+    return float3{x + other.x, y + other.y, z + other.z};
+  }
+  float3 operator+(float other) const noexcept {
+    return float3{x + other, y + other, z + other};
+  }
+  float3 operator-(const float3 &other) const noexcept {
+    return float3{x - other.x, y - other.y, z - other.z};
+  }
+  float3 operator-(float other) const noexcept {
+    return float3{x - other, y - other, z - other};
+  }
   float3 operator*(float other) const noexcept {
     return float3{x * other, y * other, z * other};
+  }
+  float3 operator*(const float3 &other) const noexcept {
+    return float3{x * other.x, y * other.y, z * other.z};
   }
   float3 operator/(float other) const noexcept {
     return float3{x / other, y / other, z / other};
   }
-  float3 operator*(const float3 &other) const noexcept {
-    return float3{x * other.x, y * other.y, z * other.z};
+  float3 operator/(const float3 &other) const noexcept {
+    return float3{x / other.x, y / other.y, z / other.z};
+  }
+  float3 &operator+=(const float3 &other) noexcept {
+    x += other.x;
+    y += other.y;
+    z += other.z;
+    return *this;
+  }
+  float3 &operator+=(float other) noexcept {
+    x += other;
+    y += other;
+    z += other;
+    return *this;
+  }
+  float3 &operator-=(const float3 &other) noexcept {
+    x -= other.x;
+    y -= other.y;
+    z -= other.z;
+    return *this;
+  }
+  float3 &operator-=(float other) noexcept {
+    x -= other;
+    y -= other;
+    z -= other;
+    return *this;
   }
   float3 &operator*=(const float3 &other) noexcept {
     x *= other.x;
@@ -78,16 +171,16 @@ struct float3 {
     z *= other;
     return *this;
   }
-  float3 operator+(const float3 &other) const noexcept {
-    return float3{x + other.x, y + other.y, z + other.z};
+  float3 &operator/=(const float3 &other) noexcept {
+    x /= other.x;
+    y /= other.y;
+    z /= other.z;
+    return *this;
   }
-  float3 operator-(const float3 &other) const noexcept {
-    return float3{x - other.x, y - other.y, z - other.z};
-  }
-  float3 &operator+=(const float3 &other) noexcept {
-    x += other.x;
-    y += other.y;
-    z += other.z;
+  float3 &operator/=(float other) noexcept {
+    x /= other;
+    y /= other;
+    z /= other;
     return *this;
   }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
@@ -103,8 +196,24 @@ struct float2 {
   float2() noexcept = default;
   constexpr float2(float x, float y) noexcept : x(x), y(y) {}
   constexpr explicit float2(float f) noexcept : x(f), y(f) {}
+  float2 operator-() const noexcept { return float2{-x, -y}; };
+  float2 operator+(const float2 &other) const noexcept {
+    return float2{x + other.x, y + other.y};
+  }
+  float2 operator+(float other) const noexcept {
+    return float2{x + other, y + other};
+  }
+  float2 operator-(const float2 &other) const noexcept {
+    return float2{x - other.x, y - other.y};
+  }
+  float2 operator-(float other) const noexcept {
+    return float2{x - other, y - other};
+  }
   float2 operator*(const float2 &other) const noexcept {
     return float2{x * other.x, y * other.y};
+  }
+  float2 operator*(float other) const noexcept {
+    return float2{x * other, y * other};
   }
   float2 operator/(const float2 &other) const noexcept {
     return float2{x / other.x, y / other.y};
@@ -112,13 +221,46 @@ struct float2 {
   float2 operator/(float other) const noexcept {
     return float2{x / other, y / other};
   }
-  float2 operator-(const float2 &other) const noexcept {
-    return float2{x - other.x, y - other.y};
+  float2 &operator+=(const float2 &other) noexcept {
+    x += other.x;
+    y += other.y;
+    return *this;
   }
-  float2 operator+(const float2 &other) const noexcept {
-    return float2{x + other.x, y + other.y};
+  float2 &operator+=(float other) noexcept {
+    x += other;
+    y += other;
+    return *this;
   }
-  float2 operator-() const noexcept { return float2{-x, -y}; };
+  float2 &operator-=(const float2 &other) noexcept {
+    x -= other.x;
+    y -= other.y;
+    return *this;
+  }
+  float2 &operator-=(float other) noexcept {
+    x -= other;
+    y -= other;
+    return *this;
+  }
+  float2 &operator*=(const float2 &other) noexcept {
+    x *= other.x;
+    y *= other.y;
+    return *this;
+  }
+  float2 &operator*=(float other) noexcept {
+    x *= other;
+    y *= other;
+    return *this;
+  }
+  float2 &operator/=(const float2 &other) noexcept {
+    x /= other.x;
+    y /= other.y;
+    return *this;
+  }
+  float2 &operator/=(float other) noexcept {
+    x /= other;
+    y /= other;
+    return *this;
+  }
   float &operator[](std::size_t idx) noexcept { return (&x)[idx]; }
   constexpr const float &operator[](std::size_t idx) const noexcept {
     return (&x)[idx];
@@ -454,5 +596,59 @@ constexpr float4 lerp(const float4 &a, const float4 &b, float t) noexcept {
 inline float abs(float v) noexcept { return std::abs(v); }
 inline float modf(float v, float &out) { return std::modf(v, &out); }
 constexpr void discard() noexcept {}
+
+namespace detail {
+template <typename T> class ArrayProxy {
+public:
+  constexpr ArrayProxy(std::nullptr_t) noexcept : Data(nullptr), Length(0) {}
+
+  ArrayProxy(const T &OneElt) noexcept : Data(&OneElt), Length(1) {}
+
+  ArrayProxy(const T *data, size_t length) noexcept
+      : Data(data), Length(length) {}
+
+  ArrayProxy(const T *begin, const T *end) noexcept
+      : Data(begin), Length(end - begin) {}
+
+  template <typename A>
+  ArrayProxy(const std::vector<T, A> &Vec) noexcept
+      : Data(Vec.data()), Length(Vec.size()) {}
+
+  template <size_t N>
+  constexpr ArrayProxy(const std::array<T, N> &Arr) noexcept
+      : Data(Arr.data()), Length(N) {}
+
+  template <size_t N>
+  constexpr ArrayProxy(const T (&Arr)[N]) noexcept : Data(Arr), Length(N) {}
+
+  ArrayProxy(const std::initializer_list<T> &Vec) noexcept
+      : Data(Vec.begin() == Vec.end() ? (T *)nullptr : Vec.begin()),
+        Length(Vec.size()) {}
+
+  const T *begin() const noexcept { return Data; }
+
+  const T *end() const noexcept { return Data + Length; }
+
+  const T &front() const noexcept {
+    assert(Length && Data);
+    return *Data;
+  }
+
+  const T &back() const noexcept {
+    assert(Length && Data);
+    return *(Data + Length - 1);
+  }
+
+  bool empty() const noexcept { return (Length == 0); }
+
+  std::size_t size() const noexcept { return Length; }
+
+  const T *data() const noexcept { return Data; }
+
+private:
+  const T *Data = nullptr;
+  std::size_t Length = 0;
+};
+} // namespace detail
 
 } // namespace hsh
