@@ -666,11 +666,12 @@ struct DeclUsagePass : StmtVisitor<DeclUsagePass, void, HshStage> {
     case HBM_sample_bias2da:
     case HBM_read2da:
     case HBM_render_sample2d:
+    case HBM_render_sample_bias2d:
     case HBM_render_read2d:
       DoVisit(CallExpr->getArg(0), Stage);
       if (Method == HBM_sample_bias2d || Method == HBM_sample_bias2da ||
-          Method == HBM_read2d || Method == HBM_read2da ||
-          Method == HBM_render_read2d)
+          Method == HBM_render_sample_bias2d || Method == HBM_read2d ||
+          Method == HBM_read2da || Method == HBM_render_read2d)
         DoVisit(CallExpr->getArg(1), Stage);
       if (Method == HBM_read2da)
         DoVisit(CallExpr->getArg(2), Stage);
@@ -1016,6 +1017,7 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
     case HBM_sample2d:
     case HBM_render_sample2d:
     case HBM_sample_bias2d:
+    case HBM_render_sample_bias2d:
     case HBM_sample2da:
     case HBM_sample_bias2da: {
       ParmVarDecl *PVD = nullptr;
@@ -1028,7 +1030,7 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
       auto *UVStmt = DoVisit(CallExpr->getArg(0), Stage);
       if (!UVStmt)
         return nullptr;
-      if (Method == HBM_sample_bias2d || Method == HBM_sample_bias2da) {
+      if (Method == HBM_sample_bias2d || Method == HBM_sample_bias2da || Method == HBM_render_sample_bias2d) {
         auto *BiasStmt = DoVisit(CallExpr->getArg(1), Stage);
         if (!BiasStmt)
           return nullptr;
@@ -1064,9 +1066,9 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
       if (!LODStmt)
         return nullptr;
       std::array<Expr *, 2> NewArgs{cast<Expr>(CoordStmt), cast<Expr>(LODStmt)};
-      return CXXMemberCallExpr::Create(
-          Partitioner.Context, CallExpr->getCallee(), NewArgs,
-          CallExpr->getType(), VK_XValue, {}, {});
+      return CXXMemberCallExpr::Create(Partitioner.Context,
+                                       CallExpr->getCallee(), NewArgs,
+                                       CallExpr->getType(), VK_XValue, {}, {});
     }
     case HBM_read2da: {
       ParmVarDecl *PVD = nullptr;
@@ -1087,9 +1089,9 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
         return nullptr;
       std::array<Expr *, 3> NewArgs{cast<Expr>(CoordStmt),
                                     cast<Expr>(ArrayStmt), cast<Expr>(LODStmt)};
-      return CXXMemberCallExpr::Create(
-          Partitioner.Context, CallExpr->getCallee(), NewArgs,
-          CallExpr->getType(), VK_XValue, {}, {});
+      return CXXMemberCallExpr::Create(Partitioner.Context,
+                                       CallExpr->getCallee(), NewArgs,
+                                       CallExpr->getType(), VK_XValue, {}, {});
     }
     default:
       Reporter(Partitioner.Context).UnsupportedFunctionCall(CallExpr);

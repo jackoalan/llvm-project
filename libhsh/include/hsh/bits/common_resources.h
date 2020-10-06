@@ -358,6 +358,11 @@ struct render_texture2d {
     return {};
   }
   template <typename T>
+  scalar_to_vector_t<T, 4> sample_bias(float2, float bias = 0.f,
+                                       sampler = {}) const noexcept {
+    return {};
+  }
+  template <typename T>
   scalar_to_vector_t<T, 4> read(uint2, uint lod = 0) const noexcept {
     return {};
   }

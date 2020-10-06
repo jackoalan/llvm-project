@@ -269,7 +269,8 @@ void Builder::registerSampleCall(HshBuiltinCXXMethod HBM, CXXMemberCallExpr *C,
         if (Call.Expr == C)
           return;
       APValue Res;
-      Expr *SamplerArg = C->getArg(1);
+      Expr *SamplerArg = C->getArg(
+          HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da || HBM == HBM_render_sample_bias2d ? 2 : 1);
       if (!SamplerArg->isCXX11ConstantExpr(Context, &Res)) {
         Reporter(Context).NonConstexprSampler(SamplerArg);
         return;

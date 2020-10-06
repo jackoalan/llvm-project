@@ -23,6 +23,7 @@ MetalPrintingPolicy::identifierOfCXXMethod(HshBuiltinCXXMethod HBM,
   case HBM_sample2d:
   case HBM_render_sample2d:
   case HBM_sample_bias2d:
+  case HBM_render_sample_bias2d:
   case HBM_sample2da:
   case HBM_sample_bias2da: {
     CXXMethodIdentifier.clear();
@@ -55,6 +56,7 @@ bool MetalPrintingPolicy::overrideCXXMethodArguments(
   case HBM_sample2d:
   case HBM_render_sample2d:
   case HBM_sample_bias2d:
+  case HBM_render_sample_bias2d:
   case HBM_sample2da:
   case HBM_sample_bias2da: {
     auto *Search =
@@ -66,7 +68,8 @@ bool MetalPrintingPolicy::overrideCXXMethodArguments(
     OS << Search->SamplerIndex;
     StringArg(OS.str());
     ExprArg(C->getArg(0));
-    if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da)
+    if (HBM == HBM_sample_bias2d || HBM == HBM_sample_bias2da ||
+        HBM == HBM_render_sample_bias2d)
       WrappedExprArg("bias(", C->getArg(1), ")");
     return true;
   }
