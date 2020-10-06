@@ -208,7 +208,6 @@ public:
                                           uint32_t NumDepthBindings) noexcept;
   inline explicit RenderTextureAllocation(const SourceLocation &location,
                                           extent2d extent,
-                                          MTLPixelFormat colorFormat,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
   RenderTextureAllocation(const RenderTextureAllocation &other) = delete;
@@ -728,11 +727,11 @@ RenderTextureAllocation::RenderTextureAllocation(
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
-    const SourceLocation &location, extent2d extent, MTLPixelFormat colorFormat,
-    uint32_t NumColorBindings, uint32_t NumDepthBindings) noexcept
+    const SourceLocation &location, extent2d extent, uint32_t NumColorBindings,
+    uint32_t NumDepthBindings) noexcept
     : Next(Globals.RenderTextureHead), Location(location), Extent(extent),
-      ColorFormat(colorFormat), NumColorBindings(NumColorBindings),
-      NumDepthBindings(NumDepthBindings) {
+      ColorFormat(Globals.TargetPixelFormat),
+      NumColorBindings(NumColorBindings), NumDepthBindings(NumDepthBindings) {
   Globals.RenderTextureHead = this;
   if (Next)
     Next->Prev = this;

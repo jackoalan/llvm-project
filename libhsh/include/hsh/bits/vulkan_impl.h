@@ -289,7 +289,6 @@ public:
                                           uint32_t NumDepthBindings) noexcept;
   inline explicit RenderTextureAllocation(const SourceLocation &location,
                                           extent2d extent,
-                                          vk::Format colorFormat,
                                           uint32_t NumColorBindings,
                                           uint32_t NumDepthBindings) noexcept;
   RenderTextureAllocation(const RenderTextureAllocation &other) = delete;
@@ -533,6 +532,7 @@ struct VulkanGlobals {
   vk::PipelineMultisampleStateCreateInfo MultisampleState{
       {}, vk::SampleCountFlagBits::e1};
   vk::RenderPass RenderPass, DirectRenderPass;
+  vk::Format RenderPassFormat;
   float Anisotropy = 0.f;
   std::array<vk::CommandBuffer, 2> CommandBuffers;
   std::array<vk::Fence, 2> CommandFences;
@@ -935,13 +935,16 @@ SurfaceAllocation::SurfaceAllocation(
   if (Next)
     Next->Prev = this;
 
-  vk::Format UseFormat = vk::Format::eB8G8R8A8Unorm;
-  for (auto &Format :
-       Globals.PhysDevice.getSurfaceFormatsKHR(*this->Surface).value) {
-    if (Format.format == UseFormat) {
-      SurfaceFormat = Format;
-      break;
-    }
+  const auto &SurfaceFormats =
+      Globals.PhysDevice.getSurfaceFormatsKHR(*this->Surface).value;
+  // If the format list includes just one entry of VK_FORMAT_UNDEFINED,
+  // the surface has no preferred format. Otherwise, at least one
+  // supported format will be returned.
+  if (SurfaceFormats.size() == 1 &&
+      SurfaceFormats[0].format == vk::Format::eUndefined) {
+    SurfaceFormat = vk::Format::eB8G8R8A8Unorm;
+  } else if (!SurfaceFormats.empty()) {
+    SurfaceFormat = SurfaceFormats[0].format;
   }
   assert(SurfaceFormat.format != vk::Format::eUndefined);
   assert((!Next || SurfaceFormat.format == Next->SurfaceFormat.format) &&
@@ -995,6 +998,7 @@ SurfaceAllocation::SurfaceAllocation(
     Globals.SetDebugObjectName(location.with_field("OwnedRenderPass"),
                                OwnedRenderPass.get());
     Globals.RenderPass = OwnedRenderPass.get();
+    Globals.RenderPassFormat = GetColorFormat();
 
     struct DirectRenderPassCreateInfo : vk::RenderPassCreateInfo {
       std::array<vk::AttachmentDescription, 1> Attachments;
@@ -1057,13 +1061,14 @@ RenderTextureAllocation::RenderTextureAllocation(
   assert(Surface);
   assert(NumColorBindings <= MaxRenderTextureBindings);
   assert(NumDepthBindings <= MaxRenderTextureBindings);
+  PreRender();
 }
 
 RenderTextureAllocation::RenderTextureAllocation(
-    const SourceLocation &location, extent2d extent, vk::Format colorFormat,
-    uint32_t NumColorBindings, uint32_t NumDepthBindings) noexcept
+    const SourceLocation &location, extent2d extent, uint32_t NumColorBindings,
+    uint32_t NumDepthBindings) noexcept
     : Next(Globals.RenderTextureHead), Location(location), Extent(extent),
-      ColorFormat(colorFormat), NumColorBindings(NumColorBindings),
+      ColorFormat(Globals.RenderPassFormat), NumColorBindings(NumColorBindings),
       NumDepthBindings(NumDepthBindings) {
   Globals.RenderTextureHead = this;
   if (Next)
