@@ -989,8 +989,10 @@ inline void set_blend_constants(float red, float green, float blue,
 
 #if __hsh__
 #define HSH_VAR_STAGE(stage) [[hsh::stage]]
+#define HSH_VAR_INSTANCE [[hsh::instance]]
 #else
 #define HSH_VAR_STAGE(stage)
+#define HSH_VAR_INSTANCE
 #endif
 
 } // namespace hsh
