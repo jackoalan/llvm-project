@@ -641,9 +641,9 @@ inline owner<vertex_buffer<T>> create_vertex_buffer(
 
 template <typename T>
 inline dynamic_owner<vertex_buffer<T>> create_dynamic_vertex_buffer(
-    std::size_t Size,
+    std::size_t Count,
     const SourceLocation &location = SourceLocation::current()) noexcept {
-  return create_dynamic_resource<vertex_buffer<T>>(location, sizeof(T) * Size);
+  return create_dynamic_resource<vertex_buffer<T>>(location, Count);
 }
 
 template <typename T>
@@ -683,9 +683,9 @@ inline owner<index_buffer<T>> create_index_buffer(
 
 template <typename T>
 inline dynamic_owner<index_buffer<T>> create_dynamic_index_buffer(
-    std::size_t Size,
+    std::size_t Count,
     const SourceLocation &location = SourceLocation::current()) noexcept {
-  return create_dynamic_resource<index_buffer<T>>(location, sizeof(T) * Size);
+  return create_dynamic_resource<index_buffer<T>>(location, Count);
 }
 
 template <typename T>
