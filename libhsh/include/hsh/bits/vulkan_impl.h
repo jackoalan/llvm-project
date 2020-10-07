@@ -2184,22 +2184,25 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
     vk::ClearRect Rect(vk::Rect2D({}, hsh::detail::vulkan::Globals
                                           .AttachedRenderTexture->GetExtent()),
                        0, 1);
+    const vk::ClearColorValue ClearColor(
+        std::array<float, 4>{0.f, 0.f, 0.f, 1.f});
+    const vk::ClearDepthStencilValue ClearDepth(1.f, 0);
     if (color && depth) {
       vulkan::Globals.Cmd.clearAttachments(
           {vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
-                               vk::ClearValue(vk::ClearColorValue())),
+                               vk::ClearValue(ClearColor)),
            vk::ClearAttachment(vk::ImageAspectFlagBits::eDepth, 0,
-                               vk::ClearValue(vk::ClearDepthStencilValue()))},
+                               vk::ClearValue(ClearDepth))},
           Rect);
     } else if (color) {
       vulkan::Globals.Cmd.clearAttachments(
           vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
-                              vk::ClearValue(vk::ClearColorValue())),
+                              vk::ClearValue(ClearColor)),
           Rect);
     } else if (depth) {
       vulkan::Globals.Cmd.clearAttachments(
           vk::ClearAttachment(vk::ImageAspectFlagBits::eDepth, 0,
-                              vk::ClearValue(vk::ClearDepthStencilValue())),
+                              vk::ClearValue(ClearDepth)),
           Rect);
     }
   }
