@@ -128,6 +128,7 @@ private:
   std::array<std::pair<const FieldDecl *, HshStage>, HPF_Max> PipelineFields{};
   ClassTemplateDecl *StdArrayType = nullptr;
   ClassTemplateDecl *AlignedArrayType = nullptr;
+  ClassTemplateDecl *HshArrayType = nullptr;
 
   static constexpr Spellings BuiltinTypeSpellings[] = {
       {{}, {}, {}},
@@ -433,8 +434,14 @@ public:
 
   bool isAlignedArrayType(const CXXRecordDecl *RD) const;
 
+  ClassTemplateDecl *getHshArrayDecl() const { return HshArrayType; }
+
+  bool isHshArrayType(const CXXRecordDecl *RD) const;
+
+  bool isZeroSizeHshArray(const FieldDecl *FD) const;
+
   bool isSupportedArrayType(const CXXRecordDecl *RD) const {
-    return isStdArrayType(RD) || isAlignedArrayType(RD);
+    return isStdArrayType(RD) || isAlignedArrayType(RD) || isHshArrayType(RD);
   }
 
   CXXFunctionalCastExpr *makeSamplerBinding(ASTContext &Context,

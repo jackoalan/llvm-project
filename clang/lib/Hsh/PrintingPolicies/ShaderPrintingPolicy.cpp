@@ -385,6 +385,9 @@ void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
   const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
   PackoffsetFieldHandler FH(*this, OS);
   for (auto *FD : Record->fields()) {
+    if (Builtins.isZeroSizeHshArray(FD))
+      continue;
+
     auto Offset = BaseOffset + Context.toCharUnitsFromBits(
                                    RL.getFieldOffset(FD->getFieldIndex()));
     Twine Tw1 =
@@ -466,6 +469,12 @@ void ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::
     PrintAttributeFields(raw_ostream &OS, const CXXRecordDecl *Record,
                          const Twine &FieldName, ArrayWaitType WaitingForArray,
                          unsigned Indent, unsigned &Location) {
+  for (auto &Base : Record->bases()) {
+    if (auto *BaseRecord = Base.getType()->getAsCXXRecordDecl()) {
+      PrintAttributeFields(OS, BaseRecord, FieldName, WaitingForArray, Indent,
+                           Location);
+    }
+  }
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {

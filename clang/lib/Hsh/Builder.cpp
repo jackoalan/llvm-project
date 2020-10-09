@@ -73,7 +73,13 @@ public:
             Visit(Child);
           }
         } else if (auto *Child = Field->getType()->getAsCXXRecordDecl()) {
-          if (Builtins.isStdArrayType(Child)) {
+          if (Builtins.isHshArrayType(Child)) {
+            if (Child->bases().empty()) {
+              // ignored
+            } else {
+              Visit(Child->bases_begin()->getType()->getAsCXXRecordDecl());
+            }
+          } else if (Builtins.isStdArrayType(Child)) {
             SaveAndRestore<const FieldDecl *> SavedArrayField(ArrayField,
                                                               Field);
             Visit(Child);
@@ -366,6 +372,17 @@ void Builder::registerAttributeField(QualType FieldType, CharUnits Offset,
 
 void Builder::registerAttributeFields(const CXXRecordDecl *Record,
                                       unsigned Binding, CharUnits BaseOffset) {
+  for (auto &Base : Record->bases()) {
+    if (auto *BaseRecord = Base.getType()->getAsCXXRecordDecl()) {
+      const ASTRecordLayout &ParentRL = Context.getASTRecordLayout(BaseRecord);
+      for (const auto *Field : BaseRecord->fields()) {
+        auto Offset =
+            BaseOffset + Context.toCharUnitsFromBits(
+                             ParentRL.getFieldOffset(Field->getFieldIndex()));
+        registerAttributeField(Field->getType(), Offset, Binding);
+      }
+    }
+  }
   const ASTRecordLayout &RL = Context.getASTRecordLayout(Record);
   for (const auto *Field : Record->fields()) {
     auto Offset = BaseOffset + Context.toCharUnitsFromBits(
@@ -451,6 +468,9 @@ void Builder::registerUniform(StringRef Name, const CXXRecordDecl *Record,
 
   CharUnits HLSLOffset, CXXOffset;
   for (auto *Field : Record->fields()) {
+    if (Builtins.isZeroSizeHshArray(Field))
+      continue;
+
     auto CXXFieldSize = Context.getTypeSizeInChars(Field->getType());
     auto HLSLFieldSize = CXXFieldSize.alignTo(CharUnits::fromQuantity(4));
     auto CXXFieldAlign = Context.getTypeAlignInChars(Field->getType());

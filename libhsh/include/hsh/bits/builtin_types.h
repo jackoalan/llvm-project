@@ -511,6 +511,11 @@ template <typename T> struct aligned_array<T, 0> {
   T &operator[](std::size_t pos) { return reinterpret_cast<T *>(&data)[pos]; }
 };
 
+// Use along with C++20 [[no_unique_address]] for zero-sizable arrays
+template <typename T, std::size_t N>
+struct array : public std::array<T, N> {};
+template <typename T> struct array<T, 0> {};
+
 constexpr float dot(const float2 &a, const float2 &b) noexcept {
   return a.x * b.x + a.y * b.y;
 }

@@ -601,6 +601,7 @@ void HshBuiltins::findBuiltinDecls(ASTContext &Context) {
 
   StdArrayType = findClassTemplate("array", StdNamespace, Context);
   AlignedArrayType = findClassTemplate("aligned_array", HshNamespace, Context);
+  HshArrayType = findClassTemplate("array", HshNamespace, Context);
 }
 
 HshBuiltinType HshBuiltins::identifyBuiltinType(QualType QT,
@@ -734,7 +735,8 @@ bool HshBuiltins::checkHshTypeCompatibility(const ASTContext &Context,
     auto *CTD = Spec->getSpecializedTemplateOrPartial()
                     .get<ClassTemplateDecl *>()
                     ->getCanonicalDecl();
-    if (CTD == StdArrayType || CTD == AlignedArrayType) {
+    if (CTD == StdArrayType || CTD == AlignedArrayType ||
+        CTD == HshArrayType) {
       const auto &Arg = Spec->getTemplateArgs()[0];
       return checkHshTypeCompatibility(Context, VD, Arg.getAsType(),
                                        AllowTextures);
@@ -919,19 +921,35 @@ HshBuiltins::getDerivedPipelineSpecialization(CXXRecordDecl *Decl) const {
 }
 
 bool HshBuiltins::isStdArrayType(const CXXRecordDecl *RD) const {
-  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
-    return CTSD->getSpecializedTemplateOrPartial()
-               .get<ClassTemplateDecl *>()
-               ->getCanonicalDecl() == StdArrayType;
+  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
+    return CTSD->getSpecializedTemplate() == StdArrayType;
+  }
   return false;
 }
 
 bool HshBuiltins::isAlignedArrayType(const CXXRecordDecl *RD) const {
-  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
-    return CTSD->getSpecializedTemplateOrPartial()
-               .get<ClassTemplateDecl *>()
-               ->getCanonicalDecl() == AlignedArrayType;
+  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
+    return CTSD->getSpecializedTemplate() == AlignedArrayType;
+  }
   return false;
+}
+
+bool HshBuiltins::isHshArrayType(const CXXRecordDecl *RD) const {
+  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
+    return CTSD->getSpecializedTemplate() == HshArrayType;
+  }
+  return false;
+}
+
+bool HshBuiltins::isZeroSizeHshArray(const FieldDecl *FD) const {
+  if (!FD || !FD->getAttr<NoUniqueAddressAttr>())
+    return false;
+  auto* RD = FD->getType()->getAsCXXRecordDecl();
+  if (RD == nullptr || !isHshArrayType(RD))
+    return false;
+  return !cast<ClassTemplateSpecializationDecl>(RD)
+      ->getTemplateArgs()[1]
+      .getAsIntegral();
 }
 
 CXXFunctionalCastExpr *
