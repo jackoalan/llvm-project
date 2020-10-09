@@ -755,19 +755,38 @@ struct DeclUsagePass : StmtVisitor<DeclUsagePass, void, HshStage> {
   }
 
   void VisitIfStmt(IfStmt *S, HshStage Stage) {
-    if (auto *Init = S->getInit())
-      DoVisit(Init, Stage);
-    if (auto *Cond = S->getCond())
-      DoVisit(Cond, Stage);
-    if (auto *Then = S->getThen())
-      DoVisit(Then, Stage, true);
-    if (auto *Else = S->getElse())
-      DoVisit(Else, Stage, true);
+    if (S->isConstexpr()) {
+      if (auto* Expr = dyn_cast<ConstantExpr>(S->getCond())) {
+        if (Expr->getResultAsAPSInt().getBoolValue()) {
+          if (auto *Then = S->getThen())
+            DoVisit(Then, Stage, true);
+        } else if (auto *Else = S->getElse())
+          DoVisit(Else, Stage, true);
+      }
+    } else {
+      if (auto *Init = S->getInit())
+        DoVisit(Init, Stage);
+      if (auto *Cond = S->getCond())
+        DoVisit(Cond, Stage);
+      if (auto *Then = S->getThen())
+        DoVisit(Then, Stage, true);
+      if (auto *Else = S->getElse())
+        DoVisit(Else, Stage, true);
+    }
   }
 
   void VisitConditionalOperator(ConditionalOperator *S, HshStage Stage) {
-    if (auto *Cond = S->getCond())
+    if (auto *Cond = S->getCond()) {
+      if (Optional<llvm::APSInt> ConstVal = Cond->getIntegerConstantExpr(Partitioner.Context)) {
+        if (ConstVal->getBoolValue()) {
+          if (auto *True = S->getTrueExpr())
+            DoVisit(True, Stage);
+        } else if (auto *False = S->getFalseExpr())
+          DoVisit(False, Stage);
+        return;
+      }
       DoVisit(Cond, Stage);
+    }
     if (auto *True = S->getTrueExpr())
       DoVisit(True, Stage);
     if (auto *False = S->getFalseExpr())
@@ -832,8 +851,8 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
     if (Optional<llvm::APSInt> ConstVal =
             E->getIntegerConstantExpr(Partitioner.Context)) {
       if (E->isKnownToHaveBooleanValue()) {
-        return new (Partitioner.Context)
-            CXXBoolLiteralExpr(!!ConstVal, Partitioner.Context.BoolTy, {});
+        return new (Partitioner.Context) CXXBoolLiteralExpr(
+            ConstVal->getBoolValue(), Partitioner.Context.BoolTy, {});
       } else {
         return IntegerLiteral::Create(Partitioner.Context,
                                       ConstVal->extOrTrunc(32),
@@ -1327,16 +1346,14 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
               Cond->getIntegerConstantExpr(Partitioner.Context)) {
         dumper() << "Constant Cond ";
         dumper() << S->getCond();
-        if (!!ConstVal) {
+        if (ConstVal->getBoolValue()) {
           if (auto *True = S->getTrueExpr()) {
             dumper() << "True:\n" << True;
             return cast_or_null<Expr>(DoVisit(True, Stage));
           }
-        } else {
-          if (auto *False = S->getFalseExpr()) {
-            dumper() << "Else:\n" << False;
-            return cast_or_null<Expr>(DoVisit(False, Stage));
-          }
+        } else if (auto *False = S->getFalseExpr()) {
+          dumper() << "Else:\n" << False;
+          return cast_or_null<Expr>(DoVisit(False, Stage));
         }
         return nullptr;
       }
