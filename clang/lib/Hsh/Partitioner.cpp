@@ -507,10 +507,20 @@ struct BlockDependencyPass : ConstStmtVisitor<BlockDependencyPass, unsigned> {
 
   unsigned VisitIfStmt(const IfStmt *S) {
     StageBits NewStageBits;
-    if (auto *Then = S->getThen())
-      NewStageBits |= Visit(Then);
-    if (auto *Else = S->getElse())
-      NewStageBits |= Visit(Else);
+    if (S->isConstexpr()) {
+      if (auto* Expr = dyn_cast<ConstantExpr>(S->getCond())) {
+        if (Expr->getResultAsAPSInt().getBoolValue()) {
+          if (auto *Then = S->getThen())
+            NewStageBits |= Visit(Then);
+        } else if (auto *Else = S->getElse())
+          NewStageBits |= Visit(Else);
+      }
+    } else {
+      if (auto *Then = S->getThen())
+        NewStageBits |= Visit(Then);
+      if (auto *Else = S->getElse())
+        NewStageBits |= Visit(Else);
+    }
     auto &DepInfo = Partitioner.StmtMap[S];
     DepInfo.StageBits |= NewStageBits;
     return DepInfo.StageBits;
@@ -1269,6 +1279,21 @@ struct BuildPass : StmtVisitor<BuildPass, Stmt *, HshStage> {
 
   Stmt *VisitIfStmt(IfStmt *S, HshStage Stage) {
     dumper() << "If ";
+    if (S->isConstexpr()) {
+      Expr *Cond = S->getCond();
+      dumper() << "constexpr (" << Cond;
+      bool Result;
+      if (Cond->EvaluateAsBooleanCondition(Result, Partitioner.Context,
+                                                   true)) {
+        dumper() << ") evaluated to: " << Result;
+        if (Result) {
+          return DoVisit(S->getThen(), Stage, true);
+        } else if (auto *Else = S->getElse()) {
+          return DoVisit(Else, Stage, true);
+        }
+        return nullptr;
+      }
+    }
     Stmt *NewInit = nullptr;
     if (auto *Init = S->getInit()) {
       NewInit = DoVisit(Init, Stage);
