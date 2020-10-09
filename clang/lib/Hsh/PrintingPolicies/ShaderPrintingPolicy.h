@@ -71,7 +71,7 @@ struct ShaderPrintingPolicyBase : PrintingPolicy {
 
   static constexpr std::array<char, 4> VectorComponents{'x', 'y', 'z', 'w'};
 
-  enum class ArrayWaitType { NoArray, StdArray, AlignedArray };
+  enum class ArrayWaitType { NoArray, StdArray, AlignedArray, HshArray };
 
   SmallVector<const CXXRecordDecl *, 8> NestedRecords;
 

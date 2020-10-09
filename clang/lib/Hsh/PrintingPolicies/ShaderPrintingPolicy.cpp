@@ -237,6 +237,8 @@ ShaderPrintingPolicyBase::getArrayWaitType(const CXXRecordDecl *RD) const {
     return ArrayWaitType::StdArray;
   if (Builtins.isAlignedArrayType(RD))
     return ArrayWaitType::AlignedArray;
+  if (Builtins.isHshArrayType(RD))
+    return ArrayWaitType::HshArray;
   return ArrayWaitType::NoArray;
 }
 
@@ -270,6 +272,11 @@ void ShaderPrintingPolicyBase::GatherNestedStructField(
 
 void ShaderPrintingPolicyBase::GatherNestedStructFields(
     const CXXRecordDecl *Record, ArrayWaitType WaitingForArray) {
+  for (auto &Base : Record->bases()) {
+    if (auto *BaseRecord = Base.getType()->getAsCXXRecordDecl()) {
+      GatherNestedStructFields(BaseRecord, WaitingForArray);
+    }
+  }
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {
@@ -346,6 +353,12 @@ template <typename FieldHandler>
 void ShaderPrintingPolicyBase::PrintStructFields(
     FieldHandler &FH, const CXXRecordDecl *Record, const Twine &FieldName,
     bool ArrayField, ArrayWaitType WaitingForArray, unsigned Indent) {
+  for (auto &Base : Record->bases()) {
+    if (auto *BaseRecord = Base.getType()->getAsCXXRecordDecl()) {
+      PrintStructFields(FH, BaseRecord, FieldName, ArrayField, WaitingForArray,
+                        Indent);
+    }
+  }
   if (WaitingForArray == ArrayWaitType::NoArray)
     WaitingForArray = getArrayWaitType(Record);
   if (WaitingForArray != ArrayWaitType::NoArray) {
