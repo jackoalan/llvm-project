@@ -36,27 +36,27 @@ public:
                            !std::is_same_v<StageBits, std::decay_t<T>> &&
                            !std::is_same_v<HshStage, std::decay_t<T>>,
                        int> = 0>
-  GeneratorDumper &operator<<(const T &Obj) {
+  Dumper &operator<<(const T &Obj) {
     llvm::errs() << Obj;
     return *this;
   }
-  GeneratorDumper &operator<<(const Stmt *S) {
+  Dumper &operator<<(const Stmt *S) {
     S->printPretty(llvm::errs(), nullptr, Policy);
     return *this;
   }
-  GeneratorDumper &operator<<(const Decl *D) {
+  Dumper &operator<<(const Decl *D) {
     D->print(llvm::errs(), Policy);
     return *this;
   }
-  GeneratorDumper &operator<<(const QualType T) {
+  Dumper &operator<<(const QualType T) {
     T.print(llvm::errs(), Policy);
     return *this;
   }
-  GeneratorDumper &operator<<(const StageBits B) {
+  Dumper &operator<<(const StageBits B) {
     PrintStageBits(llvm::errs(), B);
     return *this;
   }
-  GeneratorDumper &operator<<(const HshStage S) {
+  Dumper &operator<<(const HshStage S) {
     llvm::errs() << HshStageToString(S);
     return *this;
   }
