@@ -5,6 +5,7 @@
 BUILTIN_FUNCTION(dot2, dot, dot, dot, dot, false, const struct hsh::float2 &, const struct hsh::float2 &)
 BUILTIN_FUNCTION(dot3, dot, dot, dot, dot, false, const struct hsh::float3 &, const struct hsh::float3 &)
 BUILTIN_FUNCTION(dot4, dot, dot, dot, dot, false, const struct hsh::float4 &, const struct hsh::float4 &)
+BUILTIN_FUNCTION(normalize2, normalize, normalize, normalize, normalize, false, const struct hsh::float2 &)
 BUILTIN_FUNCTION(normalize3, normalize, normalize, normalize, normalize, false, const struct hsh::float3 &)
 BUILTIN_FUNCTION(length3, length, length, length, length, false, const struct hsh::float3 &)
 BUILTIN_FUNCTION(max, max, max, max, max, false, float, float)
