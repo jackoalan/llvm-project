@@ -155,6 +155,9 @@ ShaderPrintingPolicy<ImplClass, PackoffsetFieldHandler>::overrideMemberExpr(
     case HPF_position:
       return static_cast<const ImplClass &>(*this).identifierOfVertexPosition(
           FD);
+    case HPF_frag_position:
+      return static_cast<const ImplClass &>(*this).identifierOfFragmentPosition(
+          FD);
     case HPF_color_out:
       return static_cast<const ImplClass &>(*this).identifierOfColorAttachment(
           FD);

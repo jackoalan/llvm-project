@@ -35,6 +35,11 @@ struct HLSLPrintingPolicy
     return VertexPositionIdentifier;
   }
 
+  std::string FragmentPositionIdentifier;
+  StringRef identifierOfFragmentPosition(FieldDecl *FD) const {
+    return FragmentPositionIdentifier;
+  }
+
   static constexpr StringRef identifierOfColorAttachment(FieldDecl *FD) {
     return "_targets_out._color_out";
   }

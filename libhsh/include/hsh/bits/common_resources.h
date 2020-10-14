@@ -527,6 +527,7 @@ struct ColorAttachmentSelectorImpl<
 
 template <typename... Attrs> struct pipeline {
   hsh::float4 position;
+  hsh::float4 frag_position;
   static constexpr std::size_t color_attachment_count =
       ((Attrs::is_ca ? 1 : 0) + ...);
   std::array<hsh::float4, color_attachment_count> color_out;

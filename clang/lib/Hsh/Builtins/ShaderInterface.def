@@ -5,6 +5,7 @@
 PIPELINE_FIELD(position, HshVertexStage)
 PIPELINE_FIELD(vertex_id, HshVertexStage)
 PIPELINE_FIELD(instance_id, HshVertexStage)
+PIPELINE_FIELD(frag_position, HshFragmentStage)
 PIPELINE_FIELD(color_out, HshFragmentStage)
 
 #undef PIPELINE_FIELD

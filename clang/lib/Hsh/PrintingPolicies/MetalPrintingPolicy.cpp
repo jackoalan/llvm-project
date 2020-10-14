@@ -259,6 +259,13 @@ void MetalPrintingPolicy::printStage(
   if (FromRecord) {
     OS << "struct " << HshStageToString(From) << "_to_"
        << HshStageToString(Stage) << " {\n";
+    if (Stage == HshFragmentStage &&
+        ReferencedPipelineFields[HPF_frag_position]) {
+      FragmentPositionIdentifier.clear();
+      raw_string_ostream PIO(FragmentPositionIdentifier);
+      PIO << "_from_" << HshStageToString(From) << "._position";
+      OS << "  float4 _position [[position]];\n";
+    }
     for (auto *FD : FromRecord->fields()) {
       OS << "  ";
       FD->print(OS, *this, 1);

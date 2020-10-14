@@ -264,6 +264,13 @@ void HLSLPrintingPolicy::printStage(
   if (FromRecord) {
     OS << "struct " << HshStageToString(From) << "_to_"
        << HshStageToString(Stage) << " {\n";
+    if (Stage == HshFragmentStage &&
+        ReferencedPipelineFields[HPF_frag_position]) {
+      FragmentPositionIdentifier.clear();
+      raw_string_ostream PIO(FragmentPositionIdentifier);
+      PIO << "_from_" << HshStageToString(From) << "._position";
+      OS << "  float4 _position : SV_Position;\n";
+    }
     uint32_t VarIdx = 0;
     for (auto *FD : FromRecord->fields()) {
       OS << "  ";

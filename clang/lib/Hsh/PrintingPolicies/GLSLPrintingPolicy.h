@@ -29,6 +29,10 @@ struct GLSLPrintingPolicy
     return "gl_Position";
   }
 
+  static constexpr StringRef identifierOfFragmentPosition(FieldDecl *FD) {
+    return "gl_FragCoord";
+  }
+
   static constexpr StringRef identifierOfColorAttachment(FieldDecl *FD) {
     return "_color_out";
   }
