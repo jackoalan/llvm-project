@@ -809,7 +809,7 @@ void RenderTextureAllocation::Resolve(const dk::ImageView &SrcImage,
 
 void RenderTextureAllocation::ResolveSurface(
     SurfaceAllocation *Surface) noexcept {
-  assert(Surface->NextImage != UINT32_MAX &&
+  assert(Surface->NextImage != -1 &&
          "acquireNextImage not called on surface for this frame");
   assert(Surface->Extent == Extent &&
          "Mismatched render texture / surface extents");
@@ -1233,7 +1233,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
     if (color)
       deko::Globals.Cmd.clearColor(0, DkColorMask_RGBA, 0, 0, 0, 0);
     if (depth)
-      deko::Globals.Cmd.clearDepthStencil(true, 0.f, 0, 0);
+      deko::Globals.Cmd.clearDepthStencil(true, 1.f, 0, 0);
   }
 
   static void SetBlendConstants(float red, float green, float blue,

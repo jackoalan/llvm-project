@@ -608,7 +608,7 @@ struct ShaderConstData<Target::DEKO3D, NStages, NBindings, NAttributes,
             ((uint32_t(std::get<AttSeq>(Atts).blendEnabled() ? 1 : 0)
               << AttSeq) |
              ...),
-            DkLogicOp_Clear, DkCompareOp_Always}},
+            DkLogicOp_Copy, DkCompareOp_Always}},
         ColorWriteState{
             DkColorWriteState{((HshToDkColorComponentFlags(
                                     std::get<AttSeq>(Atts).ColorWriteComponents)
