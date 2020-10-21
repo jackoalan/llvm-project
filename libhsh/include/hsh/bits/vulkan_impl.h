@@ -2217,8 +2217,8 @@ template <> struct TargetTraits<Target::VULKAN_SPIRV> {
                                           .AttachedRenderTexture->GetExtent()),
                        0, 1);
     const vk::ClearColorValue ClearColor(
-        std::array<float, 4>{0.f, 0.f, 0.f, 1.f});
-    const vk::ClearDepthStencilValue ClearDepth(1.f, 0);
+        std::array<float, 4>{0.f, 0.f, 0.f, 0.f});
+    constexpr vk::ClearDepthStencilValue ClearDepth(1.f, 0);
     if (color && depth) {
       vulkan::Globals.Cmd.clearAttachments(
           {vk::ClearAttachment(vk::ImageAspectFlagBits::eColor, 0,
