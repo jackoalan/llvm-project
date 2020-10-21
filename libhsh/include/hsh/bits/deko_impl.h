@@ -383,6 +383,12 @@ struct DekoGlobals {
   constexpr DekoGlobals() = default;
 
   void PreRender() noexcept {
+    if (Frame == 0) {
+      DkCmdList CopyList = CopyCmd.finishList();
+      Queue.submitCommands(CopyList);
+      Queue.waitIdle();
+    }
+
     uint32_t CurBufferIdx = Frame & 1u;
     Cmd = CommandBuffers[CurBufferIdx];
     CmdFence = CommandFences[CurBufferIdx];
@@ -400,11 +406,12 @@ struct DekoGlobals {
     for (auto *Fifo = FifoBufferHead; Fifo; Fifo = Fifo->GetNext())
       Fifo->PostRender();
     Queue.submitCommands(CopyList);
-    Queue.signalFence(*CopyFence, true);
+    Queue.signalFence(*CopyFence, false);
     Queue.submitCommands(CmdList);
     for (auto *Surf = SurfaceHead; Surf; Surf = Surf->GetNext())
       Surf->PostRender();
     AcquiredImage = false;
+    Queue.signalFence(*CmdFence, true);
     Queue.flush();
     CopyFence->wait();
     ++Frame;
@@ -630,11 +637,9 @@ dmaAllocateMemory(const DmaMemoryRequirements &pDmaMemoryRequirements,
                   const DmaAllocationCreateInfo &pAllocationCreateInfo,
                   DmaAllocation *pAllocation,
                   DmaAllocationInfo *pAllocationInfo) noexcept {
-  return ::dmaAllocateMemory(
-      Globals.Allocator,
-      reinterpret_cast<const DmaMemoryRequirements *>(&pDmaMemoryRequirements),
-      reinterpret_cast<const DmaAllocationCreateInfo *>(&pAllocationCreateInfo),
-      pAllocation, pAllocationInfo);
+  return ::dmaAllocateMemory(Globals.Allocator, &pDmaMemoryRequirements,
+                             &pAllocationCreateInfo, pAllocation,
+                             pAllocationInfo);
 }
 
 struct AllocationCreateInfoMapped : DmaAllocationCreateInfo {
@@ -739,7 +744,7 @@ inline TextureAllocation AllocateTexture(const dk::ImageLayoutMaker &CreateInfo,
     constexpr TextureAllocationCreateInfo(bool Dedicated) noexcept
         : DmaAllocationCreateInfo{
               Dedicated ? DMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
-                        : DmaAllocationCreateFlagBits(0),
+                        : DmaAllocationCreateFlags(0),
               DMA_NULL_HANDLE, nullptr} {}
   } AllocationCreateInfo{Dedicated};
   dk::ImageLayout Layout;
@@ -808,12 +813,12 @@ void RenderTextureAllocation::Resolve(const dk::ImageView &SrcImage,
 }
 
 void RenderTextureAllocation::ResolveSurface(
-    SurfaceAllocation *Surface) noexcept {
-  assert(Surface->NextImage != -1 &&
+    SurfaceAllocation *ToSurface) noexcept {
+  assert(ToSurface->NextImage != -1 &&
          "acquireNextImage not called on surface for this frame");
-  assert(Surface->Extent == Extent &&
+  assert(ToSurface->Extent == Extent &&
          "Mismatched render texture / surface extents");
-  auto &DstImage = Surface->SwapchainImages[Surface->NextImage];
+  auto &DstImage = ToSurface->SwapchainImages[ToSurface->NextImage];
   DkImageRect Rect{0, 0, 0, Extent.w, Extent.h, 1};
   _Resolve(ColorView, DstImage.ColorView, Rect, Rect);
 }
@@ -876,16 +881,13 @@ void RenderTextureAllocation::ProcessAttachArgs(const viewport &vp,
 
 struct BufferImageCopy {
   uint32_t SrcOffset;
-  uint32_t SrcRowLength;
-  uint32_t SrcImageHeight;
   DkImageRect DstRec;
   uint8_t MipOffset;
 
-  void Copy(DkGpuAddr BaseAddr, dk::ImageView &DstView) const noexcept {
-    DstView.setMipLevels(MipOffset);
-    deko::Globals.Cmd.copyBufferToImage(
-        DkCopyBuf{BaseAddr + SrcOffset, SrcRowLength, SrcImageHeight}, DstView,
-        DstRec);
+  void Copy(DkBufExtents Base, dk::ImageView &DstView) const noexcept {
+    DstView.mipLevelOffset = MipOffset;
+    deko::Globals.CopyCmd.copyBufferToImage(DkCopyBuf{Base.addr + SrcOffset},
+                                            DstView, DstRec);
   }
 };
 } // namespace hsh::detail::deko
@@ -999,6 +1001,7 @@ template <> struct TargetTraits<Target::DEKO3D> {
     deko::UploadBufferAllocation UploadAllocation;
     std::array<deko::BufferImageCopy, MaxMipCount> Copies;
 
+    DynamicTextureOwner() noexcept = default;
     DynamicTextureOwner(deko::TextureAllocation AllocationIn,
                         deko::UploadBufferAllocation UploadAllocation,
                         std::array<deko::BufferImageCopy, MaxMipCount> Copies,
@@ -1008,9 +1011,10 @@ template <> struct TargetTraits<Target::DEKO3D> {
           Copies(std::move(Copies)) {}
 
     void MakeCopies() noexcept {
-      dk::ImageView DstView{Allocation.GetImage()};
-      for (auto &Copy : Copies)
-        Copy.Copy(UploadAllocation.GetBuffer().addr, DstView);
+      dk::ImageView DstView{ImageView};
+      for (uint8_t i = 0; i < DstView.mipLevelCount; ++i) {
+        Copies[i].Copy(UploadAllocation.GetBuffer(), DstView);
+      }
     }
 
     void *Map() noexcept { return UploadAllocation.GetMappedData(); }

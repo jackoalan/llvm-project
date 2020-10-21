@@ -540,10 +540,11 @@ public:
           Builtins.printTargetEnumString(InitOS, HostPolicy, Target);
           InitOS << ">{";
           Builtins.printStageEnumString(InitOS, HostPolicy, Stage);
+          uint64_t ControlHash;
           std::string ControlHashStr;
           if (Target == HT_DEKO3D) {
             /* Additional shader parameters for deko */
-            auto ControlHash =
+            ControlHash =
                 xxHash64(ArrayRef<uint8_t>{Data.data() + 24, 64});
             ControlHashStr = MakeHashString(ControlHash);
             InitOS << ", _dekoc_" << ControlHashStr;
@@ -559,24 +560,23 @@ public:
                        << "\n\n";
             CommentOut << Source;
           }
-          *OS << "inline ";
           if (Target == HT_VULKAN_SPIRV) {
+            *OS << "inline ";
             raw_carray32_ostream DataOut(*OS, "_hshs_"s + HashStr,
                                          SectionAttributeString,
                                          AttributeBeforeType);
             DataOut.write((const uint32_t *)Data.data(), Data.size() / 4);
           } else if (Target == HT_DEKO3D) {
             /* Dksh headers are packed together by the linker */
-            {
+            if (SeenHashes.insert(ControlHash).second) {
               raw_carray_ostream ControlOut(
                   *OS, "_dekoc_"s + ControlHashStr,
-                  "__attribute__((section(\".hsh11\"), aligned(64)))");
+                  "__attribute__((section(\".deko.control\"), aligned(64)))");
               ControlOut.write((const char *)Data.data() + 24, 64);
             }
             {
-              *OS << "\ninline ";
               raw_carray_ostream DataOut(*OS, "_hshs_"s + HashStr,
-                                         "__attribute__((section(\".hsh10\"), "
+                                         "__attribute__((section(\".deko.shader\"), "
                                          "aligned(DK_SHADER_CODE_ALIGNMENT)))");
               DataOut.write((const char *)Data.data() + 256, Data.size() - 256);
             }

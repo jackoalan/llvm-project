@@ -9,7 +9,6 @@ template <> struct ShaderCode<Target::DEKO3D> {
   enum Stage Stage = Stage::Vertex;
   const uint8_t *Control = nullptr;
   ShaderDataBlob<uint8_t> Blob;
-  constexpr ShaderCode() noexcept = default;
   constexpr ShaderCode(enum Stage Stage, const uint8_t *Control,
                        ShaderDataBlob<uint8_t> Blob) noexcept
       : Stage(Stage), Control(Control), Blob(Blob) {}
@@ -700,7 +699,7 @@ MakeCopies1D(uint32_t width, uint32_t layers, uint32_t texelSize,
              uint32_t texelShift,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
-      MipOffset1D(width, layers, texelSize, texelShift, Idx), width >> Idx, 1,
+      MipOffset1D(width, layers, texelSize, texelShift, Idx),
       DkImageRect{0, 0, 0, width >> Idx, 1, layers}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
@@ -717,7 +716,6 @@ MakeCopies2D(uint32_t width, uint32_t height, uint32_t layers,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
       MipOffset2D(width, height, layers, texelSize, texelShift, Idx),
-      width >> Idx, height >> Idx,
       DkImageRect{0, 0, 0, width >> Idx, height >> Idx, layers}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
@@ -734,7 +732,6 @@ MakeCopies3D(uint32_t width, uint32_t height, uint32_t depth,
              std::integer_sequence<uint32_t, Idx...>) noexcept {
   return {BufferImageCopy{
       MipOffset3D(width, height, depth, texelSize, texelShift, Idx),
-      width >> Idx, height >> Idx,
       DkImageRect{0, 0, 0, width >> Idx, height >> Idx, depth >> Idx}, Idx}...};
 }
 static constexpr std::array<BufferImageCopy, MaxMipCount>
@@ -924,18 +921,18 @@ inline auto CreateTextureOwner(
   auto UploadBuffer = deko::AllocateUploadBuffer(BufferSize);
   copyFunc(UploadBuffer.GetMappedData(), BufferSize);
 
-  TargetTraits<Target::DEKO3D>::TextureOwner Ret{
-      deko::AllocateTexture(
-          dk::ImageLayoutMaker{deko::Globals.Device}
-              .setType(imageViewType)
-              .setFlags(DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression)
-              .setFormat(TexelFormat)
-              .setDimensions(Traits::ExtentWidth(extent),
-                             Traits::ExtentHeight(extent),
-                             Traits::ExtentDepth(extent))
-              .setMipLevels(numMips),
-          false),
-      dk::ImageView{Ret.Allocation.GetImage()}
+  auto Allocation = deko::AllocateTexture(
+      dk::ImageLayoutMaker{deko::Globals.Device}
+          .setType(imageViewType)
+          .setFlags(DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression)
+          .setFormat(TexelFormat)
+          .setDimensions(Traits::ExtentWidth(extent),
+                         Traits::ExtentHeight(extent),
+                         Traits::ExtentDepth(extent))
+          .setMipLevels(numMips),
+      false);
+  auto ImageView =
+      dk::ImageView{Allocation.GetImage()}
           .setType(imageViewType)
           .setFormat(TexelFormat)
           .setSwizzle(HshToDkImageSwizzle(redSwizzle, DkImageSwizzle_Red),
@@ -943,11 +940,14 @@ inline auto CreateTextureOwner(
                       HshToDkImageSwizzle(blueSwizzle, DkImageSwizzle_Blue),
                       HshToDkImageSwizzle(alphaSwizzle, DkImageSwizzle_Alpha))
           .setLayers(0, numLayers)
-          .setMipLevels(0, numMips)};
+          .setMipLevels(0, numMips);
+  TargetTraits<Target::DEKO3D>::TextureOwner Ret{std::move(Allocation),
+                                                 std::move(ImageView)};
 
-  dk::ImageView CopyImageView = Ret.ImageView;
+  UploadBuffer.Flush();
+  dk::ImageView CopyImageView{Ret.ImageView};
   for (uint32_t i = 0; i < numMips; ++i)
-    Copies[i].Copy(UploadBuffer.GetBuffer().addr, CopyImageView);
+    Copies[i].Copy(UploadBuffer.GetBuffer(), CopyImageView);
 
   return Ret;
 }
@@ -967,20 +967,18 @@ inline auto CreateDynamicTextureOwner(DkImageType imageViewType,
       Traits::MipOffset(extent, numLayers, TexelSize, TexelSizeShift, numMips);
   auto UploadBuffer = deko::AllocateUploadBuffer(BufferSize);
 
-  TargetTraits<Target::DEKO3D>::DynamicTextureOwner Ret{
-      deko::AllocateTexture(
-          dk::ImageLayoutMaker{deko::Globals.Device}
-              .setType(imageViewType)
-              .setFlags(DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression)
-              .setFormat(TexelFormat)
-              .setDimensions(Traits::ExtentWidth(extent),
-                             Traits::ExtentHeight(extent),
-                             Traits::ExtentDepth(extent))
-              .setMipLevels(numMips),
-          false),
-      std::move(UploadBuffer),
-      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift),
-      dk::ImageView{Ret.Allocation.GetImage()}
+  auto Allocation = deko::AllocateTexture(
+      dk::ImageLayoutMaker{deko::Globals.Device}
+          .setType(imageViewType)
+          .setFlags(DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression)
+          .setFormat(TexelFormat)
+          .setDimensions(Traits::ExtentWidth(extent),
+                         Traits::ExtentHeight(extent),
+                         Traits::ExtentDepth(extent))
+          .setMipLevels(numMips),
+      false);
+  auto ImageView =
+      dk::ImageView{Allocation.GetImage()}
           .setType(imageViewType)
           .setFormat(TexelFormat)
           .setSwizzle(HshToDkImageSwizzle(redSwizzle, DkImageSwizzle_Red),
@@ -988,7 +986,11 @@ inline auto CreateDynamicTextureOwner(DkImageType imageViewType,
                       HshToDkImageSwizzle(blueSwizzle, DkImageSwizzle_Blue),
                       HshToDkImageSwizzle(alphaSwizzle, DkImageSwizzle_Alpha))
           .setLayers(0, numLayers)
-          .setMipLevels(0, numMips)};
+          .setMipLevels(0, numMips);
+  TargetTraits<Target::DEKO3D>::DynamicTextureOwner Ret{
+      std::move(Allocation), std::move(UploadBuffer),
+      Traits::MakeCopies(extent, numLayers, TexelSize, TexelSizeShift),
+      std::move(ImageView)};
 
   return Ret;
 }
@@ -1079,7 +1081,7 @@ struct TargetTraits<Target::DEKO3D>::ResourceFactory<texture2d_array> {
                      ColorSwizzle blueSwizzle = CS_Identity,
                      ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
     return CreateTextureOwner<DkImageType_2D>(
-        location, DkImageType_2DArray, extent, numLayers, format, numMips,
+        DkImageType_2DArray, extent, numLayers, format, numMips,
         copyFunc, redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
   }
 
@@ -1104,7 +1106,7 @@ template <> struct TargetTraits<Target::DEKO3D>::ResourceFactory<texture3d> {
                      ColorSwizzle blueSwizzle = CS_Identity,
                      ColorSwizzle alphaSwizzle = CS_Identity) noexcept {
     return CreateTextureOwner<DkImageType_3D>(
-        location, DkImageType_3D, extent, 1, format, numMips, copyFunc,
+        DkImageType_3D, extent, 1, format, numMips, copyFunc,
         redSwizzle, greenSwizzle, blueSwizzle, alphaSwizzle);
   }
 
