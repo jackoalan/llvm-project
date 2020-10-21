@@ -176,7 +176,7 @@ struct RenderPassBeginInfo : vk::RenderPassBeginInfo {
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
-        ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue()} {
+        ClearValues{vk::ClearColorValue(), vk::ClearDepthStencilValue(1.f, 0)} {
   }
 };
 
