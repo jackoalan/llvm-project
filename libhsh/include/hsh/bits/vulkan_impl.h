@@ -276,7 +276,7 @@ class RenderTextureAllocation {
   static inline void _Resolve(vk::Image SrcImage, vk::Image DstImage,
                               vk::ImageAspectFlagBits Aspect,
                               vk::Offset3D SrcOffset, vk::Offset3D DstOffset,
-                              vk::Extent3D Extent) noexcept;
+                              vk::Extent3D Extent, bool ShaderOutput) noexcept;
   inline void Resolve(vk::Image SrcImage, vk::Image DstImage,
                       vk::ImageAspectFlagBits Aspect, vk::Offset3D Offset,
                       vk::Extent3D Extent, bool Reattach) noexcept;
@@ -1634,20 +1634,40 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                                        vk::ImageAspectFlagBits Aspect,
                                        vk::Offset3D SrcOffset,
                                        vk::Offset3D DstOffset,
-                                       vk::Extent3D Extent) noexcept {
+                                       vk::Extent3D Extent,
+                                       bool ShaderOutput) noexcept {
+  auto srcStage = Aspect & vk::ImageAspectFlagBits::eDepth
+                      ? vk::PipelineStageFlagBits::eLateFragmentTests
+                      : vk::PipelineStageFlagBits::eColorAttachmentOutput;
+  auto dstStage = Aspect & vk::ImageAspectFlagBits::eDepth
+                      ? vk::PipelineStageFlagBits::eEarlyFragmentTests
+                      : vk::PipelineStageFlagBits::eColorAttachmentOutput;
+  auto srcAccessMask = Aspect & vk::ImageAspectFlagBits::eDepth
+                           ? vk::AccessFlagBits::eDepthStencilAttachmentWrite
+                           : vk::AccessFlagBits::eColorAttachmentWrite;
+  auto srcLayout = Aspect & vk::ImageAspectFlagBits::eDepth
+                       ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+                       : vk::ImageLayout::eColorAttachmentOptimal;
   Globals.Cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eColorAttachmentOutput,
-      vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
-      {}, {},
+      srcStage, vk::PipelineStageFlagBits::eTransfer,
+      vk::DependencyFlagBits::eByRegion, {}, {},
       vk::ImageMemoryBarrier(
-          vk::AccessFlagBits::eColorAttachmentWrite,
-          vk::AccessFlagBits::eTransferRead,
-          vk::ImageLayout::eColorAttachmentOptimal,
+          srcAccessMask, vk::AccessFlagBits::eTransferRead, srcLayout,
           vk::ImageLayout::eTransferSrcOptimal, VK_QUEUE_FAMILY_IGNORED,
           VK_QUEUE_FAMILY_IGNORED, SrcImage,
-          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                    VK_REMAINING_MIP_LEVELS, 0,
+          vk::ImageSubresourceRange(Aspect, 0, VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
+  if (ShaderOutput)
+    vulkan::Globals.Cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
+        {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits(0), vk::AccessFlagBits::eTransferWrite,
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, DstImage,
+            vk::ImageSubresourceRange(Aspect, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
   if (Globals.MultisampleState.rasterizationSamples >
       vk::SampleCountFlagBits::e1) {
     Globals.Cmd.resolveImage(
@@ -1665,18 +1685,30 @@ void RenderTextureAllocation::_Resolve(vk::Image SrcImage, vk::Image DstImage,
                       Extent));
   }
   Globals.Cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eColorAttachmentOutput,
+      vk::PipelineStageFlagBits::eTransfer, dstStage,
       vk::DependencyFlagBits::eByRegion, {}, {},
       vk::ImageMemoryBarrier(
-          vk::AccessFlagBits::eTransferRead,
-          vk::AccessFlagBits::eColorAttachmentWrite,
-          vk::ImageLayout::eTransferSrcOptimal,
-          vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
-          VK_QUEUE_FAMILY_IGNORED, SrcImage,
-          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
-                                    VK_REMAINING_MIP_LEVELS, 0,
+          vk::AccessFlagBits::eTransferRead, srcAccessMask,
+          vk::ImageLayout::eTransferSrcOptimal, srcLayout,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, SrcImage,
+          vk::ImageSubresourceRange(Aspect, 0, VK_REMAINING_MIP_LEVELS, 0,
                                     VK_REMAINING_ARRAY_LAYERS)));
+  if (ShaderOutput)
+    vulkan::Globals.Cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eVertexShader |
+            vk::PipelineStageFlagBits::eTessellationControlShader |
+            vk::PipelineStageFlagBits::eTessellationEvaluationShader |
+            vk::PipelineStageFlagBits::eGeometryShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+        vk::DependencyFlagBits::eByRegion, {}, {},
+        vk::ImageMemoryBarrier(
+            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, DstImage,
+            vk::ImageSubresourceRange(Aspect, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                      VK_REMAINING_ARRAY_LAYERS)));
 }
 
 void RenderTextureAllocation::Resolve(vk::Image SrcImage, vk::Image DstImage,
@@ -1688,7 +1720,7 @@ void RenderTextureAllocation::Resolve(vk::Image SrcImage, vk::Image DstImage,
   if (DelimitRenderPass)
     Globals.Cmd.endRenderPass();
 
-  _Resolve(SrcImage, DstImage, Aspect, Offset, Offset, ExtentIn);
+  _Resolve(SrcImage, DstImage, Aspect, Offset, Offset, ExtentIn, true);
 
   if (DelimitRenderPass) {
     if (Reattach)
@@ -1725,7 +1757,7 @@ void RenderTextureAllocation::ResolveSurface(SurfaceAllocation *Surface,
     DestOff = vk::Offset3D(Surface->MarginL, Surface->MarginT);
   _Resolve(ColorTexture.GetImage(), DstImage.Image,
            vk::ImageAspectFlagBits::eColor, vk::Offset3D(), DestOff,
-           vk::Extent3D(Extent, 1));
+           vk::Extent3D(Extent, 1), false);
   Surface->DrawDecorations();
   if (DelimitRenderPass) {
     if (Reattach)
