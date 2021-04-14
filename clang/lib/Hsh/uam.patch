@@ -100,7 +100,7 @@ index d6d5da7..7a5be48 100644
  
  #define delete_Instruction(p, insn) (p)->releaseInstruction(insn)
 diff --git a/meson.build b/meson.build
-index 871cd20..9142b58 100644
+index 1486cbc..4ddee37 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -4,7 +4,7 @@ project('uam', ['c', 'cpp'],
@@ -112,16 +112,34 @@ index 871cd20..9142b58 100644
  has_mako = run_command(
  	prog_python, '-c',
  	'''
-@@ -26,7 +26,7 @@ pre_args = [
+@@ -19,13 +19,24 @@ endif
+ compiler_c = meson.get_compiler('c')
+ compiler_cpp = meson.get_compiler('cpp')
+ 
+-prog_bison = find_program('bison', native: true)
+-prog_flex = find_program('flex', native: true)
++prog_bison = find_program([
++    # search for homebrew-installed versions on macOS
++    '/opt/homebrew/opt/bison/bin/bison',
++    '/usr/local/opt/bison/bin/bison',
++    'bison'
++], native: true)
++prog_flex = find_program([
++    # search for homebrew-installed versions on macOS
++    '/opt/homebrew/opt/flex/bin/flex',
++    '/usr/local/opt/flex/bin/flex',
++    'flex'
++], native: true)
+ 
+ pre_args = [
  	'-DPACKAGE_STRING="@0@ @1@"'.format(meson.project_name(), meson.project_version()),
  	'-DDESKTOP',
  	'-D_USE_MATH_DEFINES',
--	'-Werror=implicit-function-declaration',
 +	'-DNDEBUG',
  ]
  
  if host_machine.system() != 'windows'
-@@ -38,10 +38,12 @@ if host_machine.system() != 'windows'
+@@ -37,10 +48,12 @@ if host_machine.system() != 'windows'
  	endforeach
  else
  	pre_args += [
@@ -136,7 +154,7 @@ index 871cd20..9142b58 100644
  	]
  endif
  
-@@ -73,9 +75,8 @@ uam_incs = []
+@@ -78,9 +91,8 @@ uam_incs = []
  subdir('source')
  subdir('mesa-imported')
  
@@ -172,10 +190,10 @@ index ea60677..5c970ae 100644
  	'tgsi_support.cpp',
  )
 diff --git a/source/nv_shader_header.h b/source/nv_shader_header.h
-index 013816a..8b92fc2 100644
+index b37a385..7c31d7c 100644
 --- a/source/nv_shader_header.h
 +++ b/source/nv_shader_header.h
-@@ -118,6 +118,7 @@ struct NvShaderHeader
+@@ -122,6 +122,7 @@ struct NvShaderHeader
  
  	union
  	{
@@ -183,10 +201,10 @@ index 013816a..8b92fc2 100644
  		struct
  		{
  			uint8_t  imap_generic_vector[16];
-@@ -131,7 +132,8 @@ struct NvShaderHeader
+@@ -135,7 +136,8 @@ struct NvShaderHeader
  			uint16_t omap_sysvals_c;
  			uint8_t  omap_fixed_fnc_tex[5];
- 			uint8_t  _reserved1;
+ 			uint8_t  omap_extra;
 -		} __attribute__((packed)) vtg;
 +		} vtg;
 +#pragma pack(pop)

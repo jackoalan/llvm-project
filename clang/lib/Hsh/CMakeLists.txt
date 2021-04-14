@@ -94,7 +94,7 @@ set(MESON_OPTIONS "--prefix=${CLANG_BINARY_DIR}" -Dbuildtype=$<IF:$<CONFIG:Debug
 ExternalProject_Add(
         UAM
         GIT_REPOSITORY https://github.com/devkitPro/uam.git
-        GIT_TAG f997445ca68adbc0abafaa9a89ecf67cd09e87a3
+        GIT_TAG v1.1.0
         PATCH_COMMAND "${GIT_EXECUTABLE}" reset --hard HEAD
         COMMAND "${GIT_EXECUTABLE}" apply "${CMAKE_CURRENT_SOURCE_DIR}/uam.patch"
         CONFIGURE_COMMAND "${MESON}" "<SOURCE_DIR>" ${MESON_OPTIONS}
